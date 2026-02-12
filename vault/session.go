@@ -5,21 +5,23 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/awnumar/memguard"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
 	"github.com/jmcleod/ironhand/internal/util"
 )
 
 const defaultContentType = "application/octet-stream"
 
-// Session holds the decrypted key material for an active vault session.
-// Callers must call Close() when done (e.g. defer session.Close()) to zero
-// sensitive key material from memory.
+// Session holds the encrypted key material for an active vault session.
+// Keys are stored in memguard Enclaves (encrypted at rest in memory) and
+// decrypted briefly into mlock'd LockedBuffers only during operations.
+// Callers must call Close() when done (e.g. defer session.Close()).
 type Session struct {
 	vault     *Vault
 	epoch     uint64
 	MemberID  string
-	kek       [32]byte
-	recordKey []byte
+	kek       *memguard.Enclave
+	recordKey *memguard.Enclave
 }
 
 type requiredAccess int
@@ -35,12 +37,17 @@ func (s *Session) Epoch() uint64 {
 	return s.epoch
 }
 
-// Close zeroes sensitive key material held by the session.
+// Close destroys the encrypted key material held by the session.
 func (s *Session) Close() {
-	for i := range s.kek {
-		s.kek[i] = 0
+	s.kek = nil
+	s.recordKey = nil
+}
+
+func (s *Session) checkClosed() error {
+	if s.kek == nil || s.recordKey == nil {
+		return ErrSessionClosed
 	}
-	util.WipeBytes(s.recordKey)
+	return nil
 }
 
 // Put encrypts and stores a new item in the vault.
@@ -48,7 +55,23 @@ func (s *Session) Put(ctx context.Context, itemID string, plaintext []byte, opts
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := s.authorize(ctx, accessWrite); err != nil {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	kekBuf, err := s.kek.Open()
+	if err != nil {
+		return fmt.Errorf("opening KEK enclave: %w", err)
+	}
+	defer kekBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessWrite, recBuf.Bytes()); err != nil {
 		return err
 	}
 
@@ -83,7 +106,7 @@ func (s *Session) Put(ctx context.Context, itemID string, plaintext []byte, opts
 
 	// Wrap DEK
 	aadDEK := icrypto.AADDEKWrap(s.vault.id, itemID, s.epoch, 1)
-	wrappedDEK, err := util.EncryptAESWithAAD(dek, s.kek[:], aadDEK)
+	wrappedDEK, err := util.EncryptAESWithAAD(dek, kekBuf.Bytes(), aadDEK)
 	if err != nil {
 		return err
 	}
@@ -98,7 +121,7 @@ func (s *Session) Put(ctx context.Context, itemID string, plaintext []byte, opts
 		UpdatedBy:    s.MemberID,
 	}
 
-	envelope, err := sealItem(s.vault.id, s.recordKey, itm, s.epoch)
+	envelope, err := sealItem(s.vault.id, recBuf.Bytes(), itm, s.epoch)
 	if err != nil {
 		return err
 	}
@@ -110,18 +133,34 @@ func (s *Session) Get(ctx context.Context, itemID string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := s.authorize(ctx, accessRead); err != nil {
+	if err := s.checkClosed(); err != nil {
 		return nil, err
 	}
 
-	itm, err := loadItem(s.vault.id, s.vault.repo, s.recordKey, itemID, s.epoch)
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	kekBuf, err := s.kek.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening KEK enclave: %w", err)
+	}
+	defer kekBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+
+	itm, err := loadItem(s.vault.id, s.vault.repo, recBuf.Bytes(), itemID, s.epoch)
 	if err != nil {
 		return nil, err
 	}
 
 	// Unwrap DEK
 	aadDEK := icrypto.AADDEKWrap(s.vault.id, itm.ItemID, itm.WrappedEpoch, 1)
-	dek, err := util.DecryptAESWithAAD(itm.WrappedDEK, s.kek[:], aadDEK)
+	dek, err := util.DecryptAESWithAAD(itm.WrappedDEK, kekBuf.Bytes(), aadDEK)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unwrap DEK: %w", err)
 	}
@@ -137,11 +176,27 @@ func (s *Session) Update(ctx context.Context, itemID string, plaintext []byte, o
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := s.authorize(ctx, accessWrite); err != nil {
+	if err := s.checkClosed(); err != nil {
 		return err
 	}
 
-	existing, err := loadItem(s.vault.id, s.vault.repo, s.recordKey, itemID, s.epoch)
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	kekBuf, err := s.kek.Open()
+	if err != nil {
+		return fmt.Errorf("opening KEK enclave: %w", err)
+	}
+	defer kekBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessWrite, recBuf.Bytes()); err != nil {
+		return err
+	}
+
+	existing, err := loadItem(s.vault.id, s.vault.repo, recBuf.Bytes(), itemID, s.epoch)
 	if err != nil {
 		return err
 	}
@@ -175,7 +230,7 @@ func (s *Session) Update(ctx context.Context, itemID string, plaintext []byte, o
 
 	// Wrap DEK
 	aadDEK := icrypto.AADDEKWrap(s.vault.id, itemID, s.epoch, 1)
-	wrappedDEK, err := util.EncryptAESWithAAD(dek, s.kek[:], aadDEK)
+	wrappedDEK, err := util.EncryptAESWithAAD(dek, kekBuf.Bytes(), aadDEK)
 	if err != nil {
 		return err
 	}
@@ -190,7 +245,7 @@ func (s *Session) Update(ctx context.Context, itemID string, plaintext []byte, o
 		UpdatedBy:    s.MemberID,
 	}
 
-	envelope, err := sealItem(s.vault.id, s.recordKey, itm, s.epoch)
+	envelope, err := sealItem(s.vault.id, recBuf.Bytes(), itm, s.epoch)
 	if err != nil {
 		return err
 	}
@@ -202,7 +257,17 @@ func (s *Session) List(ctx context.Context) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := s.authorize(ctx, accessRead); err != nil {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
 		return nil, err
 	}
 	return s.vault.repo.List(s.vault.id, recordTypeItem)
@@ -213,7 +278,17 @@ func (s *Session) Delete(ctx context.Context, itemID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := s.authorize(ctx, accessWrite); err != nil {
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessWrite, recBuf.Bytes()); err != nil {
 		return err
 	}
 	if err := validateID(itemID, "item ID"); err != nil {
@@ -227,10 +302,20 @@ func (s *Session) AddMember(ctx context.Context, memberID string, pubKey [32]byt
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
 	if err := validateRole(role); err != nil {
 		return err
 	}
-	state, err := s.authorize(ctx, accessAdmin)
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	state, err := s.authorize(ctx, accessAdmin, recBuf.Bytes())
 	if err != nil {
 		return err
 	}
@@ -244,7 +329,7 @@ func (s *Session) AddMember(ctx context.Context, memberID string, pubKey [32]byt
 		Role:     role,
 	}
 
-	return s.rotateEpoch(ctx, state, newMember, nil)
+	return s.rotateEpoch(ctx, state, newMember, nil, recBuf.Bytes())
 }
 
 // RevokeMember revokes a member's access to the vault and rotates the epoch.
@@ -252,7 +337,17 @@ func (s *Session) RevokeMember(ctx context.Context, memberID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	state, err := s.authorize(ctx, accessAdmin)
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	state, err := s.authorize(ctx, accessAdmin, recBuf.Bytes())
 	if err != nil {
 		return err
 	}
@@ -260,14 +355,14 @@ func (s *Session) RevokeMember(ctx context.Context, memberID string) error {
 		return err
 	}
 
-	return s.rotateEpoch(ctx, state, nil, &memberID)
+	return s.rotateEpoch(ctx, state, nil, &memberID, recBuf.Bytes())
 }
 
-func (s *Session) authorize(ctx context.Context, required requiredAccess) (*vaultState, error) {
+func (s *Session) authorize(ctx context.Context, required requiredAccess, recordKey []byte) (*vaultState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	state, err := loadVaultState(s.vault.id, s.vault.repo, s.recordKey)
+	state, err := loadVaultState(s.vault.id, s.vault.repo, recordKey)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +370,7 @@ func (s *Session) authorize(ctx context.Context, required requiredAccess) (*vaul
 		return nil, ErrStaleSession
 	}
 
-	member, err := loadMember(s.vault.id, s.vault.repo, s.recordKey, s.MemberID, state.Epoch)
+	member, err := loadMember(s.vault.id, s.vault.repo, recordKey, s.MemberID, state.Epoch)
 	if err != nil {
 		return nil, fmt.Errorf("%w: member not found", ErrUnauthorized)
 	}

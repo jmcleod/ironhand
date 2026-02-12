@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/awnumar/memguard"
 	"github.com/jmcleod/ironhand/crypto"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
 	"github.com/jmcleod/ironhand/storage/memory"
@@ -224,7 +225,10 @@ func TestVault_RollbackDetection(t *testing.T) {
 	assert.Equal(t, uint64(2), cache.GetMaxEpochSeen("default"))
 
 	// Simulate malicious rollback: overwrite state with epoch 1
-	recordKey, _ := icrypto.DeriveRecordKey(creds.muk, "default")
+	mukBuf, err := creds.muk.Open()
+	require.NoError(t, err)
+	defer mukBuf.Destroy()
+	recordKey, _ := icrypto.DeriveRecordKey(mukBuf.Bytes(), "default")
 	profile := creds.Profile()
 	state1 := &vaultState{
 		VaultID:    "default",
@@ -251,17 +255,13 @@ func TestVault_RollbackDetection(t *testing.T) {
 
 func TestVault_SessionClose(t *testing.T) {
 	session := &Session{
-		kek:       [32]byte{1, 2, 3, 4, 5},
-		recordKey: []byte{10, 20, 30, 40, 50},
+		kek:       memguard.NewEnclave([]byte{1, 2, 3, 4, 5}),
+		recordKey: memguard.NewEnclave([]byte{10, 20, 30, 40, 50}),
 	}
 	session.Close()
 
-	for _, b := range session.kek {
-		assert.Equal(t, byte(0), b)
-	}
-	for _, b := range session.recordKey {
-		assert.Equal(t, byte(0), b)
-	}
+	assert.Nil(t, session.kek)
+	assert.Nil(t, session.recordKey)
 }
 
 func TestVault_InputValidation(t *testing.T) {

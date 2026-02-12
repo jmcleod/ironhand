@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/awnumar/memguard"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
 	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/storage"
@@ -68,10 +69,17 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 		return nil, fmt.Errorf("credential profile salts must not be empty")
 	}
 
-	recordKey, err := icrypto.DeriveRecordKey(creds.muk, v.id)
+	mukBuf, err := creds.muk.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening MUK enclave: %w", err)
+	}
+	defer mukBuf.Destroy()
+
+	recordKey, err := icrypto.DeriveRecordKey(mukBuf.Bytes(), v.id)
 	if err != nil {
 		return nil, err
 	}
+	defer util.WipeBytes(recordKey)
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -152,8 +160,8 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 		vault:     v,
 		epoch:     state.Epoch,
 		MemberID:  creds.memberID,
-		kek:       kek,
-		recordKey: recordKey,
+		kek:       memguard.NewEnclave(kek[:]),
+		recordKey: memguard.NewEnclave(util.CopyBytes(recordKey)),
 	}, nil
 }
 
@@ -172,10 +180,17 @@ func (v *Vault) Open(ctx context.Context, creds *Credentials) (*Session, error) 
 		return nil, err
 	}
 
-	recordKey, err := icrypto.DeriveRecordKey(creds.muk, v.id)
+	mukBuf, err := creds.muk.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening MUK enclave: %w", err)
+	}
+	defer mukBuf.Destroy()
+
+	recordKey, err := icrypto.DeriveRecordKey(mukBuf.Bytes(), v.id)
 	if err != nil {
 		return nil, err
 	}
+	defer util.WipeBytes(recordKey)
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -247,14 +262,11 @@ func (v *Vault) Open(ctx context.Context, creds *Credentials) (*Session, error) 
 		return nil, err
 	}
 
-	var kek [32]byte
-	copy(kek[:], kekBytes)
-
 	return &Session{
 		vault:     v,
 		epoch:     state.Epoch,
 		MemberID:  creds.memberID,
-		kek:       kek,
-		recordKey: recordKey,
+		kek:       memguard.NewEnclave(kekBytes),
+		recordKey: memguard.NewEnclave(util.CopyBytes(recordKey)),
 	}, nil
 }

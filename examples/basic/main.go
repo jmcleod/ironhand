@@ -19,6 +19,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer creds.Destroy()
 	fmt.Printf("    Credentials created. Member ID: %s\n", creds.MemberID())
 	fmt.Printf("    Secret Key: %s\n", creds.SecretKey().String())
 
@@ -73,6 +74,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer imported.Destroy()
 	session2, err := v.Open(ctx, imported)
 	if err != nil {
 		log.Fatal(err)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/awnumar/memguard"
 	"github.com/jmcleod/ironhand/crypto"
 	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/internal/uuid"
@@ -15,9 +16,11 @@ const exportVersion = 1
 const exportSaltLen = 16
 
 // Credentials holds the identity and key material for a vault member.
+// The MUK is stored in a memguard Enclave (encrypted at rest in memory).
+// Call Destroy() when done to wipe sensitive key material.
 type Credentials struct {
 	memberID   string
-	muk        []byte
+	muk        *memguard.Enclave
 	keypair    crypto.KeyPair
 	secretKey  crypto.SecretKey
 	kdfParams  Argon2idParams
@@ -115,13 +118,14 @@ func NewCredentials(passphrase string, opts ...CredentialsOption) (*Credentials,
 	if err != nil {
 		return nil, err
 	}
+	mukEnclave := memguard.NewEnclave(muk)
 	kp, err := crypto.GenerateX25519Keypair()
 	if err != nil {
 		return nil, err
 	}
 	return &Credentials{
 		memberID:   uuid.New(),
-		muk:        muk,
+		muk:        mukEnclave,
 		keypair:    kp,
 		secretKey:  sk,
 		kdfParams:  profile.KDFParams,
@@ -144,11 +148,12 @@ func OpenCredentials(secretKey crypto.SecretKey, passphrase string, memberID str
 	if err != nil {
 		return nil, err
 	}
+	mukEnclave := memguard.NewEnclave(muk)
 	var pub [32]byte
 	curve25519.ScalarBaseMult(&pub, &privateKey)
 	return &Credentials{
 		memberID:   memberID,
-		muk:        muk,
+		muk:        mukEnclave,
 		keypair:    crypto.KeyPair{Private: privateKey, Public: pub},
 		secretKey:  secretKey,
 		kdfParams:  profile.KDFParams,
@@ -184,6 +189,13 @@ func (c *Credentials) Profile() CredentialProfile {
 		SaltPass:   util.CopyBytes(c.saltPass),
 		SaltSecret: util.CopyBytes(c.saltSecret),
 	}
+}
+
+// Destroy wipes sensitive key material held by the credentials.
+// After calling Destroy, the Credentials must not be reused.
+func (c *Credentials) Destroy() {
+	c.muk = nil
+	util.WipeArray32(&c.keypair.Private)
 }
 
 func (c *Credentials) matchesProfile(params Argon2idParams, saltPass, saltSecret []byte) bool {
@@ -228,11 +240,17 @@ func ExportCredentials(creds *Credentials, passphrase string) ([]byte, error) {
 		return nil, fmt.Errorf("passphrase must not be empty")
 	}
 
+	mukBuf, err := creds.muk.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening MUK enclave: %w", err)
+	}
+	defer mukBuf.Destroy()
+
 	lc := lockedCredentials{
 		MemberID:   creds.memberID,
 		SecretKey:  creds.secretKey.String(),
 		PrivateKey: creds.keypair.Private,
-		MUK:        creds.muk,
+		MUK:        mukBuf.Bytes(),
 		KDFParams:  creds.kdfParams,
 		SaltPass:   creds.saltPass,
 		SaltSecret: creds.saltSecret,
@@ -311,7 +329,7 @@ func ImportCredentials(data []byte, passphrase string) (*Credentials, error) {
 
 	return &Credentials{
 		memberID:   lc.MemberID,
-		muk:        util.CopyBytes(lc.MUK),
+		muk:        memguard.NewEnclave(lc.MUK),
 		keypair:    crypto.KeyPair{Private: lc.PrivateKey, Public: pub},
 		secretKey:  sk,
 		kdfParams:  lc.KDFParams,

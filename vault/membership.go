@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/awnumar/memguard"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
 	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/storage"
@@ -12,20 +13,28 @@ import (
 
 // rotateEpoch advances the vault to a new epoch, optionally adding or revoking a member.
 // It re-wraps all item DEKs and member KEKs atomically.
-func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember *Member, revokeMemberID *string) error {
+// The recordKey parameter is the opened (plaintext) record key bytes from the caller's LockedBuffer.
+func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember *Member, revokeMemberID *string, recordKey []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if s.epoch != state.Epoch {
 		return ErrStaleSession
 	}
-	caller, err := loadMember(state.VaultID, s.vault.repo, s.recordKey, s.MemberID, state.Epoch)
+	caller, err := loadMember(state.VaultID, s.vault.repo, recordKey, s.MemberID, state.Epoch)
 	if err != nil {
 		return fmt.Errorf("%w: member not found", ErrUnauthorized)
 	}
 	if caller.Status != StatusActive || caller.Role != RoleOwner {
 		return fmt.Errorf("%w: only active owner can rotate epoch", ErrUnauthorized)
 	}
+
+	// Open old KEK for DEK re-wrapping
+	oldKEKBuf, err := s.kek.Open()
+	if err != nil {
+		return fmt.Errorf("opening old KEK enclave: %w", err)
+	}
+	defer oldKEKBuf.Destroy()
 
 	newEpoch := state.Epoch + 1
 
@@ -39,7 +48,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 	copy(newKEK32[:], newKEK)
 
 	// 2. Load all members
-	members, err := loadMembers(s.vault.id, s.vault.repo, s.recordKey, state.Epoch)
+	members, err := loadMembers(s.vault.id, s.vault.repo, recordKey, state.Epoch)
 	if err != nil {
 		return err
 	}
@@ -90,7 +99,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 				MemberID: m.MemberID,
 				Wrap:     *wrap,
 			}
-			env, err := sealMemberKEKWrap(state.VaultID, s.recordKey, kw)
+			env, err := sealMemberKEKWrap(state.VaultID, recordKey, kw)
 			if err != nil {
 				return err
 			}
@@ -100,7 +109,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 				envelope:   env,
 			})
 		}
-		env, err := sealMember(state.VaultID, s.recordKey, m, newEpoch)
+		env, err := sealMember(state.VaultID, recordKey, m, newEpoch)
 		if err != nil {
 			return err
 		}
@@ -120,14 +129,14 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		itm, err := loadItem(state.VaultID, s.vault.repo, s.recordKey, id, state.Epoch)
+		itm, err := loadItem(state.VaultID, s.vault.repo, recordKey, id, state.Epoch)
 		if err != nil {
 			return fmt.Errorf("failed to load item %s during rotation: %w", id, err)
 		}
 
 		// Decrypt DEK with old KEK
 		aadOld := icrypto.AADDEKWrap(state.VaultID, itm.ItemID, state.Epoch, 1)
-		dek, err := util.DecryptAESWithAAD(itm.WrappedDEK, s.kek[:], aadOld)
+		dek, err := util.DecryptAESWithAAD(itm.WrappedDEK, oldKEKBuf.Bytes(), aadOld)
 		if err != nil {
 			return err
 		}
@@ -143,7 +152,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		itm.WrappedDEK = newWrappedDEK
 		itm.WrappedEpoch = newEpoch
 
-		env, err := sealItem(state.VaultID, s.recordKey, *itm, newEpoch)
+		env, err := sealItem(state.VaultID, recordKey, *itm, newEpoch)
 		if err != nil {
 			return err
 		}
@@ -156,7 +165,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 
 	// 6. Update vaultState
 	state.Epoch = newEpoch
-	stateEnv, err := sealVaultState(s.recordKey, state)
+	stateEnv, err := sealVaultState(recordKey, state)
 	if err != nil {
 		return err
 	}
@@ -184,10 +193,9 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		return err
 	}
 
-	// 9. Update session
+	// 9. Update session — seal new KEK into Enclave
 	s.epoch = newEpoch
-	util.WipeArray32(&s.kek)
-	s.kek = newKEK32
+	s.kek = memguard.NewEnclave(newKEK32[:])
 
 	return nil
 }
