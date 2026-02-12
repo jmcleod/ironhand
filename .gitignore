@@ -28,4 +28,5 @@ build/
 web/dist/
 
 # AI tools
-.claud/
+/.claud/
+/.claude/settings.local.json
