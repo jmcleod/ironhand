@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jmcleod/ironhand/crypto"
@@ -9,6 +10,9 @@ import (
 	"github.com/jmcleod/ironhand/internal/uuid"
 	"golang.org/x/crypto/curve25519"
 )
+
+const exportVersion = 1
+const exportSaltLen = 16
 
 // Credentials holds the identity and key material for a vault member.
 type Credentials struct {
@@ -190,4 +194,128 @@ func (c *Credentials) matchesProfile(params Argon2idParams, saltPass, saltSecret
 		return false
 	}
 	return bytes.Equal(c.saltSecret, saltSecret)
+}
+
+// lockedCredentials is the JSON-serializable form encrypted inside an export blob.
+type lockedCredentials struct {
+	MemberID   string         `json:"member_id"`
+	SecretKey  string         `json:"secret_key"`
+	PrivateKey [32]byte       `json:"private_key"`
+	MUK        []byte         `json:"muk"`
+	KDFParams  Argon2idParams `json:"kdf_params"`
+	SaltPass   []byte         `json:"salt_pass"`
+	SaltSecret []byte         `json:"salt_secret"`
+}
+
+var exportKDFParams = util.Argon2idParams{
+	Time:        3,
+	MemoryKiB:   64 * 1024,
+	Parallelism: 4,
+	KeyLen:      32,
+}
+
+// ExportCredentials encrypts credentials into a portable byte blob protected
+// by the given passphrase. The output format is:
+//
+//	version (1 byte) || salt (16 bytes) || AES-256-GCM ciphertext
+//
+// The encryption key is derived from the passphrase using Argon2id.
+func ExportCredentials(creds *Credentials, passphrase string) ([]byte, error) {
+	if creds == nil {
+		return nil, fmt.Errorf("credentials must not be nil")
+	}
+	if passphrase == "" {
+		return nil, fmt.Errorf("passphrase must not be empty")
+	}
+
+	lc := lockedCredentials{
+		MemberID:   creds.memberID,
+		SecretKey:  creds.secretKey.String(),
+		PrivateKey: creds.keypair.Private,
+		MUK:        creds.muk,
+		KDFParams:  creds.kdfParams,
+		SaltPass:   creds.saltPass,
+		SaltSecret: creds.saltSecret,
+	}
+	plaintext, err := json.Marshal(lc)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling credentials: %w", err)
+	}
+	defer util.WipeBytes(plaintext)
+
+	salt, err := util.RandomBytes(exportSaltLen)
+	if err != nil {
+		return nil, fmt.Errorf("generating export salt: %w", err)
+	}
+
+	key, err := util.DeriveArgon2idKey(util.Normalize(passphrase), salt, exportKDFParams)
+	if err != nil {
+		return nil, fmt.Errorf("deriving export key: %w", err)
+	}
+	defer util.WipeBytes(key)
+
+	ciphertext, err := util.EncryptAES(plaintext, key)
+	if err != nil {
+		return nil, fmt.Errorf("encrypting credentials: %w", err)
+	}
+
+	// version || salt || ciphertext
+	out := make([]byte, 0, 1+exportSaltLen+len(ciphertext))
+	out = append(out, byte(exportVersion))
+	out = append(out, salt...)
+	out = append(out, ciphertext...)
+	return out, nil
+}
+
+// ImportCredentials decrypts and reconstructs credentials from a blob
+// previously created by ExportCredentials.
+func ImportCredentials(data []byte, passphrase string) (*Credentials, error) {
+	if len(data) < 1+exportSaltLen {
+		return nil, fmt.Errorf("export data too short")
+	}
+	if passphrase == "" {
+		return nil, fmt.Errorf("passphrase must not be empty")
+	}
+
+	version := data[0]
+	if version != exportVersion {
+		return nil, fmt.Errorf("unsupported export version: %d", version)
+	}
+	salt := data[1 : 1+exportSaltLen]
+	ciphertext := data[1+exportSaltLen:]
+
+	key, err := util.DeriveArgon2idKey(util.Normalize(passphrase), salt, exportKDFParams)
+	if err != nil {
+		return nil, fmt.Errorf("deriving export key: %w", err)
+	}
+	defer util.WipeBytes(key)
+
+	plaintext, err := util.DecryptAES(ciphertext, key)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting credentials: %w", err)
+	}
+	defer util.WipeBytes(plaintext)
+
+	var lc lockedCredentials
+	if err := json.Unmarshal(plaintext, &lc); err != nil {
+		return nil, fmt.Errorf("unmarshaling credentials: %w", err)
+	}
+
+	sk, err := crypto.ParseSecretKey(lc.SecretKey)
+	if err != nil {
+		return nil, fmt.Errorf("parsing secret key: %w", err)
+	}
+
+	var pub [32]byte
+	curve25519.ScalarBaseMult(&pub, &lc.PrivateKey)
+
+	return &Credentials{
+		memberID:   lc.MemberID,
+		muk:        util.CopyBytes(lc.MUK),
+		keypair:    crypto.KeyPair{Private: lc.PrivateKey, Public: pub},
+		secretKey:  sk,
+		kdfParams:  lc.KDFParams,
+		saltPass:   util.CopyBytes(lc.SaltPass),
+		saltSecret: util.CopyBytes(lc.SaltSecret),
+	}, nil
 }

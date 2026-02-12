@@ -2,7 +2,6 @@
 package memory
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/jmcleod/ironhand/storage"
@@ -63,11 +62,11 @@ func (r *Repository) getLocked(vaultID, recordType, recordID string) (*storage.E
 	k := makeKey(recordType, recordID)
 	vaultData, ok := r.data[vaultID]
 	if !ok {
-		return nil, fmt.Errorf("record not found: %s/%s", recordType, recordID)
+		return nil, storage.ErrNotFound
 	}
 	env, ok := vaultData[k]
 	if !ok {
-		return nil, fmt.Errorf("record not found: %s/%s", recordType, recordID)
+		return nil, storage.ErrNotFound
 	}
 	return cloneEnvelope(env), nil
 }
@@ -83,6 +82,25 @@ func (r *Repository) List(vaultID, recordType string) ([]string, error) {
 		}
 	}
 	return ids, nil
+}
+
+func (r *Repository) Delete(vaultID, recordType, recordID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.deleteLocked(vaultID, recordType, recordID)
+}
+
+func (r *Repository) deleteLocked(vaultID, recordType, recordID string) error {
+	k := makeKey(recordType, recordID)
+	vaultData, ok := r.data[vaultID]
+	if !ok {
+		return storage.ErrNotFound
+	}
+	if _, ok := vaultData[k]; !ok {
+		return storage.ErrNotFound
+	}
+	delete(vaultData, k)
+	return nil
 }
 
 func (r *Repository) PutCAS(vaultID, recordType, recordID string, expectedVersion uint64, envelope *storage.Envelope) error {
@@ -151,4 +169,8 @@ func (tx *memoryBatchTx) Put(recordType, recordID string, envelope *storage.Enve
 
 func (tx *memoryBatchTx) PutCAS(recordType, recordID string, expectedVersion uint64, envelope *storage.Envelope) error {
 	return tx.repo.putCASLocked(tx.vaultID, recordType, recordID, expectedVersion, envelope)
+}
+
+func (tx *memoryBatchTx) Delete(recordType, recordID string) error {
+	return tx.repo.deleteLocked(tx.vaultID, recordType, recordID)
 }

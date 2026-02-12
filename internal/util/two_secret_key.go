@@ -7,11 +7,13 @@ func NewTwoSecretKey(passphrase string, saltPass []byte, argonParams Argon2idPar
 	if err != nil {
 		return nil, fmt.Errorf("deriving k_pass: %w", err)
 	}
+	defer WipeBytes(kPass)
 
 	kSecret, err := HKDF(secretKey, saltSecret, info)
 	if err != nil {
 		return nil, fmt.Errorf("deriving k_secret: %w", err)
 	}
+	defer WipeBytes(kSecret)
 
 	result, err := Xor(kPass, kSecret)
 	if err != nil {

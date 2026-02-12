@@ -63,12 +63,12 @@ func (s *Store) Get(vaultID, recordType, recordID string) (*storage.Envelope, er
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(vaultID))
 		if b == nil {
-			return fmt.Errorf("vault not found")
+			return fmt.Errorf("%s: %w", vaultID, storage.ErrVaultNotFound)
 		}
 		key := fmt.Sprintf("%s:%s", recordType, recordID)
 		data := b.Get([]byte(key))
 		if data == nil {
-			return fmt.Errorf("record not found")
+			return fmt.Errorf("%s/%s: %w", recordType, recordID, storage.ErrNotFound)
 		}
 		return json.Unmarshal(data, &envelope)
 	})
@@ -76,6 +76,20 @@ func (s *Store) Get(vaultID, recordType, recordID string) (*storage.Envelope, er
 		return nil, err
 	}
 	return &envelope, nil
+}
+
+func (s *Store) Delete(vaultID, recordType, recordID string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(vaultID))
+		if b == nil {
+			return fmt.Errorf("%s: %w", vaultID, storage.ErrVaultNotFound)
+		}
+		key := fmt.Sprintf("%s:%s", recordType, recordID)
+		if b.Get([]byte(key)) == nil {
+			return fmt.Errorf("%s/%s: %w", recordType, recordID, storage.ErrNotFound)
+		}
+		return b.Delete([]byte(key))
+	})
 }
 
 func (s *Store) List(vaultID, recordType string) ([]string, error) {
@@ -148,6 +162,14 @@ func (tx *boltBatchTx) Put(recordType, recordID string, envelope *storage.Envelo
 
 func (tx *boltBatchTx) PutCAS(recordType, recordID string, expectedVersion uint64, envelope *storage.Envelope) error {
 	return putCASInBucket(tx.bucket, recordType, recordID, expectedVersion, envelope)
+}
+
+func (tx *boltBatchTx) Delete(recordType, recordID string) error {
+	key := fmt.Sprintf("%s:%s", recordType, recordID)
+	if tx.bucket.Get([]byte(key)) == nil {
+		return fmt.Errorf("%s/%s: %w", recordType, recordID, storage.ErrNotFound)
+	}
+	return tx.bucket.Delete([]byte(key))
 }
 
 func (s *Store) Batch(vaultID string, fn func(tx storage.BatchTx) error) error {

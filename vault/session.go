@@ -197,6 +197,31 @@ func (s *Session) Update(ctx context.Context, itemID string, plaintext []byte, o
 	return s.vault.repo.PutCAS(s.vault.id, "ITEM", itm.ItemID, existing.ItemVersion, envelope)
 }
 
+// List returns the IDs of all items stored in the vault.
+func (s *Session) List(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := s.authorize(ctx, accessRead); err != nil {
+		return nil, err
+	}
+	return s.vault.repo.List(s.vault.id, recordTypeItem)
+}
+
+// Delete removes an item from the vault.
+func (s *Session) Delete(ctx context.Context, itemID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := s.authorize(ctx, accessWrite); err != nil {
+		return err
+	}
+	if err := validateID(itemID, "item ID"); err != nil {
+		return err
+	}
+	return s.vault.repo.Delete(s.vault.id, recordTypeItem, itemID)
+}
+
 // AddMember adds a new member to the vault and rotates the epoch.
 func (s *Session) AddMember(ctx context.Context, memberID string, pubKey [32]byte, role MemberRole) error {
 	if err := ctx.Err(); err != nil {

@@ -56,7 +56,7 @@ func (s *secretKey) Bytes() []byte {
 func ParseSecretKey(str string) (SecretKey, error) {
 	matches := secretKeyRE.FindStringSubmatch(str)
 	if matches == nil {
-		return nil, fmt.Errorf("%s is an invalid secret key format", str)
+		return nil, fmt.Errorf("invalid secret key format")
 	}
 
 	version, err := strconv.Atoi(matches[1])

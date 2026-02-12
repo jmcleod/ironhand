@@ -51,19 +51,29 @@ func main() {
 	}
 	fmt.Printf("    Decrypted content: %q\n", string(decrypted))
 
-	// 6. Re-open vault
-	fmt.Println("[5] Re-opening vault...")
-	openCreds, err := vault.OpenCredentials(
-		creds.SecretKey(),
-		"correct horse battery staple",
-		creds.MemberID(),
-		creds.PrivateKey(),
-		vault.WithCredentialProfile(creds.Profile()),
-	)
+	// 6. List items
+	fmt.Println("[5] Listing items...")
+	ids, err := session.List(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	session2, err := v.Open(ctx, openCreds)
+	fmt.Printf("    Items in vault: %v\n", ids)
+
+	// 7. Export credentials
+	fmt.Println("[6] Exporting credentials...")
+	exported, err := vault.ExportCredentials(creds, "export-passphrase")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("    Exported credentials: %d bytes\n", len(exported))
+
+	// 8. Import credentials and re-open vault
+	fmt.Println("[7] Importing credentials and re-opening vault...")
+	imported, err := vault.ImportCredentials(exported, "export-passphrase")
+	if err != nil {
+		log.Fatal(err)
+	}
+	session2, err := v.Open(ctx, imported)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -74,6 +84,18 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Printf("    Re-opened and decrypted: %q\n", string(decrypted2))
+
+	// 9. Delete an item
+	fmt.Println("[8] Deleting item...")
+	err = session2.Delete(ctx, "item-1")
+	if err != nil {
+		log.Fatal(err)
+	}
+	ids, err = session2.List(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("    Items after delete: %v\n", ids)
 
 	fmt.Println("\n--- Demonstration Completed Successfully ---")
 }
