@@ -126,7 +126,15 @@ IronHand does **not** protect against:
 
 ## API Overview
 
-### Credentials
+### REST API
+
+The service provides a REST API exposed by default on port `8080`.
+
+- **OpenAPI Spec**: `/api/v1/openapi.yaml`
+- **Swagger UI**: `/api/v1/docs`
+- **Redoc**: `/api/v1/redoc`
+
+### Library Credentials
 
 | Function | Description |
 |---|---|

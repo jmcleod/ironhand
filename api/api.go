@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	_ "embed"
+	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-openapi/runtime/middleware"
 
 	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/vault"
@@ -14,6 +17,9 @@ type API struct {
 	repo       storage.Repository
 	epochCache vault.EpochCache
 }
+
+//go:embed openapi.yaml
+var openapiSpec []byte
 
 // New creates a new API instance.
 func New(repo storage.Repository, epochCache vault.EpochCache) *API {
@@ -26,6 +32,21 @@ func New(repo storage.Repository, epochCache vault.EpochCache) *API {
 // Router returns a chi.Router with all API routes mounted.
 func (a *API) Router() chi.Router {
 	r := chi.NewRouter()
+
+	r.Get("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/yaml")
+		w.Write(openapiSpec)
+	})
+
+	r.Handle("/docs*", middleware.SwaggerUI(middleware.SwaggerUIOpts{
+		SpecURL: "/api/v1/openapi.yaml",
+		Path:    "api/v1/docs",
+	}, nil))
+
+	r.Handle("/redoc*", middleware.Redoc(middleware.RedocOpts{
+		SpecURL: "/api/v1/openapi.yaml",
+		Path:    "api/v1/redoc",
+	}, nil))
 
 	// Create vault does not require auth headers (credentials are generated).
 	r.Post("/vaults", a.CreateVault)

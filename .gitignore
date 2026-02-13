@@ -27,6 +27,9 @@ build/
 # Web artifacts
 web/dist/
 
+# Data
+data/
+
 # AI tools
 /.claud/
 /.claude/settings.local.json

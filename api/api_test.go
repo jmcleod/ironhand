@@ -364,3 +364,33 @@ func TestListItems_EmptyVault(t *testing.T) {
 	raw, _ := json.Marshal(result)
 	assert.Contains(t, string(raw), `"items":[]`)
 }
+
+func TestOpenAPI(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+
+	t.Run("OpenAPI YAML", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + "/api/v1/openapi.yaml")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "text/yaml", resp.Header.Get("Content-Type"))
+	})
+
+	t.Run("Swagger UI", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + "/api/v1/docs")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("Redoc", func(t *testing.T) {
+		resp, err := http.Get(srv.URL + "/api/v1/redoc")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+}

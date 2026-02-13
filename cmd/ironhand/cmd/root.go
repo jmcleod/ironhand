@@ -6,12 +6,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "ironhand",
-	Short: "IronHand is a secure encryption service",
-	Long: `A Secure Encryption Service to manage secrets, passwords and other sensitive data.
+var (
+	Version = "0.1.0"
+	rootCmd = &cobra.Command{
+		Use:   "ironhand",
+		Short: "IronHand is a secure encryption service",
+		Long: `A Secure Encryption Service to manage secrets, passwords and other sensitive data.
 Complete documentation is available at https://github.com/jmcleod/ironhand`,
-}
+	}
+)
 
 func Execute() {
 	err := rootCmd.Execute()

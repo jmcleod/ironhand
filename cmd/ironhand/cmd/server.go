@@ -81,6 +81,7 @@ var serverCmd = &cobra.Command{
 			done <- nil
 		}()
 
+		printBanner()
 		fmt.Printf("Starting server on port %d (data: %s)...\n", port, dataDir)
 
 		quit := make(chan os.Signal, 1)
