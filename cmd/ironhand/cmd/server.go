@@ -21,8 +21,8 @@ import (
 )
 
 var (
-	port    int
-	dataDir string
+	port    = 8080
+	dataDir = "./data"
 )
 
 var serverCmd = &cobra.Command{

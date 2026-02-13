@@ -7,7 +7,7 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "vault",
+	Use:   "ironhand",
 	Short: "IronHand is a secure encryption service",
 	Long: `A Secure Encryption Service to manage secrets, passwords and other sensitive data.
 Complete documentation is available at https://github.com/jmcleod/ironhand`,
