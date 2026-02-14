@@ -91,20 +91,40 @@ type item struct {
 	UpdatedBy    string           `json:"updated_by,omitzero"`
 }
 
+// itemHistory represents an encrypted snapshot of an item at a previous version.
+type itemHistory struct {
+	ItemID       string           `json:"item_id,omitzero"`
+	Version      uint64           `json:"version,omitzero"`
+	Fields       map[string]field `json:"fields,omitzero"`
+	WrappedDEK   []byte           `json:"wrapped_dek,omitzero"`
+	WrappedEpoch uint64           `json:"wrapped_epoch,omitzero"`
+	UpdatedBy    string           `json:"updated_by,omitzero"`
+	UpdatedAt    string           `json:"updated_at,omitzero"`
+}
+
+// HistoryEntry is a summary of a single history version (returned by GetHistory).
+type HistoryEntry struct {
+	Version   uint64
+	UpdatedAt string
+	UpdatedBy string
+}
+
 // Validation constants.
 const (
 	MaxIDLength        = 256
 	MaxFieldNameLength = 128
 	MaxFieldCount      = 64
 	MaxFieldSize       = 1 << 20 // 1MB per field
+	MaxHistoryVersions = 100
 )
 
 // Record types for storage
 const (
-	recordTypeState   = "STATE"
-	recordTypeMember  = "MEMBER"
-	recordTypeKEKWrap = "KEKWRAP"
-	recordTypeItem    = "ITEM"
+	recordTypeState       = "STATE"
+	recordTypeMember      = "MEMBER"
+	recordTypeKEKWrap     = "KEKWRAP"
+	recordTypeItem        = "ITEM"
+	recordTypeItemHistory = "ITEM_HISTORY"
 )
 
 // Special record IDs

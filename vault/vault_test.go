@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -437,6 +438,125 @@ func TestVault_AuthorizationEnforced(t *testing.T) {
 	err = readerSession.AddMember(ctx, "other", readerKP.Public, RoleReader)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrUnauthorized))
+}
+
+func TestVault_UpdateCreatesHistory(t *testing.T) {
+	ctx := t.Context()
+	_, session, _ := createTestVault(t)
+
+	err := session.Put(ctx, "item-1", Fields{"password": []byte("original")})
+	require.NoError(t, err)
+
+	err = session.Update(ctx, "item-1", Fields{"password": []byte("updated")})
+	require.NoError(t, err)
+
+	history, err := session.GetHistory(ctx, "item-1")
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	assert.Equal(t, uint64(1), history[0].Version)
+	assert.NotEmpty(t, history[0].UpdatedAt)
+	assert.NotEmpty(t, history[0].UpdatedBy)
+}
+
+func TestVault_GetHistoryVersion(t *testing.T) {
+	ctx := t.Context()
+	_, session, _ := createTestVault(t)
+
+	err := session.Put(ctx, "item-1", Fields{"password": []byte("original"), "username": []byte("alice")})
+	require.NoError(t, err)
+
+	err = session.Update(ctx, "item-1", Fields{"password": []byte("updated"), "username": []byte("bob")})
+	require.NoError(t, err)
+
+	fields, err := session.GetHistoryVersion(ctx, "item-1", 1)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("original"), fields["password"])
+	assert.Equal(t, []byte("alice"), fields["username"])
+}
+
+func TestVault_MultipleUpdatesHistory(t *testing.T) {
+	ctx := t.Context()
+	_, session, _ := createTestVault(t)
+
+	err := session.Put(ctx, "item-1", Fields{"val": []byte("v1")})
+	require.NoError(t, err)
+
+	for i := 2; i <= 4; i++ {
+		err = session.Update(ctx, "item-1", Fields{"val": []byte(fmt.Sprintf("v%d", i))})
+		require.NoError(t, err)
+	}
+
+	history, err := session.GetHistory(ctx, "item-1")
+	require.NoError(t, err)
+	require.Len(t, history, 3)
+
+	// Sorted newest-first
+	assert.Equal(t, uint64(3), history[0].Version)
+	assert.Equal(t, uint64(2), history[1].Version)
+	assert.Equal(t, uint64(1), history[2].Version)
+}
+
+func TestVault_HistoryPreservesFields(t *testing.T) {
+	ctx := t.Context()
+	_, session, _ := createTestVault(t)
+
+	original := Fields{
+		"username": []byte("alice"),
+		"password": []byte("s3cret123"),
+		"url":      []byte("https://example.com"),
+	}
+	err := session.Put(ctx, "item-1", original)
+	require.NoError(t, err)
+
+	err = session.Update(ctx, "item-1", Fields{"username": []byte("bob"), "password": []byte("newpass")})
+	require.NoError(t, err)
+
+	// Historical version should have exact original fields
+	fields, err := session.GetHistoryVersion(ctx, "item-1", 1)
+	require.NoError(t, err)
+	assert.Len(t, fields, 3)
+	assert.Equal(t, []byte("alice"), fields["username"])
+	assert.Equal(t, []byte("s3cret123"), fields["password"])
+	assert.Equal(t, []byte("https://example.com"), fields["url"])
+}
+
+func TestVault_HistoryAfterEpochRotation(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.NewRepository()
+
+	aliceCreds, err := NewCredentials("test-passphrase")
+	require.NoError(t, err)
+
+	v := New("default", repo)
+	session, err := v.Create(ctx, aliceCreds)
+	require.NoError(t, err)
+	defer session.Close()
+
+	err = session.Put(ctx, "item-1", Fields{"data": []byte("original")})
+	require.NoError(t, err)
+
+	err = session.Update(ctx, "item-1", Fields{"data": []byte("updated")})
+	require.NoError(t, err)
+
+	// Verify history exists before rotation
+	history, err := session.GetHistory(ctx, "item-1")
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+
+	// Trigger epoch rotation by adding a member
+	bobKP, err := crypto.GenerateX25519Keypair()
+	require.NoError(t, err)
+	err = session.AddMember(ctx, "bob", bobKP.Public, RoleWriter)
+	require.NoError(t, err)
+
+	// History should still be accessible after rotation
+	history, err = session.GetHistory(ctx, "item-1")
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+
+	fields, err := session.GetHistoryVersion(ctx, "item-1", 1)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("original"), fields["data"])
 }
 
 func TestVault_StaleSessionRejected(t *testing.T) {

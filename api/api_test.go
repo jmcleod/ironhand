@@ -169,3 +169,86 @@ func TestDeleteVault(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
+
+func TestItemHistory(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	// Create vault
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "HistoryVault",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+
+	// Put an item
+	resp = doJSON(t, client, http.MethodPost, base+"/items/login-1", map[string]any{
+		"fields": map[string]string{"username": "alice", "password": "pass1"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	// Update the item twice
+	resp = doJSON(t, client, http.MethodPut, base+"/items/login-1", map[string]any{
+		"fields": map[string]string{"username": "alice", "password": "pass2"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodPut, base+"/items/login-1", map[string]any{
+		"fields": map[string]string{"username": "bob", "password": "pass3"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Get history list
+	resp = doJSON(t, client, http.MethodGet, base+"/items/login-1/history", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var histResp api.GetItemHistoryResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&histResp))
+	assert.Equal(t, "login-1", histResp.ItemID)
+	require.Len(t, histResp.History, 2)
+	assert.Equal(t, uint64(2), histResp.History[0].Version) // newest first
+	assert.Equal(t, uint64(1), histResp.History[1].Version)
+
+	// Get specific historical version (version 1 = original)
+	resp = doJSON(t, client, http.MethodGet, base+"/items/login-1/history/1", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var verResp api.GetHistoryVersionResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&verResp))
+	assert.Equal(t, "login-1", verResp.ItemID)
+	assert.Equal(t, uint64(1), verResp.Version)
+	assert.Equal(t, "alice", verResp.Fields["username"])
+	assert.Equal(t, "pass1", verResp.Fields["password"])
+
+	// Get version 2 (first update)
+	resp = doJSON(t, client, http.MethodGet, base+"/items/login-1/history/2", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&verResp))
+	assert.Equal(t, uint64(2), verResp.Version)
+	assert.Equal(t, "alice", verResp.Fields["username"])
+	assert.Equal(t, "pass2", verResp.Fields["password"])
+
+	// Current item should be the latest update
+	resp = doJSON(t, client, http.MethodGet, base+"/items/login-1", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var getResp api.GetItemResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&getResp))
+	assert.Equal(t, "bob", getResp.Fields["username"])
+	assert.Equal(t, "pass3", getResp.Fields["password"])
+}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/awnumar/memguard"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
@@ -176,7 +179,8 @@ func (s *Session) Get(ctx context.Context, itemID string) (Fields, error) {
 }
 
 // Update re-encrypts and stores an existing item, using CAS to detect conflicts.
-// All fields are replaced atomically.
+// All fields are replaced atomically. The previous version is preserved as an
+// ITEM_HISTORY record so it can be retrieved later via GetHistory/GetHistoryVersion.
 func (s *Session) Update(ctx context.Context, itemID string, fields Fields) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -210,6 +214,26 @@ func (s *Session) Update(ctx context.Context, itemID string, fields Fields) erro
 		return err
 	}
 
+	// --- Snapshot the existing item into ITEM_HISTORY before overwriting ---
+	historyRecordID := fmt.Sprintf("%s#%d", itemID, existing.ItemVersion)
+	hist := itemHistory{
+		ItemID:       existing.ItemID,
+		Version:      existing.ItemVersion,
+		Fields:       existing.Fields,
+		WrappedDEK:   existing.WrappedDEK,
+		WrappedEpoch: existing.WrappedEpoch,
+		UpdatedBy:    existing.UpdatedBy,
+		UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
+	}
+	histEnvelope, err := sealItemHistory(s.vault.id, recBuf.Bytes(), hist, s.epoch)
+	if err != nil {
+		return fmt.Errorf("sealing history record: %w", err)
+	}
+	if err := s.vault.repo.Put(s.vault.id, recordTypeItemHistory, historyRecordID, histEnvelope); err != nil {
+		return fmt.Errorf("storing history record: %w", err)
+	}
+
+	// --- Proceed with normal update ---
 	dek, err := util.NewAESKey()
 	if err != nil {
 		return err
@@ -250,6 +274,108 @@ func (s *Session) Update(ctx context.Context, itemID string, fields Fields) erro
 		return err
 	}
 	return s.vault.repo.PutCAS(s.vault.id, "ITEM", itm.ItemID, existing.ItemVersion, envelope)
+}
+
+// GetHistory returns a list of history entries for the given item, sorted newest-first.
+func (s *Session) GetHistory(ctx context.Context, itemID string) ([]HistoryEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+
+	allIDs, err := s.vault.repo.List(s.vault.id, recordTypeItemHistory)
+	if err != nil {
+		return nil, err
+	}
+
+	prefix := itemID + "#"
+	var entries []HistoryEntry
+	for _, id := range allIDs {
+		if !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		hist, err := loadItemHistory(s.vault.id, s.vault.repo, recBuf.Bytes(), id, s.epoch)
+		if err != nil {
+			return nil, fmt.Errorf("loading history record %s: %w", id, err)
+		}
+		entries = append(entries, HistoryEntry{
+			Version:   hist.Version,
+			UpdatedAt: hist.UpdatedAt,
+			UpdatedBy: hist.UpdatedBy,
+		})
+	}
+
+	// Sort newest-first (highest version first).
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Version > entries[j].Version
+	})
+
+	return entries, nil
+}
+
+// GetHistoryVersion decrypts and returns the fields from a specific history version.
+func (s *Session) GetHistoryVersion(ctx context.Context, itemID string, version uint64) (Fields, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	kekBuf, err := s.kek.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening KEK enclave: %w", err)
+	}
+	defer kekBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+
+	recordID := fmt.Sprintf("%s#%d", itemID, version)
+	hist, err := loadItemHistory(s.vault.id, s.vault.repo, recBuf.Bytes(), recordID, s.epoch)
+	if err != nil {
+		return nil, err
+	}
+
+	// Unwrap DEK
+	aadDEK := icrypto.AADDEKWrap(s.vault.id, hist.ItemID, hist.WrappedEpoch, 1)
+	dek, err := util.DecryptAESWithAAD(hist.WrappedDEK, kekBuf.Bytes(), aadDEK)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unwrap history DEK: %w", err)
+	}
+	defer util.WipeBytes(dek)
+
+	// Decrypt each field
+	result := make(Fields, len(hist.Fields))
+	for name, f := range hist.Fields {
+		aad := icrypto.AADFieldContent(s.vault.id, hist.ItemID, name, hist.Version, hist.WrappedEpoch, 1)
+		plaintext, err := util.DecryptAESWithAAD(f.Ciphertext, dek, aad)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting history field %q: %w", name, err)
+		}
+		result[name] = plaintext
+	}
+
+	return result, nil
 }
 
 // List returns the IDs of all items stored in the vault.

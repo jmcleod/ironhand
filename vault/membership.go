@@ -120,7 +120,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		})
 	}
 
-	// 5. Rewrap all item DEKs
+	// 5. Re-encrypt all item fields and rewrap DEKs
 	itemIDs, err := s.vault.repo.List(state.VaultID, recordTypeItem)
 	if err != nil {
 		return err
@@ -140,6 +140,24 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		if err != nil {
 			return err
 		}
+
+		// Re-encrypt each field with the new epoch in the AAD
+		for name, f := range itm.Fields {
+			oldAAD := icrypto.AADFieldContent(state.VaultID, itm.ItemID, name, itm.ItemVersion, state.Epoch, 1)
+			plaintext, err := util.DecryptAESWithAAD(f.Ciphertext, dek, oldAAD)
+			if err != nil {
+				util.WipeBytes(dek)
+				return fmt.Errorf("decrypting field %q of item %s during rotation: %w", name, id, err)
+			}
+			newAAD := icrypto.AADFieldContent(state.VaultID, itm.ItemID, name, itm.ItemVersion, newEpoch, 1)
+			ct, err := util.EncryptAESWithAAD(plaintext, dek, newAAD)
+			if err != nil {
+				util.WipeBytes(dek)
+				return fmt.Errorf("re-encrypting field %q of item %s during rotation: %w", name, id, err)
+			}
+			itm.Fields[name] = field{Ciphertext: ct}
+		}
+
 		// Rewrap DEK with new KEK
 		aadNew := icrypto.AADDEKWrap(state.VaultID, itm.ItemID, newEpoch, 1)
 		newWrappedDEK, err := util.EncryptAESWithAAD(dek, newKEK32[:], aadNew)
@@ -159,6 +177,67 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		writes = append(writes, writeOp{
 			recordType: recordTypeItem,
 			recordID:   itm.ItemID,
+			envelope:   env,
+		})
+	}
+
+	// 5b. Re-encrypt all item history fields and rewrap DEKs
+	historyIDs, err := s.vault.repo.List(state.VaultID, recordTypeItemHistory)
+	if err != nil {
+		return err
+	}
+	for _, id := range historyIDs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		hist, err := loadItemHistory(state.VaultID, s.vault.repo, recordKey, id, state.Epoch)
+		if err != nil {
+			return fmt.Errorf("failed to load history %s during rotation: %w", id, err)
+		}
+
+		// Decrypt DEK with old KEK
+		aadOld := icrypto.AADDEKWrap(state.VaultID, hist.ItemID, state.Epoch, 1)
+		dek, err := util.DecryptAESWithAAD(hist.WrappedDEK, oldKEKBuf.Bytes(), aadOld)
+		if err != nil {
+			return err
+		}
+
+		// Re-encrypt each field with the new epoch in the AAD
+		for name, f := range hist.Fields {
+			oldAAD := icrypto.AADFieldContent(state.VaultID, hist.ItemID, name, hist.Version, state.Epoch, 1)
+			plaintext, err := util.DecryptAESWithAAD(f.Ciphertext, dek, oldAAD)
+			if err != nil {
+				util.WipeBytes(dek)
+				return fmt.Errorf("decrypting history field %q of %s during rotation: %w", name, id, err)
+			}
+			newAAD := icrypto.AADFieldContent(state.VaultID, hist.ItemID, name, hist.Version, newEpoch, 1)
+			ct, err := util.EncryptAESWithAAD(plaintext, dek, newAAD)
+			if err != nil {
+				util.WipeBytes(dek)
+				return fmt.Errorf("re-encrypting history field %q of %s during rotation: %w", name, id, err)
+			}
+			hist.Fields[name] = field{Ciphertext: ct}
+		}
+
+		// Rewrap DEK with new KEK
+		aadNew := icrypto.AADDEKWrap(state.VaultID, hist.ItemID, newEpoch, 1)
+		newWrappedDEK, err := util.EncryptAESWithAAD(dek, newKEK32[:], aadNew)
+		if err != nil {
+			util.WipeBytes(dek)
+			return err
+		}
+		util.WipeBytes(dek)
+
+		hist.WrappedDEK = newWrappedDEK
+		hist.WrappedEpoch = newEpoch
+
+		env, err := sealItemHistory(state.VaultID, recordKey, *hist, newEpoch)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, writeOp{
+			recordType: recordTypeItemHistory,
+			recordID:   id,
 			envelope:   env,
 		})
 	}
@@ -312,4 +391,31 @@ func sealItem(vaultID string, recordKey []byte, itm item, epoch uint64) (*storag
 	}
 	aad := icrypto.AADRecord(vaultID, recordTypeItem, itm.ItemID, epoch, 1)
 	return storage.SealRecord(recordKey, data, aad, itm.ItemVersion)
+}
+
+func loadItemHistory(vaultID string, repo storage.Repository, recordKey []byte, recordID string, epoch uint64) (*itemHistory, error) {
+	envelope, err := repo.Get(vaultID, recordTypeItemHistory, recordID)
+	if err != nil {
+		return nil, err
+	}
+	aad := icrypto.AADRecord(vaultID, recordTypeItemHistory, recordID, epoch, 1)
+	data, err := storage.OpenRecord(recordKey, envelope, aad)
+	if err != nil {
+		return nil, err
+	}
+	var hist itemHistory
+	if err := json.Unmarshal(data, &hist); err != nil {
+		return nil, err
+	}
+	return &hist, nil
+}
+
+func sealItemHistory(vaultID string, recordKey []byte, hist itemHistory, epoch uint64) (*storage.Envelope, error) {
+	data, err := json.Marshal(hist)
+	if err != nil {
+		return nil, err
+	}
+	recordID := fmt.Sprintf("%s#%d", hist.ItemID, hist.Version)
+	aad := icrypto.AADRecord(vaultID, recordTypeItemHistory, recordID, epoch, 1)
+	return storage.SealRecord(recordKey, data, aad)
 }

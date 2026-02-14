@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -386,5 +387,81 @@ func (a *API) RevokeMember(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, AddMemberResponse{
 		Epoch: session.Epoch(),
+	})
+}
+
+// GetItemHistory handles GET /vaults/{vaultID}/items/{itemID}/history.
+func (a *API) GetItemHistory(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	itemID := chi.URLParam(r, "itemID")
+	if itemID == vaultMetadataItemID {
+		writeError(w, http.StatusBadRequest, "item_id is reserved")
+		return
+	}
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	entries, err := session.GetHistory(r.Context(), itemID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	history := make([]HistoryEntryResponse, len(entries))
+	for i, e := range entries {
+		history[i] = HistoryEntryResponse{
+			Version:   e.Version,
+			UpdatedAt: e.UpdatedAt,
+			UpdatedBy: e.UpdatedBy,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, GetItemHistoryResponse{
+		ItemID:  itemID,
+		History: history,
+	})
+}
+
+// GetHistoryVersion handles GET /vaults/{vaultID}/items/{itemID}/history/{version}.
+func (a *API) GetHistoryVersion(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	itemID := chi.URLParam(r, "itemID")
+	versionStr := chi.URLParam(r, "version")
+	if itemID == vaultMetadataItemID {
+		writeError(w, http.StatusBadRequest, "item_id is reserved")
+		return
+	}
+
+	version, err := strconv.ParseUint(versionStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid version number")
+		return
+	}
+
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	fields, err := session.GetHistoryVersion(r.Context(), itemID, version)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, GetHistoryVersionResponse{
+		ItemID:  itemID,
+		Version: version,
+		Fields:  fieldsToAPI(fields),
 	})
 }

@@ -1,4 +1,4 @@
-import { VaultSummary } from '@/types/vault';
+import { HistoryEntry, VaultSummary } from '@/types/vault';
 
 const API_BASE = '/api/v1';
 
@@ -140,4 +140,24 @@ export async function addMember(
 
 export async function revokeMember(vaultID: string, memberID: string): Promise<void> {
   await request(`/vaults/${encodeURIComponent(vaultID)}/members/${encodeURIComponent(memberID)}`, { method: 'DELETE' });
+}
+
+export async function getItemHistory(vaultID: string, itemID: string): Promise<HistoryEntry[]> {
+  const resp = await request(
+    `/vaults/${encodeURIComponent(vaultID)}/items/${encodeURIComponent(itemID)}/history`,
+  );
+  const data = (await resp.json()) as { history: HistoryEntry[] };
+  return data.history ?? [];
+}
+
+export async function getHistoryVersion(
+  vaultID: string,
+  itemID: string,
+  version: number,
+): Promise<Record<string, string>> {
+  const resp = await request(
+    `/vaults/${encodeURIComponent(vaultID)}/items/${encodeURIComponent(itemID)}/history/${version}`,
+  );
+  const data = (await resp.json()) as { fields: Record<string, string> };
+  return data.fields;
 }

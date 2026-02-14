@@ -74,3 +74,9 @@ export interface VaultSummary {
   epoch: number;
   item_count: number;
 }
+
+export interface HistoryEntry {
+  version: number;
+  updated_at: string;
+  updated_by: string;
+}

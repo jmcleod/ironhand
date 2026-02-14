@@ -76,6 +76,8 @@ func (a *API) Router() chi.Router {
 		r.Get("/items/{itemID}", a.GetItem)
 		r.Put("/items/{itemID}", a.UpdateItem)
 		r.Delete("/items/{itemID}", a.DeleteItem)
+		r.Get("/items/{itemID}/history", a.GetItemHistory)
+		r.Get("/items/{itemID}/history/{version}", a.GetHistoryVersion)
 		r.Post("/members", a.AddMember)
 		r.Delete("/members/{memberID}", a.RevokeMember)
 	})

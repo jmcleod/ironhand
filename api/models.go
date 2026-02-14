@@ -93,6 +93,26 @@ type RevealSecretKeyResponse struct {
 	SecretKey string `json:"secret_key"`
 }
 
+// HistoryEntryResponse represents a single version in an item's history.
+type HistoryEntryResponse struct {
+	Version   uint64 `json:"version"`
+	UpdatedAt string `json:"updated_at"`
+	UpdatedBy string `json:"updated_by"`
+}
+
+// GetItemHistoryResponse is returned from GET /vaults/{vaultID}/items/{itemID}/history.
+type GetItemHistoryResponse struct {
+	ItemID  string                 `json:"item_id"`
+	History []HistoryEntryResponse `json:"history"`
+}
+
+// GetHistoryVersionResponse is returned from GET /vaults/{vaultID}/items/{itemID}/history/{version}.
+type GetHistoryVersionResponse struct {
+	ItemID  string            `json:"item_id"`
+	Version uint64            `json:"version"`
+	Fields  map[string]string `json:"fields"`
+}
+
 // ErrorResponse is returned for all error cases.
 type ErrorResponse struct {
 	Error string `json:"error"`

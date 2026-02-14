@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { VaultItem, itemName, itemType, itemUpdatedAt, userFields, SENSITIVE_FIELDS } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Pencil, History } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
+import EditItemDialog from '@/components/EditItemDialog';
+import ItemHistoryDialog from '@/components/ItemHistoryDialog';
 
 interface ItemCardProps {
   item: VaultItem;
@@ -15,6 +17,8 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
   const { toast } = useToast();
   const [revealedFields, setRevealedFields] = useState<Set<string>>(new Set());
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const type = itemType(item);
   const name = itemName(item);
@@ -132,29 +136,42 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
   const fieldEntries = Object.entries(fields);
 
   return (
-    <div className="rounded-xl border border-border bg-card p-5 vault-card-hover">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-accent flex items-center justify-center">
-            {typeIcon()}
+    <>
+      <div className="rounded-xl border border-border bg-card p-5 vault-card-hover">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-lg bg-accent flex items-center justify-center">
+              {typeIcon()}
+            </div>
+            <div>
+              <h3 className="font-medium text-foreground">{name}</h3>
+              <span className="text-xs text-muted-foreground">
+                {typeLabel()}
+                {updatedAt && <> &middot; {new Date(updatedAt).toLocaleDateString()}</>}
+              </span>
+            </div>
           </div>
-          <div>
-            <h3 className="font-medium text-foreground">{name}</h3>
-            <span className="text-xs text-muted-foreground">
-              {typeLabel()}
-              {updatedAt && <> &middot; {new Date(updatedAt).toLocaleDateString()}</>}
-            </span>
+          <div className="flex items-center gap-0.5">
+            <Button variant="ghost" size="icon" onClick={() => setHistoryOpen(true)} className="h-8 w-8" title="Version history">
+              <History className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => setEditOpen(true)} className="h-8 w-8" title="Edit">
+              <Pencil className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={handleDelete} className="h-8 w-8 text-destructive hover:text-destructive" title="Delete">
+              <Trash2 className="h-4 w-4" />
+            </Button>
           </div>
         </div>
-        <Button variant="ghost" size="icon" onClick={handleDelete} className="h-8 w-8 text-destructive hover:text-destructive">
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        {fieldEntries.length > 0 && (
+          <div className="divide-y divide-border/50">
+            {fieldEntries.map(([key, value]) => renderField(key, value))}
+          </div>
+        )}
       </div>
-      {fieldEntries.length > 0 && (
-        <div className="divide-y divide-border/50">
-          {fieldEntries.map(([key, value]) => renderField(key, value))}
-        </div>
-      )}
-    </div>
+
+      <EditItemDialog open={editOpen} onOpenChange={setEditOpen} vaultId={vaultId} item={item} />
+      <ItemHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} vaultId={vaultId} item={item} />
+    </>
   );
 }
