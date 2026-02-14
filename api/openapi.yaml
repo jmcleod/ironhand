@@ -105,33 +105,35 @@ components:
     PutItemRequest:
       type: object
       required:
-        - data
+        - fields
       properties:
-        data:
-          type: string
-          description: Base64 encoded encrypted data.
-        content_type:
-          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+          description: Map of field name to plaintext value.
 
     GetItemResponse:
       type: object
       properties:
         item_id:
           type: string
-        data:
-          type: string
-          description: Base64 encoded encrypted data.
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+          description: Map of field name to plaintext value.
 
     UpdateItemRequest:
       type: object
       required:
-        - data
+        - fields
       properties:
-        data:
-          type: string
-          description: Base64 encoded encrypted data.
-        content_type:
-          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+          description: Map of field name to plaintext value.
 
     AddMemberRequest:
       type: object

@@ -87,25 +87,25 @@ export async function listItems(vaultID: string): Promise<string[]> {
   return data.items ?? [];
 }
 
-export async function getItem(vaultID: string, itemID: string): Promise<string> {
+export async function getItem(vaultID: string, itemID: string): Promise<Record<string, string>> {
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/items/${encodeURIComponent(itemID)}`);
-  const data = (await resp.json()) as { data: string };
-  return data.data;
+  const data = (await resp.json()) as { fields: Record<string, string> };
+  return data.fields;
 }
 
-export async function putItem(vaultID: string, itemID: string, data: string): Promise<void> {
+export async function putItem(vaultID: string, itemID: string, fields: Record<string, string>): Promise<void> {
   await request(`/vaults/${encodeURIComponent(vaultID)}/items/${encodeURIComponent(itemID)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data, content_type: 'application/json' }),
+    body: JSON.stringify({ fields }),
   });
 }
 
-export async function updateItem(vaultID: string, itemID: string, data: string): Promise<void> {
+export async function updateItem(vaultID: string, itemID: string, fields: Record<string, string>): Promise<void> {
   await request(`/vaults/${encodeURIComponent(vaultID)}/items/${encodeURIComponent(itemID)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data, content_type: 'application/json' }),
+    body: JSON.stringify({ fields }),
   });
 }
 

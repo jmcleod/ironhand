@@ -10,8 +10,6 @@ import (
 	"github.com/jmcleod/ironhand/internal/util"
 )
 
-const defaultContentType = "application/octet-stream"
-
 // Session holds the encrypted key material for an active vault session.
 // Keys are stored in memguard Enclaves (encrypted at rest in memory) and
 // decrypted briefly into mlock'd LockedBuffers only during operations.
@@ -51,7 +49,8 @@ func (s *Session) checkClosed() error {
 }
 
 // Put encrypts and stores a new item in the vault.
-func (s *Session) Put(ctx context.Context, itemID string, plaintext []byte, opts ...PutOption) error {
+// Each field is encrypted independently with the item's DEK.
+func (s *Session) Put(ctx context.Context, itemID string, fields Fields) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -75,18 +74,10 @@ func (s *Session) Put(ctx context.Context, itemID string, plaintext []byte, opts
 		return err
 	}
 
-	o := putOptions{contentType: defaultContentType}
-	for _, opt := range opts {
-		opt(&o)
-	}
-
 	if err := validateID(itemID, "item ID"); err != nil {
 		return err
 	}
-	if err := validateContentType(o.contentType); err != nil {
-		return err
-	}
-	if err := validateContentSize(plaintext); err != nil {
+	if err := validateFields(fields); err != nil {
 		return err
 	}
 
@@ -96,12 +87,17 @@ func (s *Session) Put(ctx context.Context, itemID string, plaintext []byte, opts
 	}
 	defer util.WipeBytes(dek)
 
-	// Encrypt content
 	itemVersion := uint64(1)
-	aadContent := icrypto.AADItemContent(s.vault.id, itemID, o.contentType, itemVersion, s.epoch, 1)
-	ciphertext, err := util.EncryptAESWithAAD(plaintext, dek, aadContent)
-	if err != nil {
-		return err
+
+	// Encrypt each field independently with the same DEK
+	encFields := make(map[string]field, len(fields))
+	for name, plaintext := range fields {
+		aad := icrypto.AADFieldContent(s.vault.id, itemID, name, itemVersion, s.epoch, 1)
+		ct, err := util.EncryptAESWithAAD(plaintext, dek, aad)
+		if err != nil {
+			return fmt.Errorf("encrypting field %q: %w", name, err)
+		}
+		encFields[name] = field{Ciphertext: ct}
 	}
 
 	// Wrap DEK
@@ -113,9 +109,8 @@ func (s *Session) Put(ctx context.Context, itemID string, plaintext []byte, opts
 
 	itm := item{
 		ItemID:       itemID,
-		ContentType:  o.contentType,
 		ItemVersion:  itemVersion,
-		Ciphertext:   ciphertext,
+		Fields:       encFields,
 		WrappedDEK:   wrappedDEK,
 		WrappedEpoch: s.epoch,
 		UpdatedBy:    s.MemberID,
@@ -128,8 +123,8 @@ func (s *Session) Put(ctx context.Context, itemID string, plaintext []byte, opts
 	return s.vault.repo.PutCAS(s.vault.id, "ITEM", itm.ItemID, 0, envelope)
 }
 
-// Get retrieves and decrypts an item from the vault.
-func (s *Session) Get(ctx context.Context, itemID string) ([]byte, error) {
+// Get retrieves and decrypts an item from the vault, returning all fields.
+func (s *Session) Get(ctx context.Context, itemID string) (Fields, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -166,13 +161,23 @@ func (s *Session) Get(ctx context.Context, itemID string) ([]byte, error) {
 	}
 	defer util.WipeBytes(dek)
 
-	// Decrypt content
-	aadContent := icrypto.AADItemContent(s.vault.id, itm.ItemID, itm.ContentType, itm.ItemVersion, itm.WrappedEpoch, 1)
-	return util.DecryptAESWithAAD(itm.Ciphertext, dek, aadContent)
+	// Decrypt each field
+	result := make(Fields, len(itm.Fields))
+	for name, f := range itm.Fields {
+		aad := icrypto.AADFieldContent(s.vault.id, itm.ItemID, name, itm.ItemVersion, itm.WrappedEpoch, 1)
+		plaintext, err := util.DecryptAESWithAAD(f.Ciphertext, dek, aad)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting field %q: %w", name, err)
+		}
+		result[name] = plaintext
+	}
+
+	return result, nil
 }
 
 // Update re-encrypts and stores an existing item, using CAS to detect conflicts.
-func (s *Session) Update(ctx context.Context, itemID string, plaintext []byte, opts ...PutOption) error {
+// All fields are replaced atomically.
+func (s *Session) Update(ctx context.Context, itemID string, fields Fields) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -201,15 +206,7 @@ func (s *Session) Update(ctx context.Context, itemID string, plaintext []byte, o
 		return err
 	}
 
-	o := putOptions{contentType: existing.ContentType}
-	for _, opt := range opts {
-		opt(&o)
-	}
-
-	if err := validateContentType(o.contentType); err != nil {
-		return err
-	}
-	if err := validateContentSize(plaintext); err != nil {
+	if err := validateFields(fields); err != nil {
 		return err
 	}
 
@@ -221,11 +218,15 @@ func (s *Session) Update(ctx context.Context, itemID string, plaintext []byte, o
 
 	newVersion := existing.ItemVersion + 1
 
-	// Encrypt content
-	aadContent := icrypto.AADItemContent(s.vault.id, itemID, o.contentType, newVersion, s.epoch, 1)
-	ciphertext, err := util.EncryptAESWithAAD(plaintext, dek, aadContent)
-	if err != nil {
-		return err
+	// Encrypt each field independently with the same DEK
+	encFields := make(map[string]field, len(fields))
+	for name, plaintext := range fields {
+		aad := icrypto.AADFieldContent(s.vault.id, itemID, name, newVersion, s.epoch, 1)
+		ct, err := util.EncryptAESWithAAD(plaintext, dek, aad)
+		if err != nil {
+			return fmt.Errorf("encrypting field %q: %w", name, err)
+		}
+		encFields[name] = field{Ciphertext: ct}
 	}
 
 	// Wrap DEK
@@ -237,9 +238,8 @@ func (s *Session) Update(ctx context.Context, itemID string, plaintext []byte, o
 
 	itm := item{
 		ItemID:       itemID,
-		ContentType:  o.contentType,
 		ItemVersion:  newVersion,
-		Ciphertext:   ciphertext,
+		Fields:       encFields,
 		WrappedDEK:   wrappedDEK,
 		WrappedEpoch: s.epoch,
 		UpdatedBy:    s.MemberID,

@@ -72,22 +72,31 @@ type memberKEKWrap struct {
 	Wrap     icrypto.SealedWrap `json:"wrap"`
 }
 
+// Fields is a map of field name to plaintext value.
+type Fields map[string][]byte
+
+// field represents a single encrypted field within an item.
+type field struct {
+	Ciphertext []byte `json:"ciphertext,omitzero"`
+}
+
 // item represents an encrypted item stored in the vault.
+// An item is a container for named fields, all encrypted with the same DEK.
 type item struct {
-	ItemID       string `json:"item_id,omitzero"`
-	ContentType  string `json:"content_type,omitzero"`
-	ItemVersion  uint64 `json:"item_version,omitzero"`
-	Ciphertext   []byte `json:"ciphertext,omitzero"`
-	WrappedDEK   []byte `json:"wrapped_dek,omitzero"`
-	WrappedEpoch uint64 `json:"wrapped_epoch,omitzero"`
-	UpdatedBy    string `json:"updated_by,omitzero"`
+	ItemID       string           `json:"item_id,omitzero"`
+	ItemVersion  uint64           `json:"item_version,omitzero"`
+	Fields       map[string]field `json:"fields,omitzero"`
+	WrappedDEK   []byte           `json:"wrapped_dek,omitzero"`
+	WrappedEpoch uint64           `json:"wrapped_epoch,omitzero"`
+	UpdatedBy    string           `json:"updated_by,omitzero"`
 }
 
 // Validation constants.
 const (
-	MaxIDLength          = 256
-	MaxContentTypeLength = 128
-	MaxContentSize       = 1 << 20 // 1MB
+	MaxIDLength        = 256
+	MaxFieldNameLength = 128
+	MaxFieldCount      = 64
+	MaxFieldSize       = 1 << 20 // 1MB per field
 )
 
 // Record types for storage

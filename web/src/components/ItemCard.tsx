@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { VaultItem } from '@/types/vault';
+import { VaultItem, itemName, itemType, itemUpdatedAt, userFields, SENSITIVE_FIELDS } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { Eye, EyeOff, Trash2, Copy, Check, FileText, Image, Mail } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 
@@ -11,35 +11,34 @@ interface ItemCardProps {
 }
 
 export default function ItemCard({ item, vaultId }: ItemCardProps) {
-  const { getDecryptedData, removeItem } = useVault();
+  const { removeItem } = useVault();
   const { toast } = useToast();
-  const [revealed, setRevealed] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [revealedFields, setRevealedFields] = useState<Set<string>>(new Set());
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  const decrypted = revealed ? getDecryptedData(item.data) : null;
+  const type = itemType(item);
+  const name = itemName(item);
+  const updatedAt = itemUpdatedAt(item);
+  const fields = userFields(item);
 
-  const typeIcon = () => {
-    switch (item.type) {
-      case 'text': return <FileText className="h-4 w-4 text-primary" />;
-      case 'image': return <Image className="h-4 w-4 text-primary" />;
-      case 'email': return <Mail className="h-4 w-4 text-primary" />;
-    }
+  const isSensitive = (fieldName: string) => SENSITIVE_FIELDS.has(fieldName);
+
+  const toggleReveal = (fieldName: string) => {
+    setRevealedFields(prev => {
+      const next = new Set(prev);
+      if (next.has(fieldName)) {
+        next.delete(fieldName);
+      } else {
+        next.add(fieldName);
+      }
+      return next;
+    });
   };
 
-  const typeLabel = () => {
-    switch (item.type) {
-      case 'text': return 'Text';
-      case 'image': return 'Image';
-      case 'email': return 'Email';
-    }
-  };
-
-  const handleCopy = () => {
-    if (decrypted) {
-      navigator.clipboard.writeText(decrypted);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+  const handleCopy = (fieldName: string, value: string) => {
+    navigator.clipboard.writeText(value);
+    setCopiedField(fieldName);
+    setTimeout(() => setCopiedField(null), 2000);
   };
 
   const handleDelete = async () => {
@@ -53,45 +52,84 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
     }
   };
 
-  const renderContent = () => {
-    if (!revealed || !decrypted) {
+  const typeIcon = () => {
+    switch (type) {
+      case 'login': return <KeyRound className="h-4 w-4 text-primary" />;
+      case 'note': return <StickyNote className="h-4 w-4 text-primary" />;
+      case 'card': return <CreditCard className="h-4 w-4 text-primary" />;
+      case 'custom': return <Box className="h-4 w-4 text-primary" />;
+    }
+  };
+
+  const typeLabel = () => {
+    switch (type) {
+      case 'login': return 'Login';
+      case 'note': return 'Note';
+      case 'card': return 'Card';
+      case 'custom': return 'Custom';
+    }
+  };
+
+  const maskValue = (value: string) => {
+    return '\u2022'.repeat(Math.min(value.length, 20));
+  };
+
+  const formatFieldLabel = (key: string) => {
+    return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  };
+
+  const renderFieldValue = (key: string, value: string) => {
+    const sensitive = isSensitive(key);
+    const revealed = revealedFields.has(key);
+
+    if (key === 'url' && value) {
       return (
-        <div className="font-mono text-sm text-muted-foreground tracking-wider">
-          ••••••••••••••••
-        </div>
+        <a href={value.startsWith('http') ? value : `https://${value}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-sm break-all">
+          {value}
+        </a>
       );
     }
 
-    switch (item.type) {
-      case 'image':
-        return (
-          <div className="mt-2">
-            <img src={decrypted} alt={item.name} className="max-w-full max-h-48 rounded-lg border border-border" />
-          </div>
-        );
-      case 'email':
-        return (
-          <div className="mt-2 space-y-1 text-sm">
-            {decrypted.split('\n').map((line, i) => {
-              const [key, ...rest] = line.split(':');
-              const value = rest.join(':').trim();
-              return (
-                <div key={i} className="flex gap-2">
-                  <span className="text-muted-foreground font-medium min-w-[80px]">{key}:</span>
-                  <span className="text-foreground">{value}</span>
-                </div>
-              );
-            })}
-          </div>
-        );
-      default:
-        return (
-          <pre className="mt-2 font-mono text-sm text-foreground whitespace-pre-wrap bg-muted p-3 rounded-lg border border-border">
-            {decrypted}
-          </pre>
-        );
+    if (key === 'content') {
+      return (
+        <pre className="text-sm text-foreground whitespace-pre-wrap font-sans break-all">
+          {value}
+        </pre>
+      );
     }
+
+    if (sensitive && !revealed) {
+      return <span className="font-mono text-sm text-muted-foreground">{maskValue(value)}</span>;
+    }
+
+    return <span className="text-sm text-foreground break-all">{value}</span>;
   };
+
+  const renderField = (key: string, value: string) => {
+    const sensitive = isSensitive(key);
+    return (
+      <div key={key} className="flex items-center gap-2 py-1.5 group">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[100px] shrink-0">
+          {formatFieldLabel(key)}
+        </span>
+        <div className="flex-1 min-w-0">
+          {renderFieldValue(key, value)}
+        </div>
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+          {sensitive && (
+            <Button variant="ghost" size="icon" onClick={() => toggleReveal(key)} className="h-7 w-7">
+              {revealedFields.has(key) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </Button>
+          )}
+          <Button variant="ghost" size="icon" onClick={() => handleCopy(key, value)} className="h-7 w-7">
+            {copiedField === key ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const fieldEntries = Object.entries(fields);
 
   return (
     <div className="rounded-xl border border-border bg-card p-5 vault-card-hover">
@@ -101,25 +139,22 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
             {typeIcon()}
           </div>
           <div>
-            <h3 className="font-medium text-foreground">{item.name}</h3>
-            <span className="text-xs text-muted-foreground">{typeLabel()} • {new Date(item.updatedAt).toLocaleDateString()}</span>
+            <h3 className="font-medium text-foreground">{name}</h3>
+            <span className="text-xs text-muted-foreground">
+              {typeLabel()}
+              {updatedAt && <> &middot; {new Date(updatedAt).toLocaleDateString()}</>}
+            </span>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" onClick={() => setRevealed(!revealed)} className="h-8 w-8">
-            {revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </Button>
-          {revealed && (
-            <Button variant="ghost" size="icon" onClick={handleCopy} className="h-8 w-8">
-              {copied ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          )}
-          <Button variant="ghost" size="icon" onClick={handleDelete} className="h-8 w-8 text-destructive hover:text-destructive">
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        </div>
+        <Button variant="ghost" size="icon" onClick={handleDelete} className="h-8 w-8 text-destructive hover:text-destructive">
+          <Trash2 className="h-4 w-4" />
+        </Button>
       </div>
-      {renderContent()}
+      {fieldEntries.length > 0 && (
+        <div className="divide-y divide-border/50">
+          {fieldEntries.map(([key, value]) => renderField(key, value))}
+        </div>
+      )}
     </div>
   );
 }

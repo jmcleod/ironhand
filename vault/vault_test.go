@@ -88,65 +88,70 @@ func TestVault_PutAndGet(t *testing.T) {
 	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
-	secretData := []byte("This is a highly confidential message.")
-	err := session.Put(ctx, "item-1", secretData, WithContentType("text/plain"))
+	fields := Fields{
+		"username": []byte("admin"),
+		"password": []byte("s3cret"),
+	}
+	err := session.Put(ctx, "item-1", fields)
 	require.NoError(t, err)
 
-	decrypted, err := session.Get(ctx, "item-1")
+	result, err := session.Get(ctx, "item-1")
 	require.NoError(t, err)
-	assert.Equal(t, secretData, decrypted)
+	assert.Equal(t, []byte("admin"), result["username"])
+	assert.Equal(t, []byte("s3cret"), result["password"])
 }
 
-func TestVault_PutDefaultContentType(t *testing.T) {
+func TestVault_PutSingleField(t *testing.T) {
 	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
-	err := session.Put(ctx, "item-1", []byte("data"))
+	err := session.Put(ctx, "item-1", Fields{"note": []byte("data")})
 	require.NoError(t, err)
 
-	decrypted, err := session.Get(ctx, "item-1")
+	result, err := session.Get(ctx, "item-1")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("data"), decrypted)
+	assert.Equal(t, []byte("data"), result["note"])
+	assert.Len(t, result, 1)
 }
 
 func TestVault_Update(t *testing.T) {
 	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
-	// Put initial value
-	err := session.Put(ctx, "item-1", []byte("version-1"), WithContentType("text/plain"))
+	err := session.Put(ctx, "item-1", Fields{"password": []byte("version-1")})
 	require.NoError(t, err)
 
-	// Update
-	err = session.Update(ctx, "item-1", []byte("version-2"))
+	err = session.Update(ctx, "item-1", Fields{"password": []byte("version-2"), "username": []byte("admin")})
 	require.NoError(t, err)
 
-	// Get updated value
-	val, err := session.Get(ctx, "item-1")
+	result, err := session.Get(ctx, "item-1")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("version-2"), val)
+	assert.Equal(t, []byte("version-2"), result["password"])
+	assert.Equal(t, []byte("admin"), result["username"])
 }
 
-func TestVault_UpdateWithContentType(t *testing.T) {
+func TestVault_UpdateReplacesAllFields(t *testing.T) {
 	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
-	err := session.Put(ctx, "item-1", []byte("{}"), WithContentType("text/plain"))
+	err := session.Put(ctx, "item-1", Fields{"a": []byte("1"), "b": []byte("2")})
 	require.NoError(t, err)
 
-	err = session.Update(ctx, "item-1", []byte(`{"key":"val"}`), WithContentType("application/json"))
+	// Update with only field "c" — fields "a" and "b" should be gone
+	err = session.Update(ctx, "item-1", Fields{"c": []byte("3")})
 	require.NoError(t, err)
 
-	val, err := session.Get(ctx, "item-1")
+	result, err := session.Get(ctx, "item-1")
 	require.NoError(t, err)
-	assert.Equal(t, []byte(`{"key":"val"}`), val)
+	assert.Len(t, result, 1)
+	assert.Equal(t, []byte("3"), result["c"])
 }
 
 func TestVault_ConcurrentUpdate(t *testing.T) {
 	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
-	err := session.Put(ctx, "item-1", []byte("initial"))
+	err := session.Put(ctx, "item-1", Fields{"data": []byte("initial")})
 	require.NoError(t, err)
 
 	const n = 10
@@ -157,7 +162,7 @@ func TestVault_ConcurrentUpdate(t *testing.T) {
 	for range n {
 		go func() {
 			defer wg.Done()
-			if err := session.Update(ctx, "item-1", []byte("updated")); err != nil {
+			if err := session.Update(ctx, "item-1", Fields{"data": []byte("updated")}); err != nil {
 				errs <- err
 			}
 		}()
@@ -177,9 +182,9 @@ func TestVault_Session_List_Delete(t *testing.T) {
 	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
-	err := session.Put(ctx, "item-1", []byte("data1"))
+	err := session.Put(ctx, "item-1", Fields{"data": []byte("data1")})
 	require.NoError(t, err)
-	err = session.Put(ctx, "item-2", []byte("data2"))
+	err = session.Put(ctx, "item-2", Fields{"data": []byte("data2")})
 	require.NoError(t, err)
 
 	items, err := session.List(ctx)
@@ -201,7 +206,7 @@ func TestVault_TamperProtection(t *testing.T) {
 	ctx := context.Background()
 	v, session, _ := createTestVault(t)
 
-	err := session.Put(ctx, "item1", []byte("secret"), WithContentType("text/plain"))
+	err := session.Put(ctx, "item1", Fields{"secret": []byte("value")})
 	require.NoError(t, err)
 
 	t.Run("Flip ciphertext byte", func(t *testing.T) {
@@ -214,13 +219,36 @@ func TestVault_TamperProtection(t *testing.T) {
 	})
 
 	t.Run("Swap envelopes between items", func(t *testing.T) {
-		session.Put(ctx, "item2", []byte("other"), WithContentType("text/plain"))
+		session.Put(ctx, "item2", Fields{"other": []byte("value")})
 		env2, _ := v.repo.Get(v.id, "ITEM", "item2")
 
 		v.repo.Put(v.id, "ITEM", "item1", env2)
 
 		_, err := session.Get(ctx, "item1")
 		assert.Error(t, err, "Should fail due to AAD mismatch (itemID)")
+	})
+}
+
+func TestVault_FieldValidation(t *testing.T) {
+	ctx := t.Context()
+	_, session, _ := createTestVault(t)
+
+	t.Run("Empty fields rejected", func(t *testing.T) {
+		err := session.Put(ctx, "item-1", Fields{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "at least one field")
+	})
+
+	t.Run("Empty field name rejected", func(t *testing.T) {
+		err := session.Put(ctx, "item-1", Fields{"": []byte("value")})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "field name must not be empty")
+	})
+
+	t.Run("Field name with colon rejected", func(t *testing.T) {
+		err := session.Put(ctx, "item-1", Fields{"bad:name": []byte("value")})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "forbidden character")
 	})
 }
 
@@ -258,13 +286,13 @@ func TestVault_Revocation(t *testing.T) {
 	defer bobSession.Close()
 
 	// Alice adds an item
-	err = aliceSession.Put(ctx, "item1", []byte("shared secret"), WithContentType("text/plain"))
+	err = aliceSession.Put(ctx, "item1", Fields{"secret": []byte("shared secret")})
 	require.NoError(t, err)
 
 	// Bob can decrypt
 	val, err := bobSession.Get(ctx, "item1")
 	require.NoError(t, err)
-	assert.Equal(t, "shared secret", string(val))
+	assert.Equal(t, "shared secret", string(val["secret"]))
 
 	// Revoke Bob
 	err = aliceSession.RevokeMember(ctx, "bob")
@@ -398,11 +426,11 @@ func TestVault_AuthorizationEnforced(t *testing.T) {
 	require.NoError(t, err)
 	defer readerSession.Close()
 
-	require.NoError(t, aliceSession.Put(ctx, "item-1", []byte("hello"), WithContentType("text/plain")))
+	require.NoError(t, aliceSession.Put(ctx, "item-1", Fields{"greeting": []byte("hello")}))
 	_, err = readerSession.Get(ctx, "item-1")
 	require.NoError(t, err)
 
-	err = readerSession.Put(ctx, "item-2", []byte("denied"), WithContentType("text/plain"))
+	err = readerSession.Put(ctx, "item-2", Fields{"data": []byte("denied")})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrUnauthorized))
 
@@ -440,7 +468,7 @@ func TestVault_StaleSessionRejected(t *testing.T) {
 
 	require.NoError(t, aliceSession.AddMember(ctx, "reader2", writerKP.Public, RoleReader))
 
-	err = writerSession.Put(ctx, "item-stale", []byte("stale"), WithContentType("text/plain"))
+	err = writerSession.Put(ctx, "item-stale", Fields{"data": []byte("stale")})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrStaleSession))
 }

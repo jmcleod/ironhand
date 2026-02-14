@@ -12,6 +12,22 @@ import (
 	"github.com/jmcleod/ironhand/vault"
 )
 
+func fieldsFromAPI(apiFields map[string]string) vault.Fields {
+	fields := make(vault.Fields, len(apiFields))
+	for k, v := range apiFields {
+		fields[k] = []byte(v)
+	}
+	return fields
+}
+
+func fieldsToAPI(fields vault.Fields) map[string]string {
+	apiFields := make(map[string]string, len(fields))
+	for k, v := range fields {
+		apiFields[k] = string(v)
+	}
+	return apiFields
+}
+
 // CreateVault handles POST /vaults.
 // Creates a new vault for the authenticated account and returns the generated vault ID.
 func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
@@ -37,12 +53,8 @@ func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
 	defer session.Close()
 
 	if req.Name != "" || req.Description != "" {
-		metaPayload, err := encodeVaultMetadata(strings.TrimSpace(req.Name), strings.TrimSpace(req.Description))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to encode vault metadata: "+err.Error())
-			return
-		}
-		if err := session.Put(r.Context(), vaultMetadataItemID, metaPayload, vault.WithContentType(vaultMetadataContentType)); err != nil {
+		metaFields := encodeVaultMetadata(strings.TrimSpace(req.Name), strings.TrimSpace(req.Description))
+		if err := session.Put(r.Context(), vaultMetadataItemID, metaFields); err != nil {
 			mapError(w, err)
 			return
 		}
@@ -124,12 +136,6 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := base64.StdEncoding.DecodeString(req.Data)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid base64 data: "+err.Error())
-		return
-	}
-
 	session, err := a.openSession(r.Context(), vaultID, creds)
 	if err != nil {
 		mapError(w, err)
@@ -137,12 +143,7 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	var opts []vault.PutOption
-	if req.ContentType != "" {
-		opts = append(opts, vault.WithContentType(req.ContentType))
-	}
-
-	if err := session.Put(r.Context(), itemID, data, opts...); err != nil {
+	if err := session.Put(r.Context(), itemID, fieldsFromAPI(req.Fields)); err != nil {
 		mapError(w, err)
 		return
 	}
@@ -167,7 +168,7 @@ func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	plaintext, err := session.Get(r.Context(), itemID)
+	fields, err := session.Get(r.Context(), itemID)
 	if err != nil {
 		mapError(w, err)
 		return
@@ -175,7 +176,7 @@ func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, GetItemResponse{
 		ItemID: itemID,
-		Data:   base64.StdEncoding.EncodeToString(plaintext),
+		Fields: fieldsToAPI(fields),
 	})
 }
 
@@ -195,12 +196,6 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := base64.StdEncoding.DecodeString(req.Data)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid base64 data: "+err.Error())
-		return
-	}
-
 	session, err := a.openSession(r.Context(), vaultID, creds)
 	if err != nil {
 		mapError(w, err)
@@ -208,12 +203,7 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	var opts []vault.PutOption
-	if req.ContentType != "" {
-		opts = append(opts, vault.WithContentType(req.ContentType))
-	}
-
-	if err := session.Update(r.Context(), itemID, data, opts...); err != nil {
+	if err := session.Update(r.Context(), itemID, fieldsFromAPI(req.Fields)); err != nil {
 		mapError(w, err)
 		return
 	}
@@ -268,11 +258,9 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 		}
 
 		meta := vaultMetadata{}
-		metaBytes, err := session.Get(r.Context(), vaultMetadataItemID)
+		metaFields, err := session.Get(r.Context(), vaultMetadataItemID)
 		if err == nil {
-			if decoded, decodeErr := decodeVaultMetadata(metaBytes); decodeErr == nil {
-				meta = decoded
-			}
+			meta = decodeVaultMetadata(metaFields)
 		}
 		itemIDs, err := session.List(r.Context())
 		if err != nil {

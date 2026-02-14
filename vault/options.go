@@ -45,18 +45,3 @@ func WithVer(ver int) VaultStateOption {
 		s.Ver = ver
 	}
 }
-
-// PutOption configures item storage.
-type PutOption func(*putOptions)
-
-type putOptions struct {
-	contentType string
-}
-
-// WithContentType sets the content type for an item.
-// Default: "application/octet-stream".
-func WithContentType(ct string) PutOption {
-	return func(o *putOptions) {
-		o.contentType = ct
-	}
-}

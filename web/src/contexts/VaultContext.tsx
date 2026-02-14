@@ -15,7 +15,7 @@ import {
   updateItem as apiUpdateItem,
 } from '@/lib/api';
 import { generateId } from '@/lib/crypto';
-import { ItemType, Vault, VaultItem } from '@/types/vault';
+import { FIELD_CREATED, FIELD_NAME, FIELD_TYPE, FIELD_UPDATED, ItemType, Vault, VaultItem } from '@/types/vault';
 
 interface AccountState {
   vaults: Vault[];
@@ -31,31 +31,14 @@ interface VaultContextType {
   refresh: () => Promise<void>;
   createVault: (name: string, description: string) => Promise<void>;
   deleteVault: (vaultId: string) => Promise<void>;
-  addItem: (vaultId: string, name: string, type: ItemType, data: string) => Promise<void>;
+  addItem: (vaultId: string, name: string, type: ItemType, fields: Record<string, string>) => Promise<void>;
   removeItem: (vaultId: string, itemId: string) => Promise<void>;
-  updateItem: (vaultId: string, itemId: string, updates: Partial<Pick<VaultItem, 'name' | 'type' | 'data'>>) => Promise<void>;
+  updateItem: (vaultId: string, itemId: string, fields: Record<string, string>) => Promise<void>;
   shareVault: (vaultId: string, memberID: string, pubKey: string, role: 'owner' | 'writer' | 'reader') => Promise<void>;
   revokeMember: (vaultId: string, memberID: string) => Promise<void>;
-  getDecryptedData: (data: string) => string;
 }
 
 const VaultContext = createContext<VaultContextType | null>(null);
-
-type StoredItemPayload = {
-  name: string;
-  type: ItemType;
-  data: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-function encodeItemPayload(payload: StoredItemPayload): string {
-  return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
-}
-
-function decodeItemPayload(input: string): StoredItemPayload {
-  return JSON.parse(decodeURIComponent(escape(atob(input)))) as StoredItemPayload;
-}
 
 export function VaultProvider({ children }: { children: React.ReactNode }) {
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -69,30 +52,11 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       const itemIDs = await apiListItems(summary.vault_id).catch(() => []);
       const items: VaultItem[] = [];
       for (const itemID of itemIDs) {
-        const raw = await apiGetItem(summary.vault_id, itemID).catch(() => '');
-        if (!raw) {
+        const fields = await apiGetItem(summary.vault_id, itemID).catch(() => null);
+        if (!fields) {
           continue;
         }
-        try {
-          const payload = decodeItemPayload(raw);
-          items.push({
-            id: itemID,
-            name: payload.name,
-            type: payload.type,
-            data: payload.data,
-            createdAt: payload.createdAt,
-            updatedAt: payload.updatedAt,
-          });
-        } catch {
-          items.push({
-            id: itemID,
-            name: itemID,
-            type: 'text',
-            data: raw,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-        }
+        items.push({ id: itemID, fields });
       }
       nextVaults.push({
         id: summary.vault_id,
@@ -156,11 +120,17 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addItem = useCallback(
-    async (vaultID: string, name: string, type: ItemType, data: string) => {
+    async (vaultID: string, name: string, type: ItemType, userFields: Record<string, string>) => {
       const now = new Date().toISOString();
       const itemID = generateId();
-      const payload = encodeItemPayload({ name, type, data, createdAt: now, updatedAt: now });
-      await apiPutItem(vaultID, itemID, payload);
+      const fields: Record<string, string> = {
+        ...userFields,
+        [FIELD_NAME]: name,
+        [FIELD_TYPE]: type,
+        [FIELD_CREATED]: now,
+        [FIELD_UPDATED]: now,
+      };
+      await apiPutItem(vaultID, itemID, fields);
       await refresh();
     },
     [refresh],
@@ -175,19 +145,17 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updateItem = useCallback(
-    async (vaultID: string, itemID: string, updates: Partial<Pick<VaultItem, 'name' | 'type' | 'data'>>) => {
+    async (vaultID: string, itemID: string, fields: Record<string, string>) => {
       const existing = vaults.find((v) => v.id === vaultID)?.items.find((i) => i.id === itemID);
       if (!existing) {
         return;
       }
-      const payload = encodeItemPayload({
-        name: updates.name ?? existing.name,
-        type: updates.type ?? existing.type,
-        data: updates.data ?? existing.data,
-        createdAt: existing.createdAt,
-        updatedAt: new Date().toISOString(),
-      });
-      await apiUpdateItem(vaultID, itemID, payload);
+      const merged: Record<string, string> = {
+        ...existing.fields,
+        ...fields,
+        [FIELD_UPDATED]: new Date().toISOString(),
+      };
+      await apiUpdateItem(vaultID, itemID, merged);
       await refresh();
     },
     [refresh, vaults],
@@ -238,7 +206,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         updateItem,
         shareVault,
         revokeMember,
-        getDecryptedData: (data: string) => data,
       }}
     >
       {children}

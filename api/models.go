@@ -57,20 +57,18 @@ type ListItemsResponse struct {
 
 // PutItemRequest is the JSON body for POST /vaults/{vaultID}/items/{itemID}.
 type PutItemRequest struct {
-	Data        string `json:"data"`
-	ContentType string `json:"content_type,omitempty"`
+	Fields map[string]string `json:"fields"`
 }
 
 // GetItemResponse is returned from GET /vaults/{vaultID}/items/{itemID}.
 type GetItemResponse struct {
-	ItemID string `json:"item_id"`
-	Data   string `json:"data"`
+	ItemID string            `json:"item_id"`
+	Fields map[string]string `json:"fields"`
 }
 
 // UpdateItemRequest is the JSON body for PUT /vaults/{vaultID}/items/{itemID}.
 type UpdateItemRequest struct {
-	Data        string `json:"data"`
-	ContentType string `json:"content_type,omitempty"`
+	Fields map[string]string `json:"fields"`
 }
 
 // AddMemberRequest is the JSON body for POST /vaults/{vaultID}/members.

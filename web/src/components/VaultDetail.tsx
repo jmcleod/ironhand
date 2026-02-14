@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Vault, ItemType } from '@/types/vault';
+import { Vault } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { ArrowLeft, Plus, Trash2, Share2, FileText, Image, Mail } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Share2, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import ItemCard from '@/components/ItemCard';
 import AddItemDialog from '@/components/AddItemDialog';
@@ -28,14 +28,6 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
         const msg = err instanceof Error ? err.message : 'Failed to delete vault.';
         toast({ title: 'Delete failed', description: msg, variant: 'destructive' });
       }
-    }
-  };
-
-  const typeIcon = (type: ItemType) => {
-    switch (type) {
-      case 'text': return <FileText className="h-4 w-4" />;
-      case 'image': return <Image className="h-4 w-4" />;
-      case 'email': return <Mail className="h-4 w-4" />;
     }
   };
 

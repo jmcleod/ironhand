@@ -25,9 +25,15 @@ func TestAAD(t *testing.T) {
 		t.Error("AADRecord should be different for different recordIDs")
 	}
 
-	aadItem := AADItemContent(vaultID, "item-1", "pass", 10, 1, 1)
-	if len(aadItem) == 0 {
-		t.Error("AADItemContent produced empty AAD")
+	aadField := AADFieldContent(vaultID, "item-1", "password", 10, 1, 1)
+	if len(aadField) == 0 {
+		t.Error("AADFieldContent produced empty AAD")
+	}
+
+	// Different field names must produce different AAD
+	aadField2 := AADFieldContent(vaultID, "item-1", "username", 10, 1, 1)
+	if bytes.Equal(aadField, aadField2) {
+		t.Error("AADFieldContent should be different for different field names")
 	}
 }
 

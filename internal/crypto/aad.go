@@ -6,7 +6,7 @@ import (
 
 const (
 	aadRecord  = "RECORD"
-	aadItem    = "ITEM"
+	aadField   = "FIELD"
 	aadDEKWrap = "DEKWRAP"
 	aadKEKWrap = "KEKWRAP"
 )
@@ -15,8 +15,8 @@ func AADRecord(vaultID, recordType, recordID string, epoch uint64, ver int) []by
 	return buildAAD(aadRecord, vaultID, recordType, recordID, epoch, ver)
 }
 
-func AADItemContent(vaultID, itemID, contentType string, itemVersion uint64, epoch uint64, ver int) []byte {
-	return buildAAD(aadItem, vaultID, itemID, contentType, itemVersion, epoch, ver)
+func AADFieldContent(vaultID, itemID, fieldName string, itemVersion uint64, epoch uint64, ver int) []byte {
+	return buildAAD(aadField, vaultID, itemID, fieldName, itemVersion, epoch, ver)
 }
 
 func AADDEKWrap(vaultID, itemID string, epoch uint64, ver int) []byte {

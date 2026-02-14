@@ -2,7 +2,6 @@ package api_test
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
@@ -130,9 +129,8 @@ func TestVaultCRUD(t *testing.T) {
 	var create api.CreateVaultResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
 
-	itemData := base64.StdEncoding.EncodeToString([]byte(`{"k":"v"}`))
-	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults/"+create.VaultID+"/items/item-1", map[string]string{
-		"data": itemData,
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults/"+create.VaultID+"/items/item-1", map[string]any{
+		"fields": map[string]string{"username": "admin", "password": "secret"},
 	})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -144,7 +142,8 @@ func TestVaultCRUD(t *testing.T) {
 	var getItem api.GetItemResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&getItem))
 	assert.Equal(t, "item-1", getItem.ItemID)
-	assert.NotEmpty(t, getItem.Data)
+	assert.Equal(t, "admin", getItem.Fields["username"])
+	assert.Equal(t, "secret", getItem.Fields["password"])
 }
 
 func TestDeleteVault(t *testing.T) {

@@ -38,7 +38,11 @@ func main() {
 
 	// 4. Store a secret
 	fmt.Println("[3] Adding a secret item to the vault...")
-	err = session.Put(ctx, "item-1", []byte("This is a highly confidential message."), vault.WithContentType("text/plain"))
+	err = session.Put(ctx, "item-1", vault.Fields{
+		"username": []byte("admin"),
+		"password": []byte("This is a highly confidential message."),
+		"notes":    []byte("Primary login"),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -50,7 +54,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("    Decrypted content: %q\n", string(decrypted))
+	fmt.Printf("    Decrypted fields: username=%q, password=%q\n", string(decrypted["username"]), string(decrypted["password"]))
 
 	// 6. List items
 	fmt.Println("[5] Listing items...")
@@ -85,7 +89,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("    Re-opened and decrypted: %q\n", string(decrypted2))
+	fmt.Printf("    Re-opened and decrypted: username=%q\n", string(decrypted2["username"]))
 
 	// 9. Delete an item
 	fmt.Println("[8] Deleting item...")

@@ -1,26 +1,24 @@
 package api
 
-import "encoding/json"
+import "github.com/jmcleod/ironhand/vault"
 
-const (
-	vaultMetadataItemID      = "__vault_meta"
-	vaultMetadataContentType = "application/vnd.ironhand.vaultmeta+json"
-)
+const vaultMetadataItemID = "__vault_meta"
 
 type vaultMetadata struct {
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
+	Name        string
+	Description string
 }
 
-func encodeVaultMetadata(name, description string) ([]byte, error) {
-	return json.Marshal(vaultMetadata{
-		Name:        name,
-		Description: description,
-	})
+func encodeVaultMetadata(name, description string) vault.Fields {
+	return vault.Fields{
+		"name":        []byte(name),
+		"description": []byte(description),
+	}
 }
 
-func decodeVaultMetadata(data []byte) (vaultMetadata, error) {
-	var meta vaultMetadata
-	err := json.Unmarshal(data, &meta)
-	return meta, err
+func decodeVaultMetadata(fields vault.Fields) vaultMetadata {
+	return vaultMetadata{
+		Name:        string(fields["name"]),
+		Description: string(fields["description"]),
+	}
 }

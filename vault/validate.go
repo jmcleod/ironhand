@@ -26,31 +26,41 @@ func validateID(id, label string) error {
 	return nil
 }
 
-func validateContentType(ct string) error {
-	if ct == "" {
-		return validationErrorf("content type must not be empty")
+func validateFieldName(name string) error {
+	if name == "" {
+		return validationErrorf("field name must not be empty")
 	}
-	if len(ct) > MaxContentTypeLength {
-		return validationErrorf("content type exceeds maximum length of %d", MaxContentTypeLength)
+	if len(name) > MaxFieldNameLength {
+		return validationErrorf("field name exceeds maximum length of %d", MaxFieldNameLength)
 	}
-	hasSlash := false
-	for _, r := range ct {
-		if r == '/' {
-			hasSlash = true
+	if !utf8.ValidString(name) {
+		return validationErrorf("field name contains invalid UTF-8")
+	}
+	for _, r := range name {
+		if r == ':' || r == '/' {
+			return validationErrorf("field name contains forbidden character %q", r)
 		}
 		if unicode.IsControl(r) {
-			return validationErrorf("content type contains control character")
+			return validationErrorf("field name contains control character")
 		}
-	}
-	if !hasSlash {
-		return validationErrorf("content type must contain '/' (MIME format)")
 	}
 	return nil
 }
 
-func validateContentSize(data []byte) error {
-	if len(data) > MaxContentSize {
-		return validationErrorf("content size %d exceeds maximum of %d bytes", len(data), MaxContentSize)
+func validateFields(fields Fields) error {
+	if len(fields) == 0 {
+		return validationErrorf("item must have at least one field")
+	}
+	if len(fields) > MaxFieldCount {
+		return validationErrorf("field count %d exceeds maximum of %d", len(fields), MaxFieldCount)
+	}
+	for name, value := range fields {
+		if err := validateFieldName(name); err != nil {
+			return err
+		}
+		if len(value) > MaxFieldSize {
+			return validationErrorf("field %q size %d exceeds maximum of %d bytes", name, len(value), MaxFieldSize)
+		}
 	}
 	return nil
 }
