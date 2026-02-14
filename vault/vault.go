@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/awnumar/memguard"
@@ -57,6 +58,9 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 	}
 	if err := validateID(creds.memberID, "member ID"); err != nil {
 		return nil, err
+	}
+	if creds.destroyed || creds.muk == nil {
+		return nil, fmt.Errorf("credentials have been destroyed")
 	}
 
 	state := newVaultState(v.id, opts...)
@@ -125,6 +129,7 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 	if err != nil {
 		return nil, err
 	}
+	stateEnv.Version = 1
 	memberEnv, err := sealMember(v.id, recordKey, owner, 1)
 	if err != nil {
 		return nil, err
@@ -139,7 +144,10 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 	}
 
 	err = v.repo.Batch(v.id, func(tx storage.BatchTx) error {
-		if err := tx.Put(recordTypeState, recordIDCurrent, stateEnv); err != nil {
+		if err := tx.PutCAS(recordTypeState, recordIDCurrent, 0, stateEnv); err != nil {
+			if errors.Is(err, storage.ErrCASFailed) {
+				return ErrVaultAlreadyExists
+			}
 			return err
 		}
 		if err := tx.Put(recordTypeMember, owner.MemberID, memberEnv); err != nil {
@@ -178,6 +186,9 @@ func (v *Vault) Open(ctx context.Context, creds *Credentials) (*Session, error) 
 	}
 	if err := validateID(creds.memberID, "member ID"); err != nil {
 		return nil, err
+	}
+	if creds.destroyed || creds.muk == nil {
+		return nil, fmt.Errorf("credentials have been destroyed")
 	}
 
 	mukBuf, err := creds.muk.Open()

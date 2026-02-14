@@ -63,6 +63,27 @@ func TestVault_CreateAndOpen(t *testing.T) {
 	assert.Equal(t, uint64(1), session2.Epoch())
 }
 
+func TestVault_Create_DuplicateVaultID(t *testing.T) {
+	ctx := t.Context()
+	repo := memory.NewRepository()
+
+	firstCreds, err := NewCredentials("test-passphrase")
+	require.NoError(t, err)
+	defer firstCreds.Destroy()
+
+	secondCreds, err := NewCredentials("test-passphrase")
+	require.NoError(t, err)
+	defer secondCreds.Destroy()
+
+	v := New("default", repo)
+	firstSession, err := v.Create(ctx, firstCreds)
+	require.NoError(t, err)
+	defer firstSession.Close()
+
+	_, err = v.Create(ctx, secondCreds)
+	require.ErrorIs(t, err, ErrVaultAlreadyExists)
+}
+
 func TestVault_PutAndGet(t *testing.T) {
 	ctx := t.Context()
 	_, session, _ := createTestVault(t)

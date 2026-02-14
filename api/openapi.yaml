@@ -115,7 +115,7 @@ components:
           description: Base64 encoded 32-byte public key.
         role:
           type: string
-          enum: [admin, member]
+          enum: [owner, writer, reader]
 
     AddMemberResponse:
       type: object
@@ -256,7 +256,7 @@ paths:
             schema:
               $ref: '#/components/schemas/PutItemRequest'
       responses:
-        '200':
+        '201':
           description: Item stored successfully
         '401':
           description: Unauthorized

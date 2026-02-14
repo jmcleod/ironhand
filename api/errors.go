@@ -36,6 +36,14 @@ func mapError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	if _, ok := errors.AsType[vault.ValidationError](err); ok {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, ok := errors.AsType[vault.VaultExistsError](err); ok {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 
 	switch {
 	case errors.Is(err, storage.ErrNotFound):

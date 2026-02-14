@@ -135,6 +135,32 @@ func TestBBoltStorage(t *testing.T) {
 			t.Errorf("expected 0 ids, got %d", len(ids))
 		}
 	})
+
+	t.Run("List handles non-matching shorter keys without panic", func(t *testing.T) {
+		err := s.Put(vaultID, "Z", "", env)
+		if err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("List panicked: %v", r)
+			}
+		}()
+
+		ids, err := s.List(vaultID, "ITEM")
+		if err != nil {
+			t.Fatalf("List failed: %v", err)
+		}
+		if len(ids) == 0 {
+			t.Fatal("expected ITEM ids to be returned")
+		}
+		for _, id := range ids {
+			if id == "" {
+				t.Fatal("unexpected empty item ID from non-matching key prefix")
+			}
+		}
+	})
 }
 
 func TestNewRepositoryFromFile(t *testing.T) {

@@ -2,6 +2,7 @@
 package bbolt
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -101,7 +102,7 @@ func (s *Store) List(vaultID, recordType string) ([]string, error) {
 			return nil
 		}
 		c := b.Cursor()
-		for k, _ := c.Seek(prefix); k != nil && string(k[:len(prefix)]) == string(prefix); k, _ = c.Next() {
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
 			ids = append(ids, string(k[len(prefix):]))
 		}
 		return nil

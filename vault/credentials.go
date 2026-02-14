@@ -26,6 +26,7 @@ type Credentials struct {
 	kdfParams  Argon2idParams
 	saltPass   []byte
 	saltSecret []byte
+	destroyed  bool
 }
 
 // CredentialProfile captures KDF settings used for deriving a member MUK.
@@ -164,26 +165,41 @@ func OpenCredentials(secretKey crypto.SecretKey, passphrase string, memberID str
 
 // MemberID returns the member's unique identifier.
 func (c *Credentials) MemberID() string {
+	if c == nil || c.destroyed {
+		return ""
+	}
 	return c.memberID
 }
 
 // PublicKey returns the member's X25519 public key.
 func (c *Credentials) PublicKey() [32]byte {
+	if c == nil || c.destroyed {
+		return [32]byte{}
+	}
 	return c.keypair.Public
 }
 
 // PrivateKey returns the member's X25519 private key.
 func (c *Credentials) PrivateKey() [32]byte {
+	if c == nil || c.destroyed {
+		return [32]byte{}
+	}
 	return c.keypair.Private
 }
 
 // SecretKey returns the secret key used in MUK derivation.
 func (c *Credentials) SecretKey() crypto.SecretKey {
+	if c == nil || c.destroyed {
+		return nil
+	}
 	return c.secretKey
 }
 
 // Profile returns a copy of the KDF profile used to derive this credential's MUK.
 func (c *Credentials) Profile() CredentialProfile {
+	if c == nil || c.destroyed {
+		return CredentialProfile{}
+	}
 	return CredentialProfile{
 		KDFParams:  c.kdfParams,
 		SaltPass:   util.CopyBytes(c.saltPass),
@@ -194,11 +210,26 @@ func (c *Credentials) Profile() CredentialProfile {
 // Destroy wipes sensitive key material held by the credentials.
 // After calling Destroy, the Credentials must not be reused.
 func (c *Credentials) Destroy() {
+	if c == nil || c.destroyed {
+		return
+	}
 	c.muk = nil
+	c.memberID = ""
 	util.WipeArray32(&c.keypair.Private)
+	util.WipeArray32(&c.keypair.Public)
+	c.secretKey = nil
+	c.kdfParams = Argon2idParams{}
+	util.WipeBytes(c.saltPass)
+	util.WipeBytes(c.saltSecret)
+	c.saltPass = nil
+	c.saltSecret = nil
+	c.destroyed = true
 }
 
 func (c *Credentials) matchesProfile(params Argon2idParams, saltPass, saltSecret []byte) bool {
+	if c == nil || c.destroyed {
+		return false
+	}
 	if c.kdfParams != params {
 		return false
 	}
@@ -235,6 +266,9 @@ var exportKDFParams = util.Argon2idParams{
 func ExportCredentials(creds *Credentials, passphrase string) ([]byte, error) {
 	if creds == nil {
 		return nil, fmt.Errorf("credentials must not be nil")
+	}
+	if creds.destroyed {
+		return nil, fmt.Errorf("credentials have been destroyed")
 	}
 	if passphrase == "" {
 		return nil, fmt.Errorf("passphrase must not be empty")

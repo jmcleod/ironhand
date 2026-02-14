@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -112,6 +114,35 @@ func TestCreateVault_MissingFields(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 		})
 	}
+}
+
+func TestCreateVault_DuplicateVaultID(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+
+	body := map[string]string{
+		"vault_id":          "duplicate-vault",
+		"passphrase":        "test-passphrase",
+		"export_passphrase": "export-pass",
+	}
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+
+	firstReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/vaults", bytes.NewReader(b))
+	require.NoError(t, err)
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstResp, err := http.DefaultClient.Do(firstReq)
+	require.NoError(t, err)
+	defer firstResp.Body.Close()
+	require.Equal(t, http.StatusCreated, firstResp.StatusCode)
+
+	secondReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/vaults", bytes.NewReader(b))
+	require.NoError(t, err)
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondResp, err := http.DefaultClient.Do(secondReq)
+	require.NoError(t, err)
+	defer secondResp.Body.Close()
+	assert.Equal(t, http.StatusConflict, secondResp.StatusCode)
 }
 
 func TestOpenVault(t *testing.T) {
@@ -336,6 +367,30 @@ func TestAddMember_MissingFields(t *testing.T) {
 	}
 }
 
+func TestAddMember_InvalidRole(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+
+	ownerCreds := createVault(t, srv, "invalid-role-vault")
+	newMemberCreds, err := vault.NewCredentials("member-pass")
+	require.NoError(t, err)
+	defer newMemberCreds.Destroy()
+
+	pubKey := newMemberCreds.PublicKey()
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pubKey[:])
+
+	addBody := map[string]string{
+		"member_id": newMemberCreds.MemberID(),
+		"pub_key":   pubKeyB64,
+		"role":      "admin",
+	}
+	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/invalid-role-vault/members", addBody, ownerCreds)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
 func TestPutItem_InvalidBase64(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()
@@ -343,6 +398,20 @@ func TestPutItem_InvalidBase64(t *testing.T) {
 	creds := createVault(t, srv, "b64-vault")
 	putBody := map[string]string{"data": "not-valid-base64!!!"}
 	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/b64-vault/items/item1", putBody, creds)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestPutItem_InvalidItemID(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+
+	creds := createVault(t, srv, "itemid-vault")
+	putBody := map[string]string{"data": base64.StdEncoding.EncodeToString([]byte("secret"))}
+	invalidItemID := strings.Repeat("a", 257)
+	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/itemid-vault/items/"+invalidItemID, putBody, creds)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -386,6 +455,12 @@ func TestOpenAPI(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "text/yaml", resp.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		spec := string(body)
+		assert.True(t, strings.Contains(spec, "enum: [owner, writer, reader]"))
+		assert.True(t, strings.Contains(spec, "'201':\n          description: Item stored successfully"))
 	})
 
 	t.Run("Swagger UI", func(t *testing.T) {

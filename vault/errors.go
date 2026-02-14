@@ -1,5 +1,7 @@
 package vault
 
+import "fmt"
+
 // UnauthorizedError indicates the caller is not permitted for the attempted operation.
 type UnauthorizedError struct {
 	Message string
@@ -33,6 +35,29 @@ func (e RollbackError) Error() string {
 	return "rollback detected"
 }
 
+// ValidationError indicates a caller-provided parameter is invalid.
+type ValidationError struct {
+	Message string
+}
+
+func (e ValidationError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return "validation failed"
+}
+
+// VaultExistsError indicates a vault with the same ID already exists.
+type VaultExistsError struct{}
+
+func (e VaultExistsError) Error() string {
+	return "vault already exists"
+}
+
+func validationErrorf(format string, args ...any) error {
+	return ValidationError{Message: fmt.Sprintf(format, args...)}
+}
+
 var (
 	// ErrUnauthorized is a sentinel for generic unauthorized errors.
 	ErrUnauthorized = UnauthorizedError{}
@@ -42,4 +67,8 @@ var (
 	ErrSessionClosed = SessionClosedError{}
 	// ErrRollbackDetected is a sentinel for rollback detected errors.
 	ErrRollbackDetected = RollbackError{}
+	// ErrValidationFailed is a sentinel for input validation errors.
+	ErrValidationFailed = ValidationError{}
+	// ErrVaultAlreadyExists is a sentinel for duplicate vault creation.
+	ErrVaultAlreadyExists = VaultExistsError{}
 )
