@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,8 @@ func TestBoltEpochCache(t *testing.T) {
 	// 4. Check rollback detection
 	err = cache2.SetMaxEpochSeen(vaultID1, 9)
 	require.Error(t, err)
-	require.Equal(t, ErrRollbackDetected, err)
+	_, ok := errors.AsType[RollbackError](err)
+	require.True(t, ok)
 
 	// Set a higher epoch
 	err = cache2.SetMaxEpochSeen(vaultID1, 11)
@@ -76,5 +78,6 @@ func TestMemoryEpochCache(t *testing.T) {
 	// Check rollback detection
 	err = cache.SetMaxEpochSeen(vaultID, 9)
 	require.Error(t, err)
-	require.Equal(t, ErrRollbackDetected, err)
+	_, ok2 := errors.AsType[RollbackError](err)
+	require.True(t, ok2)
 }

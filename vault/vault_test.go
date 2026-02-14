@@ -3,11 +3,13 @@ package vault
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/awnumar/memguard"
 	"github.com/jmcleod/ironhand/crypto"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
+	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +17,7 @@ import (
 
 func createTestVault(t *testing.T) (*Vault, *Session, *Credentials) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := memory.NewRepository()
 
 	creds, err := NewCredentials("test-passphrase")
@@ -30,7 +32,7 @@ func createTestVault(t *testing.T) (*Vault, *Session, *Credentials) {
 }
 
 func TestVault_CreateAndOpen(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := memory.NewRepository()
 
 	creds, err := NewCredentials("test-passphrase")
@@ -62,7 +64,7 @@ func TestVault_CreateAndOpen(t *testing.T) {
 }
 
 func TestVault_PutAndGet(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
 	secretData := []byte("This is a highly confidential message.")
@@ -75,7 +77,7 @@ func TestVault_PutAndGet(t *testing.T) {
 }
 
 func TestVault_PutDefaultContentType(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
 	err := session.Put(ctx, "item-1", []byte("data"))
@@ -87,7 +89,7 @@ func TestVault_PutDefaultContentType(t *testing.T) {
 }
 
 func TestVault_Update(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
 	// Put initial value
@@ -105,7 +107,7 @@ func TestVault_Update(t *testing.T) {
 }
 
 func TestVault_UpdateWithContentType(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, session, _ := createTestVault(t)
 
 	err := session.Put(ctx, "item-1", []byte("{}"), WithContentType("text/plain"))
@@ -117,6 +119,61 @@ func TestVault_UpdateWithContentType(t *testing.T) {
 	val, err := session.Get(ctx, "item-1")
 	require.NoError(t, err)
 	assert.Equal(t, []byte(`{"key":"val"}`), val)
+}
+
+func TestVault_ConcurrentUpdate(t *testing.T) {
+	ctx := t.Context()
+	_, session, _ := createTestVault(t)
+
+	err := session.Put(ctx, "item-1", []byte("initial"))
+	require.NoError(t, err)
+
+	const n = 10
+	var wg sync.WaitGroup
+	wg.Add(n)
+	errs := make(chan error, n)
+
+	for range n {
+		go func() {
+			defer wg.Done()
+			if err := session.Update(ctx, "item-1", []byte("updated")); err != nil {
+				errs <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if !errors.Is(err, storage.ErrCASFailed) {
+			require.NoError(t, err)
+		}
+	}
+}
+
+func TestVault_Session_List_Delete(t *testing.T) {
+	ctx := t.Context()
+	_, session, _ := createTestVault(t)
+
+	err := session.Put(ctx, "item-1", []byte("data1"))
+	require.NoError(t, err)
+	err = session.Put(ctx, "item-2", []byte("data2"))
+	require.NoError(t, err)
+
+	items, err := session.List(ctx)
+	require.NoError(t, err)
+	assert.Len(t, items, 2)
+	assert.Contains(t, items, "item-1")
+	assert.Contains(t, items, "item-2")
+
+	err = session.Delete(ctx, "item-1")
+	require.NoError(t, err)
+
+	items, err = session.List(ctx)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.NotContains(t, items, "item-1")
 }
 
 func TestVault_TamperProtection(t *testing.T) {
