@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,14 +16,17 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jmcleod/ironhand/api"
+	"github.com/jmcleod/ironhand/internal/util"
 	bboltstorage "github.com/jmcleod/ironhand/storage/bbolt"
 	"github.com/jmcleod/ironhand/vault"
 	"github.com/jmcleod/ironhand/web"
 )
 
 var (
-	port    = 8080
-	dataDir = "./data"
+	port    int
+	dataDir string
+	tlsCert string
+	tlsKey  string
 )
 
 var serverCmd = &cobra.Command{
@@ -62,9 +66,32 @@ var serverCmd = &cobra.Command{
 		}
 		r.Handle("/*", webHandler)
 
+		var tlsConfig *tls.Config
+		if tlsCert != "" && tlsKey != "" {
+			cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
+			if err != nil {
+				return fmt.Errorf("failed to load TLS key pair: %w", err)
+			}
+			tlsConfig = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			}
+		} else {
+			cert, err := util.GenerateSelfSignedCert()
+			if err != nil {
+				return fmt.Errorf("failed to generate self-signed certificate: %w", err)
+			}
+			tlsConfig = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			}
+			fmt.Println("Using self-signed runtime generated certificate for TLS")
+		}
+
 		server := &http.Server{
 			Addr:              fmt.Sprintf(":%d", port),
 			Handler:           r,
+			TLSConfig:         tlsConfig,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       15 * time.Second,
 			WriteTimeout:      30 * time.Second,
@@ -74,7 +101,7 @@ var serverCmd = &cobra.Command{
 		// Graceful shutdown on SIGINT/SIGTERM.
 		done := make(chan error, 1)
 		go func() {
-			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				done <- fmt.Errorf("server failed: %w", err)
 				return
 			}
@@ -104,6 +131,8 @@ var serverCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(serverCmd)
-	serverCmd.Flags().IntVarP(&port, "port", "p", 8080, "Port to listen on")
+	serverCmd.Flags().IntVarP(&port, "port", "p", 8443, "Port to listen on")
 	serverCmd.Flags().StringVar(&dataDir, "data-dir", "./data", "Directory for persistent data")
+	serverCmd.Flags().StringVar(&tlsCert, "tls-cert", "", "Path to TLS certificate file")
+	serverCmd.Flags().StringVar(&tlsKey, "tls-key", "", "Path to TLS key file")
 }
