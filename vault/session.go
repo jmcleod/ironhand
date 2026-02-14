@@ -358,6 +358,23 @@ func (s *Session) RevokeMember(ctx context.Context, memberID string) error {
 	return s.rotateEpoch(ctx, state, nil, &memberID, recBuf.Bytes())
 }
 
+// RequireAdmin verifies the session member currently has owner/admin access.
+func (s *Session) RequireAdmin(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	_, err = s.authorize(ctx, accessAdmin, recBuf.Bytes())
+	return err
+}
+
 func (s *Session) authorize(ctx context.Context, required requiredAccess, recordKey []byte) (*vaultState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

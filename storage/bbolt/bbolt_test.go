@@ -161,6 +161,38 @@ func TestBBoltStorage(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("ListVaults and DeleteVault", func(t *testing.T) {
+		err := s.Put("list-a", "ITEM", "a", env)
+		if err != nil {
+			t.Fatalf("Put list-a failed: %v", err)
+		}
+		err = s.Put("list-b", "ITEM", "b", env)
+		if err != nil {
+			t.Fatalf("Put list-b failed: %v", err)
+		}
+
+		vaults, err := s.ListVaults()
+		if err != nil {
+			t.Fatalf("ListVaults failed: %v", err)
+		}
+		if len(vaults) < 2 {
+			t.Fatalf("expected at least 2 vaults, got %d", len(vaults))
+		}
+
+		if err := s.DeleteVault("list-a"); err != nil {
+			t.Fatalf("DeleteVault failed: %v", err)
+		}
+		_, err = s.Get("list-a", "ITEM", "a")
+		if err == nil {
+			t.Fatal("expected deleted vault data to be inaccessible")
+		}
+
+		err = s.DeleteVault("missing-vault")
+		if err == nil {
+			t.Fatal("expected missing vault delete to fail")
+		}
+	})
 }
 
 func TestNewRepositoryFromFile(t *testing.T) {

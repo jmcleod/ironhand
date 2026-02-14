@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path"
+	"strings"
 )
 
 //go:embed dist/*
@@ -15,5 +17,25 @@ func Handler() (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading embedded web assets: %w", err)
 	}
-	return http.FileServer(http.FS(fsys)), nil
+	static := http.FileServer(http.FS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.ServeFileFS(w, r, fsys, "index.html")
+			return
+		}
+
+		cleanPath := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if cleanPath == "." {
+			http.ServeFileFS(w, r, fsys, "index.html")
+			return
+		}
+
+		if _, err := fs.Stat(fsys, cleanPath); err == nil {
+			static.ServeHTTP(w, r)
+			return
+		}
+
+		// BrowserRouter deep-link fallback.
+		http.ServeFileFS(w, r, fsys, "index.html")
+	}), nil
 }

@@ -90,10 +90,34 @@ func (r *Repository) List(vaultID, recordType string) ([]string, error) {
 	return ids, nil
 }
 
+func (r *Repository) ListVaults() ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	vaults := slices.Collect(func(yield func(string) bool) {
+		for vaultID := range r.data {
+			if !yield(vaultID) {
+				return
+			}
+		}
+	})
+	slices.Sort(vaults)
+	return vaults, nil
+}
+
 func (r *Repository) Delete(vaultID, recordType, recordID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.deleteLocked(vaultID, recordType, recordID)
+}
+
+func (r *Repository) DeleteVault(vaultID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.data[vaultID]; !ok {
+		return storage.ErrVaultNotFound
+	}
+	delete(r.data, vaultID)
+	return nil
 }
 
 func (r *Repository) deleteLocked(vaultID, recordType, recordID string) error {

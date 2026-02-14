@@ -1,0 +1,153 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Dark mode (default) - Navy & Steel aesthetic */
+    --background: 217 24% 9%;
+    --foreground: 210 14% 88%;
+
+    --card: 217 22% 13%;
+    --card-foreground: 210 14% 88%;
+
+    --popover: 217 22% 15%;
+    --popover-foreground: 210 14% 88%;
+
+    --primary: 211 42% 54%;
+    --primary-foreground: 217 24% 9%;
+
+    --secondary: 217 16% 20%;
+    --secondary-foreground: 210 14% 78%;
+
+    --muted: 217 14% 18%;
+    --muted-foreground: 210 10% 48%;
+
+    --accent: 211 55% 35%;
+    --accent-foreground: 211 42% 75%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 16% 22%;
+    --input: 217 16% 22%;
+    --ring: 211 42% 54%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 217 22% 11%;
+    --sidebar-foreground: 210 14% 78%;
+    --sidebar-primary: 211 42% 54%;
+    --sidebar-primary-foreground: 217 24% 9%;
+    --sidebar-accent: 217 14% 18%;
+    --sidebar-accent-foreground: 210 14% 78%;
+    --sidebar-border: 217 16% 22%;
+    --sidebar-ring: 211 42% 54%;
+
+    /* Custom tokens */
+    --glow-primary: 211 42% 54%;
+    --surface-elevated: 217 20% 16%;
+    --surface-overlay: 217 22% 18%;
+    --success: 152 60% 45%;
+    --success-foreground: 152 60% 90%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 38 92% 90%;
+  }
+
+  .light {
+    --background: 210 40% 97%;
+    --foreground: 217 24% 12%;
+
+    --card: 210 40% 94%;
+    --card-foreground: 217 24% 12%;
+
+    --popover: 210 40% 92%;
+    --popover-foreground: 217 24% 12%;
+
+    --primary: 211 42% 48%;
+    --primary-foreground: 210 40% 97%;
+
+    --secondary: 217 16% 88%;
+    --secondary-foreground: 217 24% 12%;
+
+    --muted: 217 14% 82%;
+    --muted-foreground: 210 10% 42%;
+
+    --accent: 211 55% 42%;
+    --accent-foreground: 211 42% 18%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 14% 80%;
+    --input: 210 40% 94%;
+    --ring: 211 42% 48%;
+
+    --sidebar-background: 210 40% 95%;
+    --sidebar-foreground: 217 24% 12%;
+    --sidebar-primary: 211 42% 48%;
+    --sidebar-primary-foreground: 210 40% 97%;
+    --sidebar-accent: 217 14% 82%;
+    --sidebar-accent-foreground: 217 24% 12%;
+    --sidebar-border: 217 14% 80%;
+    --sidebar-ring: 211 42% 48%;
+
+    --glow-primary: 211 42% 48%;
+    --surface-elevated: 210 40% 91%;
+    --surface-overlay: 210 40% 89%;
+    --success: 152 60% 45%;
+    --success-foreground: 152 60% 20%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 38 92% 20%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer utilities {
+  .glow-primary {
+    box-shadow: 0 0 20px -5px hsl(var(--glow-primary) / 0.3),
+                0 0 40px -10px hsl(var(--glow-primary) / 0.15);
+  }
+
+  .glow-primary-sm {
+    box-shadow: 0 0 10px -3px hsl(var(--glow-primary) / 0.25);
+  }
+
+  .text-gradient-primary {
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(172 80% 65%));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .bg-grid-pattern {
+    background-image: 
+      linear-gradient(hsl(var(--border) / 0.3) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.3) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  .vault-card-hover {
+    @apply transition-all duration-300;
+  }
+  .vault-card-hover:hover {
+    box-shadow: 0 0 30px -8px hsl(var(--glow-primary) / 0.2);
+    border-color: hsl(var(--primary) / 0.3);
+  }
+}

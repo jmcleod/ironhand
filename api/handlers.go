@@ -4,42 +4,31 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/jmcleod/ironhand/internal/uuid"
 	"github.com/jmcleod/ironhand/vault"
 )
 
 // CreateVault handles POST /vaults.
-// Generates new credentials, creates the vault, and returns the export blob.
+// Creates a new vault for the authenticated account and returns the generated vault ID.
 func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	var req CreateVaultRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
-	if req.VaultID == "" {
-		writeError(w, http.StatusBadRequest, "vault_id is required")
-		return
-	}
-	if req.Passphrase == "" {
-		writeError(w, http.StatusBadRequest, "passphrase is required")
-		return
-	}
-	if req.ExportPassphrase == "" {
-		writeError(w, http.StatusBadRequest, "export_passphrase is required")
-		return
-	}
-
-	creds, err := vault.NewCredentials(req.Passphrase)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create credentials: "+err.Error())
-		return
-	}
-	defer creds.Destroy()
-
-	v := vault.New(req.VaultID, a.repo, vault.WithEpochCache(a.epochCache))
+	vaultID := uuid.New()
+	v := vault.New(vaultID, a.repo, vault.WithEpochCache(a.epochCache))
 	session, err := v.Create(r.Context(), creds)
 	if err != nil {
 		mapError(w, err)
@@ -47,18 +36,22 @@ func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	exported, err := vault.ExportCredentials(creds, req.ExportPassphrase)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to export credentials: "+err.Error())
-		return
+	if req.Name != "" || req.Description != "" {
+		metaPayload, err := encodeVaultMetadata(strings.TrimSpace(req.Name), strings.TrimSpace(req.Description))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to encode vault metadata: "+err.Error())
+			return
+		}
+		if err := session.Put(r.Context(), vaultMetadataItemID, metaPayload, vault.WithContentType(vaultMetadataContentType)); err != nil {
+			mapError(w, err)
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, CreateVaultResponse{
-		VaultID:     req.VaultID,
-		MemberID:    creds.MemberID(),
-		SecretKey:   creds.SecretKey().String(),
-		Credentials: base64.StdEncoding.EncodeToString(exported),
-		Epoch:       session.Epoch(),
+		VaultID:  vaultID,
+		MemberID: creds.MemberID(),
+		Epoch:    session.Epoch(),
 	})
 }
 
@@ -99,6 +92,14 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	filtered := items[:0]
+	for _, itemID := range items {
+		if itemID == vaultMetadataItemID {
+			continue
+		}
+		filtered = append(filtered, itemID)
+	}
+	items = filtered
 
 	if items == nil {
 		items = []string{}
@@ -111,6 +112,10 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
+	if itemID == vaultMetadataItemID {
+		writeError(w, http.StatusBadRequest, "item_id is reserved")
+		return
+	}
 	creds := credentialsFromContext(r.Context())
 
 	var req PutItemRequest
@@ -149,6 +154,10 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
+	if itemID == vaultMetadataItemID {
+		writeError(w, http.StatusBadRequest, "item_id is reserved")
+		return
+	}
 	creds := credentialsFromContext(r.Context())
 
 	session, err := a.openSession(r.Context(), vaultID, creds)
@@ -174,6 +183,10 @@ func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
+	if itemID == vaultMetadataItemID {
+		writeError(w, http.StatusBadRequest, "item_id is reserved")
+		return
+	}
 	creds := credentialsFromContext(r.Context())
 
 	var req UpdateItemRequest
@@ -212,6 +225,10 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 func (a *API) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
+	if itemID == vaultMetadataItemID {
+		writeError(w, http.StatusBadRequest, "item_id is reserved")
+		return
+	}
 	creds := credentialsFromContext(r.Context())
 
 	session, err := a.openSession(r.Context(), vaultID, creds)
@@ -226,6 +243,84 @@ func (a *API) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// ListVaults handles GET /vaults.
+func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	vaultIDs, err := a.repo.ListVaults()
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	result := make([]VaultSummary, 0, len(vaultIDs))
+	for _, vaultID := range vaultIDs {
+		if strings.HasPrefix(vaultID, "__") {
+			continue
+		}
+		session, err := a.openSession(r.Context(), vaultID, creds)
+		if err != nil {
+			// For list operations, skip vaults that cannot be opened with the
+			// current credentials/profile and continue with others.
+			continue
+		}
+
+		meta := vaultMetadata{}
+		metaBytes, err := session.Get(r.Context(), vaultMetadataItemID)
+		if err == nil {
+			if decoded, decodeErr := decodeVaultMetadata(metaBytes); decodeErr == nil {
+				meta = decoded
+			}
+		}
+		itemIDs, err := session.List(r.Context())
+		if err != nil {
+			session.Close()
+			continue
+		}
+		session.Close()
+
+		count := 0
+		for _, itemID := range itemIDs {
+			if itemID != vaultMetadataItemID {
+				count++
+			}
+		}
+		result = append(result, VaultSummary{
+			VaultID:     vaultID,
+			Name:        meta.Name,
+			Description: meta.Description,
+			Epoch:       session.Epoch(),
+			ItemCount:   count,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ListVaultsResponse{Vaults: result})
+}
+
+// DeleteVault handles DELETE /vaults/{vaultID}.
+func (a *API) DeleteVault(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	// Owner-only operation enforced by admin authorization.
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		session.Close()
+		mapError(w, err)
+		return
+	}
+	session.Close()
+
+	if err := a.repo.DeleteVault(vaultID); err != nil {
+		mapError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 

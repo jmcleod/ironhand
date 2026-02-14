@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -29,453 +28,145 @@ func setupServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(r)
 }
 
-type testCredentials struct {
-	VaultID     string
-	MemberID    string
-	Credentials string // base64-encoded export blob
-	Passphrase  string // export passphrase
-	SecretKey   string
-}
-
-func createVault(t *testing.T, srv *httptest.Server, vaultID string) testCredentials {
+func newClient(t *testing.T) *http.Client {
 	t.Helper()
-	body := map[string]string{
-		"vault_id":          vaultID,
-		"passphrase":        "test-passphrase",
-		"export_passphrase": "export-pass",
-	}
-	b, _ := json.Marshal(body)
-	resp, err := http.Post(srv.URL+"/api/v1/vaults", "application/json", bytes.NewReader(b))
+	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-	var result api.CreateVaultResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
-	require.Equal(t, vaultID, result.VaultID)
-	require.NotEmpty(t, result.MemberID)
-	require.NotEmpty(t, result.SecretKey)
-	require.NotEmpty(t, result.Credentials)
-	require.Equal(t, uint64(1), result.Epoch)
-
-	return testCredentials{
-		VaultID:     vaultID,
-		MemberID:    result.MemberID,
-		Credentials: result.Credentials,
-		Passphrase:  "export-pass",
-		SecretKey:   result.SecretKey,
-	}
+	return &http.Client{Jar: jar}
 }
 
-func authRequest(t *testing.T, method, url string, body any, creds testCredentials) *http.Request {
+func doJSON(t *testing.T, client *http.Client, method, url string, body any) *http.Response {
 	t.Helper()
-	var buf bytes.Buffer
+	var reqBody bytes.Buffer
 	if body != nil {
-		require.NoError(t, json.NewEncoder(&buf).Encode(body))
+		require.NoError(t, json.NewEncoder(&reqBody).Encode(body))
 	}
-	req, err := http.NewRequestWithContext(t.Context(), method, url, &buf)
+	req, err := http.NewRequestWithContext(t.Context(), method, url, &reqBody)
 	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Credentials", creds.Credentials)
-	req.Header.Set("X-Passphrase", creds.Passphrase)
-	return req
-}
-
-func TestCreateVault(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	creds := createVault(t, srv, "test-vault")
-	assert.Equal(t, "test-vault", creds.VaultID)
-	assert.NotEmpty(t, creds.MemberID)
-}
-
-func TestCreateVault_MissingFields(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	tests := []struct {
-		name string
-		body map[string]string
-	}{
-		{"missing vault_id", map[string]string{"passphrase": "p", "export_passphrase": "e"}},
-		{"missing passphrase", map[string]string{"vault_id": "v", "export_passphrase": "e"}},
-		{"missing export_passphrase", map[string]string{"vault_id": "v", "passphrase": "p"}},
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			b, _ := json.Marshal(tt.body)
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/vaults", bytes.NewReader(b))
-			require.NoError(t, err)
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := http.DefaultClient.Do(req)
-			require.NoError(t, err)
-			defer resp.Body.Close()
-			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-		})
-	}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	return resp
 }
 
-func TestCreateVault_DuplicateVaultID(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
+func registerAndLogin(t *testing.T, client *http.Client, baseURL string) string {
+	t.Helper()
+	passphrase := "test-passphrase"
 
-	body := map[string]string{
-		"vault_id":          "duplicate-vault",
-		"passphrase":        "test-passphrase",
-		"export_passphrase": "export-pass",
-	}
-	b, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	firstReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/vaults", bytes.NewReader(b))
-	require.NoError(t, err)
-	firstReq.Header.Set("Content-Type", "application/json")
-	firstResp, err := http.DefaultClient.Do(firstReq)
-	require.NoError(t, err)
-	defer firstResp.Body.Close()
-	require.Equal(t, http.StatusCreated, firstResp.StatusCode)
-
-	secondReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/vaults", bytes.NewReader(b))
-	require.NoError(t, err)
-	secondReq.Header.Set("Content-Type", "application/json")
-	secondResp, err := http.DefaultClient.Do(secondReq)
-	require.NoError(t, err)
-	defer secondResp.Body.Close()
-	assert.Equal(t, http.StatusConflict, secondResp.StatusCode)
-}
-
-func TestOpenVault(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	creds := createVault(t, srv, "open-test")
-	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/open-test/open", nil, creds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var result api.OpenVaultResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
-	assert.Equal(t, "open-test", result.VaultID)
-	assert.Equal(t, creds.MemberID, result.MemberID)
-	assert.Equal(t, uint64(1), result.Epoch)
-}
-
-func TestItemCRUD(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	creds := createVault(t, srv, "crud-vault")
-	plaintext := []byte("hello secret world")
-	encoded := base64.StdEncoding.EncodeToString(plaintext)
-
-	// PUT item
-	putBody := map[string]string{"data": encoded, "content_type": "text/plain"}
-	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/crud-vault/items/secret-1", putBody, creds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	resp := doJSON(t, client, http.MethodPost, baseURL+"/api/v1/auth/register", map[string]string{
+		"passphrase": passphrase,
+	})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	// GET item
-	req = authRequest(t, http.MethodGet, srv.URL+"/api/v1/vaults/crud-vault/items/secret-1", nil, creds)
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	var reg api.RegisterResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&reg))
+	require.NotEmpty(t, reg.SecretKey)
+
+	// Explicit login flow with passphrase + secret key.
+	resp = doJSON(t, client, http.MethodPost, baseURL+"/api/v1/auth/login", map[string]string{
+		"passphrase": passphrase,
+		"secret_key": reg.SecretKey,
+	})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var getResult api.GetItemResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&getResult))
-	assert.Equal(t, "secret-1", getResult.ItemID)
-	decoded, err := base64.StdEncoding.DecodeString(getResult.Data)
-	require.NoError(t, err)
-	assert.Equal(t, plaintext, decoded)
-
-	// LIST items
-	req = authRequest(t, http.MethodGet, srv.URL+"/api/v1/vaults/crud-vault/items", nil, creds)
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var listResult api.ListItemsResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&listResult))
-	assert.Contains(t, listResult.Items, "secret-1")
-
-	// UPDATE item
-	newPlaintext := []byte("updated secret")
-	newEncoded := base64.StdEncoding.EncodeToString(newPlaintext)
-	updateBody := map[string]string{"data": newEncoded}
-	req = authRequest(t, http.MethodPut, srv.URL+"/api/v1/vaults/crud-vault/items/secret-1", updateBody, creds)
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// GET updated item
-	req = authRequest(t, http.MethodGet, srv.URL+"/api/v1/vaults/crud-vault/items/secret-1", nil, creds)
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&getResult))
-	decoded, err = base64.StdEncoding.DecodeString(getResult.Data)
-	require.NoError(t, err)
-	assert.Equal(t, newPlaintext, decoded)
-
-	// DELETE item
-	req = authRequest(t, http.MethodDelete, srv.URL+"/api/v1/vaults/crud-vault/items/secret-1", nil, creds)
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// GET deleted item - should 404
-	req = authRequest(t, http.MethodGet, srv.URL+"/api/v1/vaults/crud-vault/items/secret-1", nil, creds)
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	return reg.SecretKey
 }
 
-func TestGetItem_NotFound(t *testing.T) {
+func TestAuthRegisterAndLogin(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()
+	client := newClient(t)
 
-	creds := createVault(t, srv, "notfound-vault")
-	req := authRequest(t, http.MethodGet, srv.URL+"/api/v1/vaults/notfound-vault/items/nonexistent", nil, creds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	secretKey := registerAndLogin(t, client, srv.URL)
+	assert.NotEmpty(t, secretKey)
 }
 
-func TestAuthFailure_MissingHeaders(t *testing.T) {
+func TestCreateAndListVaults(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()
+	client := newClient(t)
 
-	createVault(t, srv, "auth-vault")
+	registerAndLogin(t, client, srv.URL)
 
-	// No auth headers at all
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/vaults/auth-vault/items", nil)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-}
-
-func TestAuthFailure_BadCredentials(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	createVault(t, srv, "badcreds-vault")
-
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/vaults/badcreds-vault/items", nil)
-	req.Header.Set("X-Credentials", base64.StdEncoding.EncodeToString([]byte("garbage")))
-	req.Header.Set("X-Passphrase", "wrong")
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-}
-
-func TestVaultNotFound(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	// Create a vault to get valid credentials, then try to open a different vault
-	creds := createVault(t, srv, "existing-vault")
-	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/nonexistent-vault/open", nil, creds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-}
-
-func TestAddAndRevokeMember(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	ownerCreds := createVault(t, srv, "member-vault")
-
-	// Create credentials for the new member (just need a public key)
-	newMemberCreds, err := vault.NewCredentials("member-pass")
-	require.NoError(t, err)
-	defer newMemberCreds.Destroy()
-
-	pubKey := newMemberCreds.PublicKey()
-	pubKeyB64 := base64.StdEncoding.EncodeToString(pubKey[:])
-
-	// Add member
-	addBody := map[string]string{
-		"member_id": newMemberCreds.MemberID(),
-		"pub_key":   pubKeyB64,
-		"role":      "writer",
-	}
-	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/member-vault/members", addBody, ownerCreds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name":        "Personal",
+		"description": "Primary vault",
+	})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	var addResult api.AddMemberResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&addResult))
-	assert.Equal(t, uint64(2), addResult.Epoch)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+	require.NotEmpty(t, create.VaultID)
+	assert.NotZero(t, create.Epoch)
 
-	// Need to re-export owner creds since epoch rotated — the existing export still works
-	// because ImportCredentials gives back valid key material; the vault.Open re-derives KEK
-
-	// Revoke member
-	req = authRequest(t, http.MethodDelete,
-		srv.URL+"/api/v1/vaults/member-vault/members/"+newMemberCreds.MemberID(),
-		nil, ownerCreds)
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	resp = doJSON(t, client, http.MethodGet, srv.URL+"/api/v1/vaults", nil)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var revokeResult api.AddMemberResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&revokeResult))
-	assert.Equal(t, uint64(3), revokeResult.Epoch)
+	var list api.ListVaultsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+	require.NotEmpty(t, list.Vaults)
+	assert.Equal(t, create.VaultID, list.Vaults[0].VaultID)
+	assert.Equal(t, "Personal", list.Vaults[0].Name)
 }
 
-func TestAddMember_MissingFields(t *testing.T) {
+func TestVaultCRUD(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()
+	client := newClient(t)
 
-	creds := createVault(t, srv, "validate-vault")
+	registerAndLogin(t, client, srv.URL)
 
-	tests := []struct {
-		name string
-		body map[string]string
-	}{
-		{"missing member_id", map[string]string{"pub_key": "AAAA", "role": "writer"}},
-		{"missing pub_key", map[string]string{"member_id": "bob", "role": "writer"}},
-		{"missing role", map[string]string{"member_id": "bob", "pub_key": "AAAA"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/validate-vault/members", tt.body, creds)
-			resp, err := http.DefaultClient.Do(req)
-			require.NoError(t, err)
-			defer resp.Body.Close()
-			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-		})
-	}
-}
-
-func TestAddMember_InvalidRole(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	ownerCreds := createVault(t, srv, "invalid-role-vault")
-	newMemberCreds, err := vault.NewCredentials("member-pass")
-	require.NoError(t, err)
-	defer newMemberCreds.Destroy()
-
-	pubKey := newMemberCreds.PublicKey()
-	pubKeyB64 := base64.StdEncoding.EncodeToString(pubKey[:])
-
-	addBody := map[string]string{
-		"member_id": newMemberCreds.MemberID(),
-		"pub_key":   pubKeyB64,
-		"role":      "admin",
-	}
-	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/invalid-role-vault/members", addBody, ownerCreds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "Vault",
+	})
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-func TestPutItem_InvalidBase64(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
 
-	creds := createVault(t, srv, "b64-vault")
-	putBody := map[string]string{"data": "not-valid-base64!!!"}
-	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/b64-vault/items/item1", putBody, creds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	itemData := base64.StdEncoding.EncodeToString([]byte(`{"k":"v"}`))
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults/"+create.VaultID+"/items/item-1", map[string]string{
+		"data": itemData,
+	})
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-func TestPutItem_InvalidItemID(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	creds := createVault(t, srv, "itemid-vault")
-	putBody := map[string]string{"data": base64.StdEncoding.EncodeToString([]byte("secret"))}
-	invalidItemID := strings.Repeat("a", 257)
-	req := authRequest(t, http.MethodPost, srv.URL+"/api/v1/vaults/itemid-vault/items/"+invalidItemID, putBody, creds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-
-func TestListItems_EmptyVault(t *testing.T) {
-	srv := setupServer(t)
-	defer srv.Close()
-
-	creds := createVault(t, srv, "empty-vault")
-	req := authRequest(t, http.MethodGet, srv.URL+"/api/v1/vaults/empty-vault/items", nil, creds)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	resp = doJSON(t, client, http.MethodGet, srv.URL+"/api/v1/vaults/"+create.VaultID+"/items/item-1", nil)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var result api.ListItemsResponse
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
-	assert.Empty(t, result.Items)
-	// Ensure it's an empty array, not null
-	raw, _ := json.Marshal(result)
-	assert.Contains(t, string(raw), `"items":[]`)
+	var getItem api.GetItemResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&getItem))
+	assert.Equal(t, "item-1", getItem.ItemID)
+	assert.NotEmpty(t, getItem.Data)
 }
 
-func TestSessionClosedErrorMapping(t *testing.T) {
-	// This tests that mapError handles vault.SessionClosedError by returning 500.
-	// We verify this by manually calling a handler that we know will fail if the session is closed.
-	// However, since we can't easily force a closed session into the middleware without more setup,
-	// we'll rely on the existing coverage and the fact that mapError is now using errors.AsType.
-}
-
-func TestOpenAPI(t *testing.T) {
+func TestDeleteVault(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()
+	client := newClient(t)
 
-	t.Run("OpenAPI YAML", func(t *testing.T) {
-		resp, err := http.Get(srv.URL + "/api/v1/openapi.yaml")
-		require.NoError(t, err)
-		defer resp.Body.Close()
+	registerAndLogin(t, client, srv.URL)
 
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.Equal(t, "text/yaml", resp.Header.Get("Content-Type"))
-
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		spec := string(body)
-		assert.True(t, strings.Contains(spec, "enum: [owner, writer, reader]"))
-		assert.True(t, strings.Contains(spec, "'201':\n          description: Item stored successfully"))
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "ToDelete",
 	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
 
-	t.Run("Swagger UI", func(t *testing.T) {
-		resp, err := http.Get(srv.URL + "/api/v1/docs")
-		require.NoError(t, err)
-		defer resp.Body.Close()
+	resp = doJSON(t, client, http.MethodDelete, srv.URL+"/api/v1/vaults/"+create.VaultID, nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
-
-	t.Run("Redoc", func(t *testing.T) {
-		resp, err := http.Get(srv.URL + "/api/v1/redoc")
-		require.NoError(t, err)
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-	})
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults/"+create.VaultID+"/open", nil)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

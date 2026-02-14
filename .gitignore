@@ -26,6 +26,7 @@ build/
 
 # Web artifacts
 web/dist/
+web/node_modules/
 
 # Data
 data/

@@ -93,6 +93,16 @@ func (s *Store) Delete(vaultID, recordType, recordID string) error {
 	})
 }
 
+func (s *Store) DeleteVault(vaultID string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(vaultID))
+		if b == nil {
+			return fmt.Errorf("%s: %w", vaultID, storage.ErrVaultNotFound)
+		}
+		return tx.DeleteBucket([]byte(vaultID))
+	})
+}
+
 func (s *Store) List(vaultID, recordType string) ([]string, error) {
 	var ids []string
 	prefix := []byte(recordType + ":")
@@ -106,6 +116,17 @@ func (s *Store) List(vaultID, recordType string) ([]string, error) {
 			ids = append(ids, string(k[len(prefix):]))
 		}
 		return nil
+	})
+	return ids, err
+}
+
+func (s *Store) ListVaults() ([]string, error) {
+	var ids []string
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.ForEach(func(name []byte, _ *bbolt.Bucket) error {
+			ids = append(ids, string(name))
+			return nil
+		})
 	})
 	return ids, err
 }

@@ -25,7 +25,9 @@ type Repository interface {
 	Put(vaultID string, recordType string, recordID string, envelope *Envelope) error
 	Get(vaultID string, recordType string, recordID string) (*Envelope, error)
 	List(vaultID string, recordType string) ([]string, error)
+	ListVaults() ([]string, error)
 	Delete(vaultID string, recordType string, recordID string) error
+	DeleteVault(vaultID string) error
 	PutCAS(vaultID string, recordType string, recordID string, expectedVersion uint64, envelope *Envelope) error
 	Batch(vaultID string, fn func(tx BatchTx) error) error
 }

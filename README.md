@@ -128,11 +128,37 @@ IronHand does **not** protect against:
 
 ### REST API
 
-The service provides a REST API exposed by default on port `8080`.
+The service provides a REST API exposed by default on port `8443`.
 
+- **Auth**:
+  - `POST /api/v1/auth/register` (passphrase -> returns secret key + sets session cookie)
+  - `POST /api/v1/auth/login` (passphrase + secret key -> sets session cookie)
+  - `POST /api/v1/auth/logout`
+- **Vaults**:
+  - `POST /api/v1/vaults` (authenticated, server-generated vault ID)
+  - `GET /api/v1/vaults`
+  - `DELETE /api/v1/vaults/{vaultID}`
 - **OpenAPI Spec**: `/api/v1/openapi.yaml`
 - **Swagger UI**: `/api/v1/docs`
 - **Redoc**: `/api/v1/redoc`
+
+### Web UI
+
+IronHand includes a browser-based Web UI in `/web` that uses the REST API.
+
+- **Served by the Go server** at `/` (same host/port as the API)
+- **Development docs**: `web/README.md`
+
+To run the backend server:
+
+```sh
+go run ./cmd/ironhand server
+```
+
+Then open:
+
+- `https://localhost:8443/` for the Web UI
+- `https://localhost:8443/api/v1/openapi.yaml` for the OpenAPI spec
 
 ### Library Credentials
 

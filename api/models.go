@@ -2,18 +2,31 @@ package api
 
 // CreateVaultRequest is the JSON body for POST /vaults.
 type CreateVaultRequest struct {
-	VaultID          string `json:"vault_id"`
-	Passphrase       string `json:"passphrase"`
-	ExportPassphrase string `json:"export_passphrase"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // CreateVaultResponse is returned from POST /vaults.
 type CreateVaultResponse struct {
-	VaultID     string `json:"vault_id"`
-	MemberID    string `json:"member_id"`
-	SecretKey   string `json:"secret_key"`
-	Credentials string `json:"credentials"`
-	Epoch       uint64 `json:"epoch"`
+	VaultID  string `json:"vault_id"`
+	MemberID string `json:"member_id"`
+	Epoch    uint64 `json:"epoch"`
+}
+
+// RegisterRequest is the JSON body for POST /auth/register.
+type RegisterRequest struct {
+	Passphrase string `json:"passphrase"`
+}
+
+// RegisterResponse is returned from POST /auth/register.
+type RegisterResponse struct {
+	SecretKey string `json:"secret_key"`
+}
+
+// LoginRequest is the JSON body for POST /auth/login.
+type LoginRequest struct {
+	Passphrase string `json:"passphrase"`
+	SecretKey  string `json:"secret_key"`
 }
 
 // OpenVaultResponse is returned from POST /vaults/{vaultID}/open.
@@ -21,6 +34,20 @@ type OpenVaultResponse struct {
 	VaultID  string `json:"vault_id"`
 	MemberID string `json:"member_id"`
 	Epoch    uint64 `json:"epoch"`
+}
+
+// VaultSummary describes a vault visible to the current authenticated member.
+type VaultSummary struct {
+	VaultID     string `json:"vault_id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Epoch       uint64 `json:"epoch"`
+	ItemCount   int    `json:"item_count"`
+}
+
+// ListVaultsResponse is returned from GET /vaults.
+type ListVaultsResponse struct {
+	Vaults []VaultSummary `json:"vaults"`
 }
 
 // ListItemsResponse is returned from GET /vaults/{vaultID}/items.

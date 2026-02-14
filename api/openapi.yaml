@@ -9,30 +9,19 @@ servers:
 
 components:
   securitySchemes:
-    VaultAuth:
+    SessionAuth:
       type: apiKey
-      in: header
-      name: X-Credentials
-      description: Base64 encoded exported credentials blob.
-    PassphraseAuth:
-      type: apiKey
-      in: header
-      name: X-Passphrase
-      description: Passphrase used to decrypt the credentials blob.
+      in: cookie
+      name: ironhand_session
+      description: HTTP-only session cookie returned by /auth/register or /auth/login.
 
   schemas:
     CreateVaultRequest:
       type: object
-      required:
-        - vault_id
-        - passphrase
-        - export_passphrase
       properties:
-        vault_id:
+        name:
           type: string
-        passphrase:
-          type: string
-        export_passphrase:
+        description:
           type: string
 
     CreateVaultResponse:
@@ -42,14 +31,34 @@ components:
           type: string
         member_id:
           type: string
-        secret_key:
-          type: string
-        credentials:
-          type: string
-          description: Base64 encoded exported credentials.
         epoch:
           type: integer
           format: int64
+
+    RegisterRequest:
+      type: object
+      required:
+        - passphrase
+      properties:
+        passphrase:
+          type: string
+
+    RegisterResponse:
+      type: object
+      properties:
+        secret_key:
+          type: string
+
+    LoginRequest:
+      type: object
+      required:
+        - passphrase
+        - secret_key
+      properties:
+        passphrase:
+          type: string
+        secret_key:
+          type: string
 
     OpenVaultResponse:
       type: object
@@ -61,6 +70,29 @@ components:
         epoch:
           type: integer
           format: int64
+
+    VaultSummary:
+      type: object
+      properties:
+        vault_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        epoch:
+          type: integer
+          format: int64
+        item_count:
+          type: integer
+
+    ListVaultsResponse:
+      type: object
+      properties:
+        vaults:
+          type: array
+          items:
+            $ref: '#/components/schemas/VaultSummary'
 
     ListItemsResponse:
       type: object
@@ -131,10 +163,68 @@ components:
           type: string
 
 paths:
+  /auth/register:
+    post:
+      summary: Register a new account
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+
+  /auth/login:
+    post:
+      summary: Login with passphrase and secret key
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Logged in
+        '401':
+          description: Invalid credentials
+
+  /auth/logout:
+    post:
+      summary: Logout current session
+      operationId: logout
+      responses:
+        '200':
+          description: Logged out
+
   /vaults:
+    get:
+      summary: List vaults visible to authenticated member
+      operationId: listVaults
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: Vault list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListVaultsResponse'
+        '401':
+          description: Unauthorized
     post:
       summary: Create a new vault
       operationId: createVault
+      security:
+        - SessionAuth: []
       requestBody:
         required: true
         content:
@@ -160,8 +250,7 @@ paths:
       summary: Open a vault
       operationId: openVault
       security:
-        - VaultAuth: []
-          PassphraseAuth: []
+        - SessionAuth: []
       parameters:
         - name: vaultID
           in: path
@@ -185,8 +274,7 @@ paths:
       summary: List items in a vault
       operationId: listItems
       security:
-        - VaultAuth: []
-          PassphraseAuth: []
+        - SessionAuth: []
       parameters:
         - name: vaultID
           in: path
@@ -208,8 +296,7 @@ paths:
       summary: Get an item from a vault
       operationId: getItem
       security:
-        - VaultAuth: []
-          PassphraseAuth: []
+        - SessionAuth: []
       parameters:
         - name: vaultID
           in: path
@@ -236,8 +323,7 @@ paths:
       summary: Put an item into a vault
       operationId: putItem
       security:
-        - VaultAuth: []
-          PassphraseAuth: []
+        - SessionAuth: []
       parameters:
         - name: vaultID
           in: path
@@ -264,8 +350,7 @@ paths:
       summary: Update an item in a vault
       operationId: updateItem
       security:
-        - VaultAuth: []
-          PassphraseAuth: []
+        - SessionAuth: []
       parameters:
         - name: vaultID
           in: path
@@ -294,8 +379,7 @@ paths:
       summary: Delete an item from a vault
       operationId: deleteItem
       security:
-        - VaultAuth: []
-          PassphraseAuth: []
+        - SessionAuth: []
       parameters:
         - name: vaultID
           in: path
@@ -318,8 +402,7 @@ paths:
       summary: Add a member to a vault
       operationId: addMember
       security:
-        - VaultAuth: []
-          PassphraseAuth: []
+        - SessionAuth: []
       parameters:
         - name: vaultID
           in: path
@@ -347,8 +430,7 @@ paths:
       summary: Revoke a member from a vault
       operationId: revokeMember
       security:
-        - VaultAuth: []
-          PassphraseAuth: []
+        - SessionAuth: []
       parameters:
         - name: vaultID
           in: path
@@ -369,3 +451,23 @@ paths:
                 $ref: '#/components/schemas/AddMemberResponse'
         '401':
           description: Unauthorized
+
+  /vaults/{vaultID}:
+    delete:
+      summary: Delete a vault
+      operationId: deleteVault
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Vault deleted
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden

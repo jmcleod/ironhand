@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"net/http"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-openapi/runtime/middleware"
@@ -16,6 +17,12 @@ import (
 type API struct {
 	repo       storage.Repository
 	epochCache vault.EpochCache
+	sessions   *sessionStore
+}
+
+type sessionStore struct {
+	mu   sync.RWMutex
+	data map[string]authSession
 }
 
 //go:embed openapi.yaml
@@ -26,6 +33,9 @@ func New(repo storage.Repository, epochCache vault.EpochCache) *API {
 	return &API{
 		repo:       repo,
 		epochCache: epochCache,
+		sessions: &sessionStore{
+			data: make(map[string]authSession),
+		},
 	}
 }
 
@@ -48,12 +58,17 @@ func (a *API) Router() chi.Router {
 		Path:    "api/v1/redoc",
 	}, nil))
 
-	// Create vault does not require auth headers (credentials are generated).
-	r.Post("/vaults", a.CreateVault)
+	r.Post("/auth/register", a.Register)
+	r.Post("/auth/login", a.Login)
+	r.Post("/auth/logout", a.Logout)
+
+	r.With(a.AuthMiddleware).Post("/vaults", a.CreateVault)
+	r.With(a.AuthMiddleware).Get("/vaults", a.ListVaults)
 
 	// All other vault routes require auth middleware.
 	r.Route("/vaults/{vaultID}", func(r chi.Router) {
-		r.Use(AuthMiddleware)
+		r.Use(a.AuthMiddleware)
+		r.Delete("/", a.DeleteVault)
 		r.Post("/open", a.OpenVault)
 		r.Get("/items", a.ListItems)
 		r.Post("/items/{itemID}", a.PutItem)

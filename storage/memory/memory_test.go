@@ -145,4 +145,33 @@ func TestMemoryRepository(t *testing.T) {
 			t.Errorf("Expected Ver 1 after rollback, got %d", got.Ver)
 		}
 	})
+
+	t.Run("ListAndDeleteVaults", func(t *testing.T) {
+		repo := NewRepository()
+		env := &storage.Envelope{Ver: 1, Scheme: "aes256gcm", Nonce: make([]byte, 12), Ciphertext: []byte("x")}
+		if err := repo.Put("v1", "ITEM", "i1", env); err != nil {
+			t.Fatalf("Put v1 failed: %v", err)
+		}
+		if err := repo.Put("v2", "ITEM", "i1", env); err != nil {
+			t.Fatalf("Put v2 failed: %v", err)
+		}
+
+		vaults, err := repo.ListVaults()
+		if err != nil {
+			t.Fatalf("ListVaults failed: %v", err)
+		}
+		if len(vaults) != 2 {
+			t.Fatalf("expected 2 vaults, got %d", len(vaults))
+		}
+
+		if err := repo.DeleteVault("v1"); err != nil {
+			t.Fatalf("DeleteVault failed: %v", err)
+		}
+		if _, err := repo.Get("v1", "ITEM", "i1"); err == nil {
+			t.Fatal("expected deleted vault records to be gone")
+		}
+		if err := repo.DeleteVault("missing"); err != storage.ErrVaultNotFound {
+			t.Fatalf("expected ErrVaultNotFound, got %v", err)
+		}
+	})
 }
