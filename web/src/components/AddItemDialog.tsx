@@ -6,8 +6,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import PasswordGenerator from '@/components/PasswordGenerator';
 import { useToast } from '@/hooks/use-toast';
-import { Eye, EyeOff, Plus, X } from 'lucide-react';
+import { Eye, EyeOff, Plus, Wand2, X } from 'lucide-react';
 
 interface AddItemDialogProps {
   open: boolean;
@@ -31,6 +33,7 @@ export default function AddItemDialog({ open, onOpenChange, vaultId }: AddItemDi
   const [type, setType] = useState<ItemType>('login');
   const [saving, setSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showGenerator, setShowGenerator] = useState(false);
 
   // Login fields
   const [username, setUsername] = useState('');
@@ -56,6 +59,7 @@ export default function AddItemDialog({ open, onOpenChange, vaultId }: AddItemDi
     setName('');
     setType('login');
     setShowPassword(false);
+    setShowGenerator(false);
     setUsername('');
     setPassword('');
     setUrl('');
@@ -153,17 +157,35 @@ export default function AddItemDialog({ open, onOpenChange, vaultId }: AddItemDi
             value={password}
             onChange={e => setPassword(e.target.value)}
             placeholder="password"
-            className={`${FIELD} pr-10`}
+            className={`${FIELD} pr-20`}
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="absolute right-0 top-0 h-full w-10"
-            onClick={() => setShowPassword(!showPassword)}
-          >
-            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </Button>
+          <div className="absolute right-0 top-0 h-full flex items-center">
+            <Popover open={showGenerator} onOpenChange={setShowGenerator}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-full w-10"
+                  title="Generate password"
+                >
+                  <Wand2 className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 p-4 bg-card border-border" align="end" side="bottom">
+                <PasswordGenerator onUse={(value) => { setPassword(value); setShowPassword(true); setShowGenerator(false); }} />
+              </PopoverContent>
+            </Popover>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-full w-10"
+              onClick={() => setShowPassword(!showPassword)}
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
       </div>
       <div>
