@@ -26,6 +26,7 @@ interface VaultContextType {
   isUnlocked: boolean;
   account: AccountState | null;
   enroll: (passphrase: string) => Promise<{ secretKey: string }>;
+  completeEnrollment: () => void;
   unlock: (secretKey: string, passphrase: string) => Promise<boolean>;
   lock: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -79,6 +80,10 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setJustRegistered(true);
     setVaults([]);
     return { secretKey: result.secret_key };
+  }, []);
+
+  const completeEnrollment = useCallback(() => {
+    setJustRegistered(false);
   }, []);
 
   const unlock = useCallback(
@@ -196,6 +201,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         isUnlocked,
         account,
         enroll,
+        completeEnrollment,
         unlock,
         lock,
         refresh,

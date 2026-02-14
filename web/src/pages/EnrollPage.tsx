@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useVault } from '@/contexts/VaultContext';
-import { Check, Copy, KeyRound, ShieldAlert } from 'lucide-react';
+import { Check, CheckCircle2, Copy, KeyRound, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -12,7 +12,7 @@ interface EnrollPageProps {
 }
 
 export default function EnrollPage({ onSwitchToLogin }: EnrollPageProps) {
-  const { enroll } = useVault();
+  const { enroll, completeEnrollment } = useVault();
   const { toast } = useToast();
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
@@ -47,32 +47,41 @@ export default function EnrollPage({ onSwitchToLogin }: EnrollPageProps) {
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <div className="w-full max-w-md animate-slide-up">
           <div className="rounded-2xl border border-border bg-card p-8 glow-primary">
-            <div className="flex items-center justify-center mb-6">
-              <div className="h-16 w-16 rounded-2xl bg-accent flex items-center justify-center">
-                <KeyRound className="h-8 w-8 text-accent-foreground" />
+            <div className="flex items-center justify-center mb-4">
+              <div className="h-16 w-16 rounded-2xl bg-green-500/10 flex items-center justify-center">
+                <CheckCircle2 className="h-8 w-8 text-green-500" />
               </div>
             </div>
-            <h2 className="text-2xl font-bold text-center mb-2">Your Secret Key</h2>
+            <h2 className="text-2xl font-bold text-center mb-1">Registration Successful</h2>
             <p className="text-muted-foreground text-center text-sm mb-6">
-              Save this key securely. You will need it with your passphrase to log in.
+              Your account has been created. Save your secret key below — you will need it along with your passphrase to log in.
             </p>
-            <div className="flex items-center gap-2 p-3 rounded-xl bg-muted border border-border mb-4">
-              <code className="font-mono text-sm text-primary break-all flex-1">{secretKey}</code>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(secretKey);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1800);
-                }}
-                className="text-muted-foreground hover:text-primary"
-              >
-                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              </button>
+            <div className="mb-4">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
+                Secret Key
+              </label>
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-muted border border-border">
+                <KeyRound className="h-4 w-4 text-primary shrink-0" />
+                <code className="font-mono text-sm text-primary break-all flex-1">{secretKey}</code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(secretKey);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1800);
+                  }}
+                  className="text-muted-foreground hover:text-primary shrink-0"
+                >
+                  {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
             <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 mb-6">
               <div className="flex items-start gap-2">
                 <ShieldAlert className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-                <p className="text-xs text-destructive">If you lose this key, you cannot recover access.</p>
+                <div className="text-xs text-destructive space-y-1">
+                  <p className="font-medium">Store this key securely before continuing.</p>
+                  <p>This key will not be shown again. If you lose it, you will not be able to recover your account.</p>
+                </div>
               </div>
             </div>
             <div className="flex items-start gap-3 mb-6 p-3 rounded-lg bg-muted/50 border border-border">
@@ -81,8 +90,8 @@ export default function EnrollPage({ onSwitchToLogin }: EnrollPageProps) {
                 I have securely saved my secret key.
               </label>
             </div>
-            <Button className="w-full" disabled={!acknowledged} onClick={onSwitchToLogin}>
-              Continue to Login
+            <Button className="w-full" disabled={!acknowledged} onClick={completeEnrollment}>
+              Continue to Dashboard
             </Button>
           </div>
         </div>

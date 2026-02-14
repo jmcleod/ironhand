@@ -61,6 +61,7 @@ func (a *API) Router() chi.Router {
 	r.Post("/auth/register", a.Register)
 	r.Post("/auth/login", a.Login)
 	r.Post("/auth/logout", a.Logout)
+	r.Post("/auth/reveal-secret-key", a.RevealSecretKey)
 
 	r.With(a.AuthMiddleware).Post("/vaults", a.CreateVault)
 	r.With(a.AuthMiddleware).Get("/vaults", a.ListVaults)

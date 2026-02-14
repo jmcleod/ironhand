@@ -5,11 +5,11 @@ import DashboardPage from '@/pages/DashboardPage';
 import { useState } from 'react';
 
 const Index = () => {
-  const { isUnlocked } = useVault();
+  const { isUnlocked, isEnrolled } = useVault();
   const [mode, setMode] = useState<'login' | 'register'>('login');
 
-  if (!isUnlocked) {
-    if (mode === 'register') {
+  if (!isUnlocked || isEnrolled) {
+    if (mode === 'register' || isEnrolled) {
       return <EnrollPage onSwitchToLogin={() => setMode('login')} />;
     }
     return <UnlockPage onSwitchToRegister={() => setMode('register')} />;

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jmcleod/ironhand/internal/uuid"
@@ -113,6 +114,44 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	a.sessions.mu.Unlock()
 	writeSessionCookie(w, r, token, expiresAt)
 	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// RevealSecretKey handles POST /auth/reveal-secret-key.
+// Requires an active session and the user's passphrase for verification.
+func (a *API) RevealSecretKey(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil || cookie.Value == "" {
+		writeError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	a.sessions.mu.RLock()
+	session, ok := a.sessions.data[cookie.Value]
+	a.sessions.mu.RUnlock()
+	if !ok || time.Now().After(session.ExpiresAt) {
+		writeError(w, http.StatusUnauthorized, "session expired")
+		return
+	}
+
+	var req RevealSecretKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Passphrase == "" {
+		writeError(w, http.StatusBadRequest, "passphrase is required")
+		return
+	}
+
+	// LoginPassphrase is "passphrase:secretKey". Verify the passphrase matches.
+	prefix := req.Passphrase + ":"
+	if !strings.HasPrefix(session.LoginPassphrase, prefix) {
+		writeError(w, http.StatusUnauthorized, "incorrect passphrase")
+		return
+	}
+
+	secretKey := strings.TrimPrefix(session.LoginPassphrase, prefix)
+	writeJSON(w, http.StatusOK, RevealSecretKeyResponse{SecretKey: secretKey})
 }
 
 // Logout handles POST /auth/logout.

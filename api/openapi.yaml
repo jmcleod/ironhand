@@ -158,6 +158,20 @@ components:
           type: integer
           format: int64
 
+    RevealSecretKeyRequest:
+      type: object
+      required:
+        - passphrase
+      properties:
+        passphrase:
+          type: string
+
+    RevealSecretKeyResponse:
+      type: object
+      properties:
+        secret_key:
+          type: string
+
     ErrorResponse:
       type: object
       properties:
@@ -198,6 +212,28 @@ paths:
           description: Logged in
         '401':
           description: Invalid credentials
+
+  /auth/reveal-secret-key:
+    post:
+      summary: Reveal the account secret key (requires passphrase verification)
+      operationId: revealSecretKey
+      security:
+        - SessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevealSecretKeyRequest'
+      responses:
+        '200':
+          description: Secret key returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevealSecretKeyResponse'
+        '401':
+          description: Not authenticated or incorrect passphrase
 
   /auth/logout:
     post:
