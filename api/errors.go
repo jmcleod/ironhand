@@ -20,15 +20,24 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func mapError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, vault.ErrUnauthorized):
+	if _, ok := errors.AsType[vault.UnauthorizedError](err); ok {
 		writeError(w, http.StatusForbidden, err.Error())
-	case errors.Is(err, vault.ErrStaleSession):
+		return
+	}
+	if _, ok := errors.AsType[vault.StaleSessionError](err); ok {
 		writeError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, vault.ErrSessionClosed):
+		return
+	}
+	if _, ok := errors.AsType[vault.SessionClosedError](err); ok {
 		writeError(w, http.StatusInternalServerError, err.Error())
-	case errors.Is(err, vault.ErrRollbackDetected):
+		return
+	}
+	if _, ok := errors.AsType[vault.RollbackError](err); ok {
 		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	switch {
 	case errors.Is(err, storage.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, storage.ErrVaultNotFound):

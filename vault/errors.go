@@ -1,12 +1,45 @@
 package vault
 
-import "errors"
+// UnauthorizedError indicates the caller is not permitted for the attempted operation.
+type UnauthorizedError struct {
+	Message string
+}
+
+func (e UnauthorizedError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return "unauthorized"
+}
+
+// StaleSessionError indicates the session epoch is behind the vault's current epoch.
+type StaleSessionError struct{}
+
+func (e StaleSessionError) Error() string {
+	return "stale session"
+}
+
+// SessionClosedError indicates the session has already been closed and its key material destroyed.
+type SessionClosedError struct{}
+
+func (e SessionClosedError) Error() string {
+	return "session closed"
+}
+
+// RollbackError indicates a rollback attempt was detected.
+type RollbackError struct{}
+
+func (e RollbackError) Error() string {
+	return "rollback detected"
+}
 
 var (
-	// ErrUnauthorized indicates the caller is not permitted for the attempted operation.
-	ErrUnauthorized = errors.New("unauthorized")
-	// ErrStaleSession indicates the session epoch is behind the vault's current epoch.
-	ErrStaleSession = errors.New("stale session")
-	// ErrSessionClosed indicates the session has already been closed and its key material destroyed.
-	ErrSessionClosed = errors.New("session closed")
+	// ErrUnauthorized is a sentinel for generic unauthorized errors.
+	ErrUnauthorized = UnauthorizedError{}
+	// ErrStaleSession is a sentinel for stale session errors.
+	ErrStaleSession = StaleSessionError{}
+	// ErrSessionClosed is a sentinel for closed session errors.
+	ErrSessionClosed = SessionClosedError{}
+	// ErrRollbackDetected is a sentinel for rollback detected errors.
+	ErrRollbackDetected = RollbackError{}
 )

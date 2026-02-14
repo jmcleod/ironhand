@@ -71,7 +71,7 @@ func authRequest(t *testing.T, method, url string, body any, creds testCredentia
 	if body != nil {
 		require.NoError(t, json.NewEncoder(&buf).Encode(body))
 	}
-	req, err := http.NewRequest(method, url, &buf)
+	req, err := http.NewRequestWithContext(t.Context(), method, url, &buf)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Credentials", creds.Credentials)
@@ -103,7 +103,10 @@ func TestCreateVault_MissingFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b, _ := json.Marshal(tt.body)
-			resp, err := http.Post(srv.URL+"/api/v1/vaults", "application/json", bytes.NewReader(b))
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/vaults", bytes.NewReader(b))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
 			require.NoError(t, err)
 			defer resp.Body.Close()
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)

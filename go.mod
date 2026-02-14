@@ -1,6 +1,6 @@
 module github.com/jmcleod/ironhand
 
-go 1.25
+go 1.26
 
 require (
 	github.com/awnumar/memguard v0.23.0

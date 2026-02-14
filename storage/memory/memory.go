@@ -2,6 +2,9 @@
 package memory
 
 import (
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/jmcleod/ironhand/storage"
@@ -74,13 +77,16 @@ func (r *Repository) getLocked(vaultID, recordType, recordID string) (*storage.E
 func (r *Repository) List(vaultID, recordType string) ([]string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	var ids []string
 	prefix := recordType + ":"
-	for k := range r.data[vaultID] {
-		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			ids = append(ids, k[len(prefix):])
+	ids := slices.Collect(func(yield func(string) bool) {
+		for k := range r.data[vaultID] {
+			if id, ok := strings.CutPrefix(k, prefix); ok {
+				if !yield(id) {
+					return
+				}
+			}
 		}
-	}
+	})
 	return ids, nil
 }
 
@@ -143,8 +149,8 @@ func (r *Repository) snapshotVault(vaultID string) map[string]*storage.Envelope 
 	if !ok {
 		return nil
 	}
-	cp := make(map[string]*storage.Envelope, len(original))
-	for k, v := range original {
+	cp := maps.Clone(original)
+	for k, v := range cp {
 		cp[k] = cloneEnvelope(v)
 	}
 	return cp

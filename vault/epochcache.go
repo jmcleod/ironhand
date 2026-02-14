@@ -2,15 +2,11 @@ package vault
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"sync"
 
 	"go.etcd.io/bbolt"
 )
-
-// ErrRollbackDetected is returned when the storage epoch is older than the cached epoch.
-var ErrRollbackDetected = errors.New("rollback detected: storage epoch is older than cached epoch")
 
 // EpochCache tracks the maximum epoch seen per vault to detect rollback attacks.
 type EpochCache interface {

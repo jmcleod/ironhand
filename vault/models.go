@@ -14,13 +14,13 @@ type Argon2idParams = util.Argon2idParams
 
 // vaultState holds the persistent metadata for a vault.
 type vaultState struct {
-	VaultID    string         `json:"vault_id"`
-	Epoch      uint64         `json:"epoch"`
-	KDFParams  Argon2idParams `json:"kdf_params"`
-	SaltPass   []byte         `json:"salt_pass"`
-	SaltSecret []byte         `json:"salt_secret"`
-	CreatedAt  time.Time      `json:"created_at"`
-	Ver        int            `json:"ver"`
+	VaultID    string         `json:"vault_id,omitzero"`
+	Epoch      uint64         `json:"epoch,omitzero"`
+	KDFParams  Argon2idParams `json:"kdf_params,omitzero"`
+	SaltPass   []byte         `json:"salt_pass,omitzero"`
+	SaltSecret []byte         `json:"salt_secret,omitzero"`
+	CreatedAt  time.Time      `json:"created_at,omitzero"`
+	Ver        int            `json:"ver,omitzero"`
 }
 
 // newVaultState creates a new vaultState with the given vaultID and options.
@@ -57,12 +57,12 @@ const (
 
 // Member represents a vault member with their public key and access metadata.
 type Member struct {
-	MemberID     string       `json:"member_id"`
-	PubKey       [32]byte     `json:"pub_key"`
-	Role         MemberRole   `json:"role"`
-	Status       MemberStatus `json:"status"`
-	AddedEpoch   uint64       `json:"added_epoch"`
-	RevokedEpoch uint64       `json:"revoked_epoch"`
+	MemberID     string       `json:"member_id,omitzero"`
+	PubKey       [32]byte     `json:"pub_key,omitzero"`
+	Role         MemberRole   `json:"role,omitzero"`
+	Status       MemberStatus `json:"status,omitzero"`
+	AddedEpoch   uint64       `json:"added_epoch,omitzero"`
+	RevokedEpoch uint64       `json:"revoked_epoch,omitzero"`
 }
 
 // memberKEKWrap holds a KEK wrapped (sealed) to a specific member at a given epoch.
@@ -74,13 +74,13 @@ type memberKEKWrap struct {
 
 // item represents an encrypted item stored in the vault.
 type item struct {
-	ItemID       string `json:"item_id"`
-	ContentType  string `json:"content_type"`
-	ItemVersion  uint64 `json:"item_version"`
-	Ciphertext   []byte `json:"ciphertext"`
-	WrappedDEK   []byte `json:"wrapped_dek"`
-	WrappedEpoch uint64 `json:"wrapped_epoch"`
-	UpdatedBy    string `json:"updated_by"`
+	ItemID       string `json:"item_id,omitzero"`
+	ContentType  string `json:"content_type,omitzero"`
+	ItemVersion  uint64 `json:"item_version,omitzero"`
+	Ciphertext   []byte `json:"ciphertext,omitzero"`
+	WrappedDEK   []byte `json:"wrapped_dek,omitzero"`
+	WrappedEpoch uint64 `json:"wrapped_epoch,omitzero"`
+	UpdatedBy    string `json:"updated_by,omitzero"`
 }
 
 // Validation constants.
