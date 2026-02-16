@@ -16,12 +16,14 @@ export default function TwoFactorDialog({ open, onOpenChange }: TwoFactorDialogP
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [secret, setSecret] = useState('');
+  const [otpauthURL, setOtpauthURL] = useState('');
   const [code, setCode] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
 
   const reset = () => {
     setLoading(false);
     setSecret('');
+    setOtpauthURL('');
     setCode('');
     setExpiresAt('');
   };
@@ -36,6 +38,7 @@ export default function TwoFactorDialog({ open, onOpenChange }: TwoFactorDialogP
     try {
       const out = await setupTwoFactor();
       setSecret(out.secret);
+      setOtpauthURL(out.otpauthURL);
       setExpiresAt(out.expiresAt);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to start 2FA setup';
@@ -85,6 +88,16 @@ export default function TwoFactorDialog({ open, onOpenChange }: TwoFactorDialogP
           </div>
         ) : (
           <div className="space-y-4 mt-2">
+            <div className="flex justify-center">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(otpauthURL)}`}
+                alt="Scan this QR code with your authenticator app"
+                className="h-[220px] w-[220px] rounded-lg border border-border bg-white p-2"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground text-center">
+              Scan the QR code with your authenticator app, or enter the secret manually.
+            </p>
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">TOTP Secret</p>
               <div className="flex items-center gap-2 p-3 rounded-lg bg-muted border border-border">
