@@ -14,9 +14,10 @@ import { assessPasswordStrength } from '@/lib/password-strength';
 interface ItemCardProps {
   item: VaultItem;
   vaultId: string;
+  onRequestEdit?: (item: VaultItem) => void;
 }
 
-export default function ItemCard({ item, vaultId }: ItemCardProps) {
+export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps) {
   const { removeItem } = useVault();
   const { toast } = useToast();
   const [revealedFields, setRevealedFields] = useState<Set<string>>(new Set());
@@ -81,6 +82,14 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
         toast({ title: 'Delete failed', description: msg, variant: 'destructive' });
       }
     }
+  };
+
+  const handleEdit = () => {
+    if (onRequestEdit) {
+      onRequestEdit(item);
+      return;
+    }
+    setEditOpen(true);
   };
 
   const typeIcon = () => {
@@ -251,7 +260,7 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
             <Button variant="ghost" size="icon" onClick={() => setHistoryOpen(true)} className="h-8 w-8" title="Version history">
               <History className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => setEditOpen(true)} className="h-8 w-8" title="Edit">
+            <Button variant="ghost" size="icon" onClick={handleEdit} className="h-8 w-8" title="Edit">
               <Pencil className="h-4 w-4" />
             </Button>
             <Button variant="ghost" size="icon" onClick={handleDelete} className="h-8 w-8 text-destructive hover:text-destructive" title="Delete">
@@ -303,7 +312,9 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
         })()}
       </div>
 
-      <EditItemDialog open={editOpen} onOpenChange={setEditOpen} vaultId={vaultId} item={item} />
+      {!onRequestEdit && (
+        <EditItemDialog open={editOpen} onOpenChange={setEditOpen} vaultId={vaultId} item={item} />
+      )}
       <ItemHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} vaultId={vaultId} item={item} />
     </>
   );

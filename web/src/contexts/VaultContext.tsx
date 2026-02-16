@@ -57,14 +57,16 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     const summaries = await apiListVaults();
     const nextVaults: Vault[] = [];
     for (const summary of summaries) {
-      const itemIDs = await apiListItems(summary.vault_id).catch(() => []);
+      const listed = await apiListItems(summary.vault_id).catch(() => []);
       const items: VaultItem[] = [];
-      for (const itemID of itemIDs) {
-        const fields = await apiGetItem(summary.vault_id, itemID).catch(() => null);
-        if (!fields) {
-          continue;
-        }
-        items.push({ id: itemID, fields });
+      for (const item of listed) {
+        items.push({
+          id: item.item_id,
+          fields: {
+            [FIELD_NAME]: item.name || item.item_id,
+            [FIELD_TYPE]: (item.type as ItemType) || 'custom',
+          },
+        });
       }
       nextVaults.push({
         id: summary.vault_id,
@@ -176,12 +178,9 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
   const updateItem = useCallback(
     async (vaultID: string, itemID: string, fields: Record<string, string>, removeKeys?: string[]) => {
-      const existing = vaults.find((v) => v.id === vaultID)?.items.find((i) => i.id === itemID);
-      if (!existing) {
-        return;
-      }
+      const existing = await apiGetItem(vaultID, itemID).catch(() => ({}));
       const merged: Record<string, string> = {
-        ...existing.fields,
+        ...existing,
         ...fields,
         [FIELD_UPDATED]: new Date().toISOString(),
       };
@@ -193,7 +192,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       await apiUpdateItem(vaultID, itemID, merged);
       await refresh();
     },
-    [refresh, vaults],
+    [refresh],
   );
 
   const shareVault = useCallback(

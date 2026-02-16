@@ -128,6 +128,7 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+
 	filtered := items[:0]
 	for _, itemID := range items {
 		if itemID == vaultMetadataItemID {
@@ -137,11 +138,28 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 	}
 	items = filtered
 
-	if items == nil {
-		items = []string{}
+	summaries := make([]ItemSummary, 0, len(items))
+	for _, itemID := range items {
+		fields, err := session.Get(r.Context(), itemID)
+		if err != nil {
+			continue
+		}
+		name := string(fields["_name"])
+		if name == "" {
+			name = itemID
+		}
+		itemType := string(fields["_type"])
+		if itemType == "" {
+			itemType = "custom"
+		}
+		summaries = append(summaries, ItemSummary{
+			ItemID: itemID,
+			Name:   name,
+			Type:   itemType,
+		})
 	}
 
-	writeJSON(w, http.StatusOK, ListItemsResponse{Items: items})
+	writeJSON(w, http.StatusOK, ListItemsResponse{Items: summaries})
 }
 
 // PutItem handles POST /vaults/{vaultID}/items/{itemID}.

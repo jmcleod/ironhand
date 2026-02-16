@@ -101,9 +101,15 @@ export async function deleteVault(vaultID: string): Promise<void> {
   await request(`/vaults/${encodeURIComponent(vaultID)}`, { method: 'DELETE' });
 }
 
-export async function listItems(vaultID: string): Promise<string[]> {
+export interface ItemSummary {
+  item_id: string;
+  name?: string;
+  type?: string;
+}
+
+export async function listItems(vaultID: string): Promise<ItemSummary[]> {
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/items`);
-  const data = (await resp.json()) as { items: string[] };
+  const data = (await resp.json()) as { items: ItemSummary[] };
   return data.items ?? [];
 }
 

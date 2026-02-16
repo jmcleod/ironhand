@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Vault, ItemType } from '@/types/vault';
+import { Vault, ItemType, VaultItem, itemName, itemType } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
 import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box, ScrollText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,8 +8,11 @@ import ItemCard from '@/components/ItemCard';
 import AddItemDialog from '@/components/AddItemDialog';
 import ShareDialog from '@/components/ShareDialog';
 import AuditLogDialog from '@/components/AuditLogDialog';
+import EditItemDialog from '@/components/EditItemDialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { searchItems } from '@/lib/search';
+import { getItem as apiGetItem } from '@/lib/api';
 
 const TYPE_FILTERS: { value: ItemType | 'all'; label: string; icon?: React.ReactNode }[] = [
   { value: 'all', label: 'All' },
@@ -33,6 +36,12 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all');
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedItem, setSelectedItem] = useState<VaultItem | null>(null);
+  const [itemViewOpen, setItemViewOpen] = useState(false);
+  const [itemLoading, setItemLoading] = useState(false);
+  const [editFromLightboxOpen, setEditFromLightboxOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
 
   // Debounce the search input.
   useEffect(() => {
@@ -46,6 +55,42 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
     if (!isFilterActive) return vault.items;
     return searchItems([vault], debouncedQuery, typeFilter).map((r) => r.item);
   }, [vault, debouncedQuery, typeFilter, isFilterActive]);
+
+  useEffect(() => {
+    if (selectedItemId && !filteredItems.some((item) => item.id === selectedItemId)) {
+      setSelectedItemId(null);
+      setSelectedItem(null);
+      setItemViewOpen(false);
+    }
+  }, [filteredItems, selectedItemId]);
+
+  const iconForType = (type: ItemType) => {
+    switch (type) {
+      case 'login':
+        return <KeyRound className="h-4 w-4" />;
+      case 'note':
+        return <StickyNote className="h-4 w-4" />;
+      case 'card':
+        return <CreditCard className="h-4 w-4" />;
+      case 'custom':
+        return <Box className="h-4 w-4" />;
+    }
+  };
+
+  const openItemLightbox = async (itemId: string) => {
+    setSelectedItemId(itemId);
+    setItemLoading(true);
+    try {
+      const fields = await apiGetItem(vault.id, itemId);
+      setSelectedItem({ id: itemId, fields });
+      setItemViewOpen(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load item details.';
+      toast({ title: 'Load failed', description: msg, variant: 'destructive' });
+    } finally {
+      setItemLoading(false);
+    }
+  };
 
   const handleDelete = async () => {
     if (confirm('Delete this vault and all its items?')) {
@@ -155,9 +200,23 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
                     {filteredItems.length} of {vault.items.length} items
                   </p>
                 )}
-                {filteredItems.map(item => (
-                  <ItemCard key={item.id} item={item} vaultId={vault.id} />
-                ))}
+                <div className="rounded-xl border border-border bg-card divide-y divide-border/50">
+                  {filteredItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`w-full text-left px-4 py-3 hover:bg-muted/40 transition-colors ${
+                        selectedItemId === item.id ? 'bg-muted/50' : ''
+                      }`}
+                      onClick={() => void openItemLightbox(item.id)}
+                    >
+                      <div className="flex items-center gap-2 text-foreground">
+                        <span className="text-muted-foreground">{iconForType(itemType(item))}</span>
+                        <p className="text-sm font-medium">{itemName(item)}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -167,6 +226,39 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
       <AddItemDialog open={showAddItem} onOpenChange={setShowAddItem} vaultId={vault.id} />
       <ShareDialog open={showShare} onOpenChange={setShowShare} vaultId={vault.id} sharedWith={vault.sharedWith} />
       <AuditLogDialog open={showAudit} onOpenChange={setShowAudit} vaultId={vault.id} />
+      <Dialog open={itemViewOpen} onOpenChange={(open) => { setItemViewOpen(open); if (!open) setSelectedItem(null); }}>
+        <DialogContent className="bg-card border-border max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{selectedItem ? itemName(selectedItem) : 'Item'}</DialogTitle>
+          </DialogHeader>
+          {itemLoading ? (
+            <p className="text-sm text-muted-foreground">Loading item...</p>
+          ) : selectedItem ? (
+            <ItemCard
+              item={selectedItem}
+              vaultId={vault.id}
+              onRequestEdit={(item) => {
+                setEditingItem(item);
+                setItemViewOpen(false);
+                setEditFromLightboxOpen(true);
+              }}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">No item selected.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+      {editingItem && (
+        <EditItemDialog
+          open={editFromLightboxOpen}
+          onOpenChange={(open) => {
+            setEditFromLightboxOpen(open);
+            if (!open) setEditingItem(null);
+          }}
+          vaultId={vault.id}
+          item={editingItem}
+        />
+      )}
     </div>
   );
 }

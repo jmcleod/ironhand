@@ -130,7 +130,17 @@ components:
         items:
           type: array
           items:
-            type: string
+            $ref: '#/components/schemas/ItemSummary'
+
+    ItemSummary:
+      type: object
+      properties:
+        item_id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
 
     PutItemRequest:
       type: object

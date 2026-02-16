@@ -270,6 +270,16 @@ func TestVaultCRUD(t *testing.T) {
 	assert.Equal(t, "item-1", getItem.ItemID)
 	assert.Equal(t, "admin", getItem.Fields["username"])
 	assert.Equal(t, "secret", getItem.Fields["password"])
+
+	resp = doJSON(t, client, http.MethodGet, srv.URL+"/api/v1/vaults/"+create.VaultID+"/items", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var list api.ListItemsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+	require.Len(t, list.Items, 1)
+	assert.Equal(t, "item-1", list.Items[0].ItemID)
+	assert.Equal(t, "item-1", list.Items[0].Name)
+	assert.Equal(t, "custom", list.Items[0].Type)
 }
 
 func TestAuditLogTracksItemAccessAndModification(t *testing.T) {

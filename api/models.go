@@ -70,7 +70,14 @@ type ListVaultsResponse struct {
 
 // ListItemsResponse is returned from GET /vaults/{vaultID}/items.
 type ListItemsResponse struct {
-	Items []string `json:"items"`
+	Items []ItemSummary `json:"items"`
+}
+
+// ItemSummary is returned in vault item listings.
+type ItemSummary struct {
+	ItemID string `json:"item_id"`
+	Name   string `json:"name,omitempty"`
+	Type   string `json:"type,omitempty"`
 }
 
 // PutItemRequest is the JSON body for POST /vaults/{vaultID}/items/{itemID}.
