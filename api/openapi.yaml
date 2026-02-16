@@ -59,6 +59,34 @@ components:
           type: string
         secret_key:
           type: string
+        totp_code:
+          type: string
+          description: 6-digit TOTP code, required when 2FA is enabled.
+
+    SetupTwoFactorResponse:
+      type: object
+      properties:
+        secret:
+          type: string
+        otpauth_url:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    EnableTwoFactorRequest:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+
+    TwoFactorStatusResponse:
+      type: object
+      properties:
+        enabled:
+          type: boolean
 
     OpenVaultResponse:
       type: object
@@ -242,6 +270,62 @@ paths:
       responses:
         '200':
           description: Logged out
+
+  /auth/2fa:
+    get:
+      summary: Get 2FA status for current account
+      operationId: twoFactorStatus
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: 2FA status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwoFactorStatusResponse'
+        '401':
+          description: Unauthorized
+
+  /auth/2fa/setup:
+    post:
+      summary: Start 2FA setup and return a TOTP secret
+      operationId: setupTwoFactor
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: 2FA setup initialized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupTwoFactorResponse'
+        '401':
+          description: Unauthorized
+
+  /auth/2fa/enable:
+    post:
+      summary: Enable 2FA by verifying a TOTP code
+      operationId: enableTwoFactor
+      security:
+        - SessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnableTwoFactorRequest'
+      responses:
+        '200':
+          description: 2FA enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwoFactorStatusResponse'
+        '400':
+          description: Setup expired or invalid request
+        '401':
+          description: Invalid one-time code or unauthorized
 
   /vaults:
     get:

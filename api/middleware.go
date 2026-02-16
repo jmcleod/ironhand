@@ -21,6 +21,8 @@ type authSession struct {
 	SessionPassphrase string
 	CredentialsBlob   string
 	ExpiresAt         time.Time
+	PendingTOTPSecret string
+	PendingTOTPExpiry time.Time
 }
 
 // AuthMiddleware authenticates either a session cookie or explicit credentials

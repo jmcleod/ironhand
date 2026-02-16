@@ -61,6 +61,9 @@ func (a *API) Router() chi.Router {
 	r.Post("/auth/register", a.Register)
 	r.Post("/auth/login", a.Login)
 	r.Post("/auth/logout", a.Logout)
+	r.With(a.AuthMiddleware).Get("/auth/2fa", a.TwoFactorStatus)
+	r.With(a.AuthMiddleware).Post("/auth/2fa/setup", a.SetupTwoFactor)
+	r.With(a.AuthMiddleware).Post("/auth/2fa/enable", a.EnableTwoFactor)
 
 	r.With(a.AuthMiddleware).Post("/vaults", a.CreateVault)
 	r.With(a.AuthMiddleware).Get("/vaults", a.ListVaults)

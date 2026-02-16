@@ -9,9 +9,12 @@ import {
   listVaults as apiListVaults,
   login as apiLogin,
   logout as apiLogout,
+  twoFactorStatus as apiTwoFactorStatus,
   putItem as apiPutItem,
   register as apiRegister,
   revokeMember as apiRevokeMember,
+  setupTwoFactor as apiSetupTwoFactor,
+  enableTwoFactor as apiEnableTwoFactor,
   updateItem as apiUpdateItem,
 } from '@/lib/api';
 import { generateId } from '@/lib/crypto';
@@ -19,6 +22,7 @@ import { FIELD_CREATED, FIELD_NAME, FIELD_TYPE, FIELD_UPDATED, ItemType, Vault, 
 
 interface AccountState {
   vaults: Vault[];
+  twoFactorEnabled: boolean;
 }
 
 interface VaultContextType {
@@ -27,7 +31,9 @@ interface VaultContextType {
   account: AccountState | null;
   enroll: (passphrase: string) => Promise<{ secretKey: string }>;
   completeEnrollment: () => void;
-  unlock: (secretKey: string, passphrase: string) => Promise<boolean>;
+  unlock: (secretKey: string, passphrase: string, totpCode?: string) => Promise<boolean>;
+  setupTwoFactor: () => Promise<{ secret: string; otpauthURL: string; expiresAt: string }>;
+  enableTwoFactor: (code: string) => Promise<boolean>;
   lock: () => Promise<void>;
   refresh: () => Promise<void>;
   createVault: (name: string, description: string) => Promise<void>;
@@ -44,6 +50,7 @@ const VaultContext = createContext<VaultContextType | null>(null);
 export function VaultProvider({ children }: { children: React.ReactNode }) {
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [vaults, setVaults] = useState<Vault[]>([]);
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [justRegistered, setJustRegistered] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -71,7 +78,9 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         itemCount: summary.item_count,
       });
     }
+    const status = await apiTwoFactorStatus().catch(() => ({ enabled: false }));
     setVaults(nextVaults);
+    setTwoFactorEnabled(status.enabled);
   }, []);
 
   const enroll = useCallback(async (passphrase: string) => {
@@ -87,9 +96,9 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const unlock = useCallback(
-    async (secretKey: string, passphrase: string) => {
+    async (secretKey: string, passphrase: string, totpCode?: string) => {
       try {
-        await apiLogin(passphrase, secretKey);
+        await apiLogin(passphrase, secretKey, totpCode);
         setIsUnlocked(true);
         setJustRegistered(false);
         await refresh();
@@ -101,10 +110,26 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     [refresh],
   );
 
+  const setupTwoFactor = useCallback(async () => {
+    const out = await apiSetupTwoFactor();
+    return {
+      secret: out.secret,
+      otpauthURL: out.otpauth_url,
+      expiresAt: out.expires_at,
+    };
+  }, []);
+
+  const enableTwoFactor = useCallback(async (code: string) => {
+    const out = await apiEnableTwoFactor(code);
+    setTwoFactorEnabled(out.enabled);
+    return out.enabled;
+  }, []);
+
   const lock = useCallback(async () => {
     await apiLogout().catch(() => undefined);
     setIsUnlocked(false);
     setVaults([]);
+    setTwoFactorEnabled(false);
     setJustRegistered(false);
   }, []);
 
@@ -182,7 +207,10 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     [refresh],
   );
 
-  const account = useMemo<AccountState | null>(() => ({ vaults }), [vaults]);
+  const account = useMemo<AccountState | null>(
+    () => ({ vaults, twoFactorEnabled }),
+    [twoFactorEnabled, vaults],
+  );
   const isEnrolled = justRegistered;
 
   useEffect(() => {
@@ -191,6 +219,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {
         setIsUnlocked(false);
         setVaults([]);
+        setTwoFactorEnabled(false);
       });
   }, [refresh]);
 
@@ -203,6 +232,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         enroll,
         completeEnrollment,
         unlock,
+        setupTwoFactor,
+        enableTwoFactor,
         lock,
         refresh,
         createVault,

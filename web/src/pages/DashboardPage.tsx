@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useVault } from '@/contexts/VaultContext';
-import { Plus, Lock, Wand2, Vault as VaultIcon } from 'lucide-react';
+import { Plus, Lock, ShieldCheck, Wand2, Vault as VaultIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import VaultCard from '@/components/VaultCard';
 import VaultDetail from '@/components/VaultDetail';
 import CreateVaultDialog from '@/components/CreateVaultDialog';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
 import PasswordGeneratorDialog from '@/components/PasswordGeneratorDialog';
+import TwoFactorDialog from '@/components/TwoFactorDialog';
 import logo from '@/assets/logo.png';
 
 export default function DashboardPage() {
@@ -14,6 +15,7 @@ export default function DashboardPage() {
   const [selectedVaultId, setSelectedVaultId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
+  const [showTwoFactor, setShowTwoFactor] = useState(false);
 
   if (!account) return null;
 
@@ -41,6 +43,9 @@ export default function DashboardPage() {
             <ThemeSwitcher />
             <Button variant="ghost" size="sm" onClick={() => setShowGenerator(true)} title="Password Generator">
               <Wand2 className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowTwoFactor(true)} title="Two-Factor Authentication">
+              <ShieldCheck className={`h-4 w-4 ${account.twoFactorEnabled ? 'text-green-500' : ''}`} />
             </Button>
             <Button variant="outline" size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="h-4 w-4 mr-1" />
@@ -79,6 +84,7 @@ export default function DashboardPage() {
 
       <CreateVaultDialog open={showCreate} onOpenChange={setShowCreate} />
       <PasswordGeneratorDialog open={showGenerator} onOpenChange={setShowGenerator} />
+      <TwoFactorDialog open={showTwoFactor} onOpenChange={setShowTwoFactor} />
     </div>
   );
 }

@@ -40,19 +40,39 @@ export async function register(passphrase: string): Promise<{ secret_key: string
   return resp.json();
 }
 
-export async function login(passphrase: string, secretKey: string): Promise<void> {
+export async function login(passphrase: string, secretKey: string, totpCode?: string): Promise<void> {
   await request('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       passphrase,
       secret_key: secretKey,
+      totp_code: totpCode ?? '',
     }),
   });
 }
 
 export async function logout(): Promise<void> {
   await request('/auth/logout', { method: 'POST' });
+}
+
+export async function twoFactorStatus(): Promise<{ enabled: boolean }> {
+  const resp = await request('/auth/2fa');
+  return (await resp.json()) as { enabled: boolean };
+}
+
+export async function setupTwoFactor(): Promise<{ secret: string; otpauth_url: string; expires_at: string }> {
+  const resp = await request('/auth/2fa/setup', { method: 'POST' });
+  return (await resp.json()) as { secret: string; otpauth_url: string; expires_at: string };
+}
+
+export async function enableTwoFactor(code: string): Promise<{ enabled: boolean }> {
+  const resp = await request('/auth/2fa/enable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  return (await resp.json()) as { enabled: boolean };
 }
 
 export async function listVaults(): Promise<VaultSummary[]> {

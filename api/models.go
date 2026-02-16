@@ -27,6 +27,24 @@ type RegisterResponse struct {
 type LoginRequest struct {
 	Passphrase string `json:"passphrase"`
 	SecretKey  string `json:"secret_key"`
+	TOTPCode   string `json:"totp_code,omitempty"`
+}
+
+// SetupTwoFactorResponse is returned from POST /auth/2fa/setup.
+type SetupTwoFactorResponse struct {
+	Secret     string `json:"secret"`
+	OtpauthURL string `json:"otpauth_url"`
+	ExpiresAt  string `json:"expires_at"`
+}
+
+// EnableTwoFactorRequest is the JSON body for POST /auth/2fa/enable.
+type EnableTwoFactorRequest struct {
+	Code string `json:"code"`
+}
+
+// TwoFactorStatusResponse is returned from GET /auth/2fa and POST /auth/2fa/enable.
+type TwoFactorStatusResponse struct {
+	Enabled bool `json:"enabled"`
 }
 
 // OpenVaultResponse is returned from POST /vaults/{vaultID}/open.

@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"time"
 
@@ -45,10 +44,6 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := a.saveAccountRecord(secretKey, record); err != nil {
-		if errors.Is(err, errAccountExists) {
-			writeError(w, http.StatusConflict, "account already exists")
-			return
-		}
 		writeError(w, http.StatusInternalServerError, "failed to persist account")
 		return
 	}
@@ -96,6 +91,10 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	if record.TOTPEnabled && !verifyTOTPCode(record.TOTPSecret, req.TOTPCode, time.Now()) {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
 
 	blob, err := base64.StdEncoding.DecodeString(record.CredentialsBlob)
 	if err != nil {
@@ -129,6 +128,119 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	a.sessions.mu.Unlock()
 	writeSessionCookie(w, r, token, expiresAt)
 	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// TwoFactorStatus handles GET /auth/2fa.
+func (a *API) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	record, err := a.loadAccountRecord(creds.SecretKey().String())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+	writeJSON(w, http.StatusOK, TwoFactorStatusResponse{
+		Enabled: record.TOTPEnabled,
+	})
+}
+
+// SetupTwoFactor handles POST /auth/2fa/setup.
+func (a *API) SetupTwoFactor(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	token, session, ok := a.sessionFromRequest(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	secret, err := generateTOTPSecret()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate 2fa secret")
+		return
+	}
+
+	session.PendingTOTPSecret = secret
+	session.PendingTOTPExpiry = time.Now().Add(totpSetupTTL)
+	a.sessions.mu.Lock()
+	a.sessions.data[token] = session
+	a.sessions.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, SetupTwoFactorResponse{
+		Secret:     secret,
+		OtpauthURL: otpAuthURL(secret, session.SecretKeyID),
+		ExpiresAt:  session.PendingTOTPExpiry.UTC().Format(time.RFC3339),
+	})
+}
+
+// EnableTwoFactor handles POST /auth/2fa/enable.
+func (a *API) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req EnableTwoFactorRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	token, session, ok := a.sessionFromRequest(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if session.PendingTOTPSecret == "" || time.Now().After(session.PendingTOTPExpiry) {
+		writeError(w, http.StatusBadRequest, "2fa setup expired; start setup again")
+		return
+	}
+	if !verifyTOTPCode(session.PendingTOTPSecret, req.Code, time.Now()) {
+		writeError(w, http.StatusUnauthorized, "invalid one-time code")
+		return
+	}
+
+	secretKey := creds.SecretKey().String()
+	record, err := a.loadAccountRecord(secretKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+	record.TOTPEnabled = true
+	record.TOTPSecret = session.PendingTOTPSecret
+	if err := a.updateAccountRecord(secretKey, *record); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to enable 2fa")
+		return
+	}
+
+	session.PendingTOTPSecret = ""
+	session.PendingTOTPExpiry = time.Time{}
+	a.sessions.mu.Lock()
+	a.sessions.data[token] = session
+	a.sessions.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, TwoFactorStatusResponse{Enabled: true})
+}
+
+func (a *API) sessionFromRequest(r *http.Request) (string, authSession, bool) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return "", authSession{}, false
+	}
+	token := cookie.Value
+	a.sessions.mu.RLock()
+	session, ok := a.sessions.data[token]
+	a.sessions.mu.RUnlock()
+	if !ok || time.Now().After(session.ExpiresAt) {
+		return "", authSession{}, false
+	}
+	return token, session, true
 }
 
 // Logout handles POST /auth/logout.

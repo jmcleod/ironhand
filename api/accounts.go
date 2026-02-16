@@ -20,24 +20,17 @@ const (
 	accountAADPrefix  = "account:"
 )
 
-var errAccountExists = errors.New("account already exists")
-
 type accountRecord struct {
 	SecretKeyID     string    `json:"secret_key_id"`
 	CredentialsBlob string    `json:"credentials_blob"`
 	CreatedAt       time.Time `json:"created_at"`
+	TOTPEnabled     bool      `json:"totp_enabled,omitempty"`
+	TOTPSecret      string    `json:"totp_secret,omitempty"`
 }
 
 func (a *API) saveAccountRecord(secretKey string, record accountRecord) error {
 	accountID, err := accountLookupID(secretKey)
 	if err != nil {
-		return err
-	}
-	// Preserve legacy uniqueness semantics while eliminating collisions from
-	// using only the short secret key ID as the account storage key.
-	if existing, err := a.repo.Get(accountVaultID, accountRecordType, accountID); err == nil && existing != nil {
-		return errAccountExists
-	} else if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return err
 	}
 
@@ -58,6 +51,27 @@ func (a *API) saveAccountRecord(secretKey string, record accountRecord) error {
 	return a.repo.Put(accountVaultID, accountRecordType, accountID, env)
 }
 
+func (a *API) updateAccountRecord(secretKey string, record accountRecord) error {
+	accountID, err := accountLookupID(secretKey)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	recordKey, aad, err := deriveAccountRecordKey(secretKey)
+	if err != nil {
+		return err
+	}
+	defer util.WipeBytes(recordKey)
+	env, err := storage.SealRecord(recordKey, data, aad)
+	if err != nil {
+		return err
+	}
+	return a.repo.Put(accountVaultID, accountRecordType, accountID, env)
+}
+
 func (a *API) loadAccountRecord(secretKey string) (*accountRecord, error) {
 	accountID, err := accountLookupID(secretKey)
 	if err != nil {
@@ -71,35 +85,21 @@ func (a *API) loadAccountRecord(secretKey string) (*accountRecord, error) {
 
 	env, err := a.repo.Get(accountVaultID, accountRecordType, accountID)
 	if err != nil {
-		if !errors.Is(err, storage.ErrNotFound) {
-			return nil, err
+		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrVaultNotFound) {
+			return nil, fmt.Errorf("account not found")
 		}
-		legacyID, legacyErr := secretKeyID(secretKey)
-		if legacyErr != nil {
-			return nil, err
-		}
-		env, err = a.repo.Get(accountVaultID, accountRecordType, legacyID)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	if env == nil {
 		return nil, fmt.Errorf("account not found")
 	}
 
-	var data []byte
-	switch env.Scheme {
-	case "aes256gcm":
-		data, err = storage.OpenRecord(recordKey, env, aad)
-		if err != nil {
-			return nil, err
-		}
-	case "plain-json":
-		// Legacy compatibility path for records created before encrypted account
-		// envelopes were introduced.
-		data = env.Ciphertext
-	default:
+	if env.Scheme != "aes256gcm" {
 		return nil, fmt.Errorf("unsupported account record scheme: %s", env.Scheme)
+	}
+	data, err := storage.OpenRecord(recordKey, env, aad)
+	if err != nil {
+		return nil, err
 	}
 
 	var record accountRecord
@@ -134,12 +134,4 @@ func deriveAccountRecordKey(secretKey string) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	return recordKey, []byte(accountAADPrefix + accountID), nil
-}
-
-func secretKeyID(secretKey string) (string, error) {
-	sk, err := scrypto.ParseSecretKey(secretKey)
-	if err != nil {
-		return "", err
-	}
-	return sk.ID(), nil
 }

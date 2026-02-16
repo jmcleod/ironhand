@@ -2,11 +2,18 @@ package api_test
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -116,6 +123,89 @@ func TestRevealSecretKeyEndpointRemoved(t *testing.T) {
 	})
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestTwoFactorFlow(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	passphrase := "test-passphrase"
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", map[string]string{
+		"passphrase": passphrase,
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var reg api.RegisterResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&reg))
+
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/2fa/setup", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var setup api.SetupTwoFactorResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&setup))
+	require.NotEmpty(t, setup.Secret)
+	require.NotEmpty(t, setup.OtpauthURL)
+
+	code := totpCodeAt(t, setup.Secret, time.Now())
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/2fa/enable", map[string]string{
+		"code": code,
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var status api.TwoFactorStatusResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&status))
+	require.True(t, status.Enabled)
+
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/logout", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/login", map[string]string{
+		"passphrase": passphrase,
+		"secret_key": reg.SecretKey,
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/login", map[string]string{
+		"passphrase": passphrase,
+		"secret_key": reg.SecretKey,
+		"totp_code":  "000000",
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/login", map[string]string{
+		"passphrase": passphrase,
+		"secret_key": reg.SecretKey,
+		"totp_code":  totpCodeAt(t, setup.Secret, time.Now()),
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func totpCodeAt(t *testing.T, secret string, at time.Time) string {
+	t.Helper()
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(secret))
+	require.NoError(t, err)
+
+	counter := uint64(at.Unix() / 30)
+	var msg [8]byte
+	binary.BigEndian.PutUint64(msg[:], counter)
+	mac := hmac.New(sha1.New, key)
+	_, _ = mac.Write(msg[:])
+	sum := mac.Sum(nil)
+
+	offset := sum[len(sum)-1] & 0x0f
+	binCode := (int(sum[offset])&0x7f)<<24 |
+		(int(sum[offset+1])&0xff)<<16 |
+		(int(sum[offset+2])&0xff)<<8 |
+		(int(sum[offset+3]) & 0xff)
+	return fmt.Sprintf("%06d", binCode%1000000)
 }
 
 func TestCreateAndListVaults(t *testing.T) {

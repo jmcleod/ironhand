@@ -18,15 +18,20 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
   const { toast } = useToast();
   const [secretKey, setSecretKey] = useState(() => localStorage.getItem(SAVED_SECRET_KEY_KEY) ?? '');
   const [passphrase, setPassphrase] = useState('');
+  const [totpCode, setTotpCode] = useState('');
   const [rememberKey, setRememberKey] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleUnlock = async () => {
     setLoading(true);
-    const success = await unlock(secretKey.trim(), passphrase);
+    const success = await unlock(secretKey.trim(), passphrase, totpCode);
     setLoading(false);
     if (!success) {
-      toast({ title: 'Login Failed', description: 'Invalid secret key or passphrase.', variant: 'destructive' });
+      toast({
+        title: 'Login Failed',
+        description: 'Invalid credentials or one-time code.',
+        variant: 'destructive',
+      });
       return;
     }
     if (rememberKey) {
@@ -44,7 +49,7 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
             <img src={logo} alt="Ironhand" className="h-16 w-16" />
           </div>
           <h1 className="text-2xl font-bold text-center mb-1">Login</h1>
-          <p className="text-muted-foreground text-center text-sm mb-8">Enter passphrase and secret key.</p>
+          <p className="text-muted-foreground text-center text-sm mb-8">Enter passphrase, secret key, and one-time code if enabled.</p>
 
           <div className="space-y-4">
             <Input
@@ -59,6 +64,13 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
               onChange={e => setPassphrase(e.target.value)}
               placeholder="Passphrase"
               className="bg-muted border-border"
+            />
+            <Input
+              value={totpCode}
+              onChange={e => setTotpCode(e.target.value)}
+              placeholder="One-time code (if enabled)"
+              inputMode="numeric"
+              className="bg-muted border-border font-mono"
             />
             <div className="flex items-center gap-2">
               <Checkbox id="remember-key" checked={rememberKey} onCheckedChange={v => setRememberKey(v === true)} />

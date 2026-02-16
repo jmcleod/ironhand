@@ -132,8 +132,11 @@ The service provides a REST API exposed by default on port `8443`.
 
 - **Auth**:
   - `POST /api/v1/auth/register` (passphrase -> returns secret key + sets session cookie)
-  - `POST /api/v1/auth/login` (passphrase + secret key -> sets session cookie)
+  - `POST /api/v1/auth/login` (passphrase + secret key + optional `totp_code` -> sets session cookie; `totp_code` required when 2FA enabled)
   - `POST /api/v1/auth/logout`
+  - `GET /api/v1/auth/2fa` (session auth; returns 2FA status)
+  - `POST /api/v1/auth/2fa/setup` (session auth; returns temporary TOTP secret)
+  - `POST /api/v1/auth/2fa/enable` (session auth; verifies code and enables 2FA)
 - **Vaults**:
   - `POST /api/v1/vaults` (authenticated, server-generated vault ID)
   - `GET /api/v1/vaults`
