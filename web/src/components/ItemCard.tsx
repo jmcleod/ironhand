@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import EditItemDialog from '@/components/EditItemDialog';
 import ItemHistoryDialog from '@/components/ItemHistoryDialog';
+import TotpCodeDisplay from '@/components/TotpCodeDisplay';
+import { isValidTOTPSecret } from '@/lib/totp';
 
 interface ItemCardProps {
   item: VaultItem;
@@ -109,7 +111,50 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
     return <span className="text-sm text-foreground break-all">{value}</span>;
   };
 
+  const renderTotpField = (secret: string) => {
+    const revealed = revealedFields.has('totp');
+    return (
+      <div key="totp" className="py-1.5">
+        {/* Live TOTP code */}
+        <div className="flex items-center gap-2 group">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[100px] shrink-0">
+            TOTP Code
+          </span>
+          <div className="flex-1 min-w-0">
+            <TotpCodeDisplay secret={secret} />
+          </div>
+        </div>
+        {/* Raw secret (hidden by default, togglable) */}
+        <div className="flex items-center gap-2 mt-1 group">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[100px] shrink-0">
+            Totp Secret
+          </span>
+          <div className="flex-1 min-w-0">
+            {revealed ? (
+              <span className="text-sm text-foreground break-all font-mono">{secret}</span>
+            ) : (
+              <span className="font-mono text-sm text-muted-foreground">{maskValue(secret)}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+            <Button variant="ghost" size="icon" onClick={() => toggleReveal('totp')} className="h-7 w-7">
+              {revealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => handleCopy('totp', secret)} className="h-7 w-7">
+              {copiedField === 'totp' ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderField = (key: string, value: string) => {
+    // TOTP fields get special rendering with live code generation
+    if (key === 'totp' && value && isValidTOTPSecret(value)) {
+      return renderTotpField(value);
+    }
+
     const sensitive = isSensitive(key);
     return (
       <div key={key} className="flex items-center gap-2 py-1.5 group">
