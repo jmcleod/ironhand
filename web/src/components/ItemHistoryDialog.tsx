@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button';
 import { getItemHistory, getHistoryVersion } from '@/lib/api';
 import { HistoryEntry, VaultItem, itemName, userFields, SENSITIVE_FIELDS } from '@/types/vault';
 import { useToast } from '@/hooks/use-toast';
-import { ArrowLeft, Clock, Eye, EyeOff, Copy, Check } from 'lucide-react';
+import { ArrowLeft, Clock, Eye, EyeOff, Copy, Check, Paperclip, Download } from 'lucide-react';
+import { itemAttachments, formatFileSize, attachmentFieldName, AttachmentInfo } from '@/types/vault';
 
 interface ItemHistoryDialogProps {
   open: boolean;
@@ -76,6 +77,30 @@ export default function ItemHistoryDialog({ open, onOpenChange, vaultId, item }:
     navigator.clipboard.writeText(value);
     setCopiedField(fieldName);
     setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleDownloadAttachment = (filename: string, base64Data: string, contentType: string) => {
+    try {
+      const binary = atob(base64Data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: 'Download failed', description: 'Could not decode attachment data.', variant: 'destructive' });
+    }
+  };
+
+  const versionAttachments = (fields: Record<string, string>): AttachmentInfo[] => {
+    const syntheticItem = { id: '', fields };
+    return itemAttachments(syntheticItem);
   };
 
   const isSensitive = (name: string) => SENSITIVE_FIELDS.has(name);
@@ -207,6 +232,34 @@ export default function ItemHistoryDialog({ open, onOpenChange, vaultId, item }:
             </div>
           ))}
         </div>
+
+        {(() => {
+          const atts = versionAttachments(versionFields);
+          if (atts.length === 0) return null;
+          return (
+            <div className="mt-4">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">Attachments</span>
+              <div className="space-y-1.5">
+                {atts.map((att) => (
+                  <div key={att.filename} className="flex items-center gap-2 p-2 rounded bg-muted group">
+                    <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <span className="text-sm flex-1 truncate">{att.filename}</span>
+                    <span className="text-xs text-muted-foreground">{formatFileSize(att.meta.size)}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                      onClick={() => handleDownloadAttachment(att.filename, versionFields[attachmentFieldName(att.filename)], att.meta.content_type)}
+                      title="Download"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   };

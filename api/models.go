@@ -74,17 +74,25 @@ type ListItemsResponse struct {
 }
 
 // PutItemRequest is the JSON body for POST /vaults/{vaultID}/items/{itemID}.
+//
+// Attachments are stored as fields with special prefixes:
+//   - "_att.<filename>": base64-encoded binary content (max 768 KiB decoded)
+//   - "_attmeta.<filename>": JSON metadata string (content_type, size)
+//
+// Each attachment consumes two fields toward the MaxFieldCount limit.
 type PutItemRequest struct {
 	Fields map[string]string `json:"fields"`
 }
 
 // GetItemResponse is returned from GET /vaults/{vaultID}/items/{itemID}.
+// Attachment content fields ("_att.*") are base64-encoded; all other fields are plain strings.
 type GetItemResponse struct {
 	ItemID string            `json:"item_id"`
 	Fields map[string]string `json:"fields"`
 }
 
 // UpdateItemRequest is the JSON body for PUT /vaults/{vaultID}/items/{itemID}.
+// See [PutItemRequest] for attachment field conventions.
 type UpdateItemRequest struct {
 	Fields map[string]string `json:"fields"`
 }

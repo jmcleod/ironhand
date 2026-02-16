@@ -40,7 +40,7 @@ interface VaultContextType {
   deleteVault: (vaultId: string) => Promise<void>;
   addItem: (vaultId: string, name: string, type: ItemType, fields: Record<string, string>) => Promise<void>;
   removeItem: (vaultId: string, itemId: string) => Promise<void>;
-  updateItem: (vaultId: string, itemId: string, fields: Record<string, string>) => Promise<void>;
+  updateItem: (vaultId: string, itemId: string, fields: Record<string, string>, removeKeys?: string[]) => Promise<void>;
   shareVault: (vaultId: string, memberID: string, pubKey: string, role: 'owner' | 'writer' | 'reader') => Promise<void>;
   revokeMember: (vaultId: string, memberID: string) => Promise<void>;
 }
@@ -175,7 +175,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updateItem = useCallback(
-    async (vaultID: string, itemID: string, fields: Record<string, string>) => {
+    async (vaultID: string, itemID: string, fields: Record<string, string>, removeKeys?: string[]) => {
       const existing = vaults.find((v) => v.id === vaultID)?.items.find((i) => i.id === itemID);
       if (!existing) {
         return;
@@ -185,6 +185,11 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         ...fields,
         [FIELD_UPDATED]: new Date().toISOString(),
       };
+      if (removeKeys) {
+        for (const key of removeKeys) {
+          delete merged[key];
+        }
+      }
       await apiUpdateItem(vaultID, itemID, merged);
       await refresh();
     },

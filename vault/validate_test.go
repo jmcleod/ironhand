@@ -80,6 +80,52 @@ func TestValidateFieldName(t *testing.T) {
 	})
 }
 
+func TestValidateAttachmentFilename(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		assert.NoError(t, validateAttachmentFilename("id_rsa"))
+		assert.NoError(t, validateAttachmentFilename("document.pdf"))
+		assert.NoError(t, validateAttachmentFilename("my-key.pem"))
+		assert.NoError(t, validateAttachmentFilename("file with spaces.txt"))
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		err := validateAttachmentFilename("")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "must not be empty")
+	})
+
+	t.Run("too long", func(t *testing.T) {
+		long := strings.Repeat("a", MaxFilenameLength+1)
+		err := validateAttachmentFilename(long)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds maximum length")
+	})
+
+	t.Run("path traversal with double dots", func(t *testing.T) {
+		err := validateAttachmentFilename("../etc/passwd")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "forbidden")
+	})
+
+	t.Run("forward slash", func(t *testing.T) {
+		err := validateAttachmentFilename("path/file.txt")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "forbidden character")
+	})
+
+	t.Run("backslash", func(t *testing.T) {
+		err := validateAttachmentFilename("path\\file.txt")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "forbidden character")
+	})
+
+	t.Run("control character", func(t *testing.T) {
+		err := validateAttachmentFilename("file\x00name")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "control character")
+	})
+}
+
 func TestValidateFields(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
 		assert.NoError(t, validateFields(Fields{"username": []byte("admin"), "password": []byte("secret")}))
@@ -105,5 +151,37 @@ func TestValidateFields(t *testing.T) {
 		err := validateFields(Fields{"big": make([]byte, MaxFieldSize+1)})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "exceeds maximum")
+	})
+
+	t.Run("valid attachment fields", func(t *testing.T) {
+		assert.NoError(t, validateFields(Fields{
+			"_att.id_rsa":     make([]byte, 100),
+			"_attmeta.id_rsa": []byte(`{"content_type":"application/octet-stream","size":100}`),
+		}))
+	})
+
+	t.Run("attachment too large", func(t *testing.T) {
+		err := validateFields(Fields{
+			"_att.big.bin": make([]byte, MaxAttachmentSize+1),
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "attachment")
+		assert.Contains(t, err.Error(), "exceeds maximum")
+	})
+
+	t.Run("attachment with bad filename", func(t *testing.T) {
+		err := validateFields(Fields{
+			"_att.../etc/passwd": []byte("data"),
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "forbidden")
+	})
+
+	t.Run("attachment meta with bad filename", func(t *testing.T) {
+		err := validateFields(Fields{
+			"_attmeta.../etc/passwd": []byte("data"),
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "forbidden")
 	})
 }

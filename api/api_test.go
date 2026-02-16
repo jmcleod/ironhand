@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -473,6 +474,119 @@ func TestLoginRateLimiting(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
 	assert.NotEmpty(t, resp.Header.Get("Retry-After"))
+}
+
+func TestAttachmentRoundTrip(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	// Create vault.
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "AttVault",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	// Create item with attachment.
+	rawContent := []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nfake key content\n-----END OPENSSH PRIVATE KEY-----\n")
+	b64Content := base64.StdEncoding.EncodeToString(rawContent)
+	metaJSON := `{"content_type":"application/octet-stream","size":` + fmt.Sprint(len(rawContent)) + `}`
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+	resp = doJSON(t, client, http.MethodPost, base+"/items/ssh-key", map[string]any{
+		"fields": map[string]string{
+			"_name":           "My SSH Key",
+			"_type":           "custom",
+			"_att.id_rsa":     b64Content,
+			"_attmeta.id_rsa": metaJSON,
+			"note":            "server key",
+		},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	// Get item back and verify round-trip.
+	resp = doJSON(t, client, http.MethodGet, base+"/items/ssh-key", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var getResp api.GetItemResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&getResp))
+
+	// Attachment content should round-trip through base64.
+	decoded, err := base64.StdEncoding.DecodeString(getResp.Fields["_att.id_rsa"])
+	require.NoError(t, err)
+	assert.Equal(t, rawContent, decoded)
+
+	// Metadata should be a plain string (not base64-encoded).
+	assert.Equal(t, metaJSON, getResp.Fields["_attmeta.id_rsa"])
+
+	// Regular text fields should be unchanged.
+	assert.Equal(t, "My SSH Key", getResp.Fields["_name"])
+	assert.Equal(t, "server key", getResp.Fields["note"])
+}
+
+func TestAttachmentInvalidBase64(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "V",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	// Send invalid base64 in attachment field.
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+	resp = doJSON(t, client, http.MethodPost, base+"/items/bad-att", map[string]any{
+		"fields": map[string]string{
+			"_att.file.bin": "!!!not-valid-base64!!!",
+		},
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestAttachmentTooLarge(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "V",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	// Create data that exceeds MaxAttachmentSize (768 KiB).
+	oversized := make([]byte, 769*1024)
+	b64 := base64.StdEncoding.EncodeToString(oversized)
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+	resp = doJSON(t, client, http.MethodPost, base+"/items/big-att", map[string]any{
+		"fields": map[string]string{
+			"_att.huge.bin": b64,
+		},
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestRegisterRejectsShortPassphrase(t *testing.T) {

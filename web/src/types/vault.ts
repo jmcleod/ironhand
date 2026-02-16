@@ -53,6 +53,90 @@ export function userFields(item: VaultItem): Record<string, string> {
 // Field names that should be masked by default
 export const SENSITIVE_FIELDS = new Set(['password', 'cvv', 'card_number', 'totp']);
 
+// ---------------------------------------------------------------------------
+// Attachment helpers
+// ---------------------------------------------------------------------------
+
+/** Field name prefix for attachment binary content (base64-encoded in API). */
+export const ATTACHMENT_PREFIX = '_att.';
+/** Field name prefix for attachment metadata JSON. */
+export const ATTACHMENT_META_PREFIX = '_attmeta.';
+/** Maximum raw file size in bytes (768 KiB). */
+export const MAX_ATTACHMENT_SIZE = 768 * 1024;
+/** Maximum filename length (field name limit minus longest prefix). */
+export const MAX_FILENAME_LENGTH = 119;
+
+export function isAttachmentField(name: string): boolean {
+  return name.startsWith(ATTACHMENT_PREFIX);
+}
+
+export function isAttachmentMetaField(name: string): boolean {
+  return name.startsWith(ATTACHMENT_META_PREFIX);
+}
+
+export function attachmentFilename(fieldName: string): string {
+  if (fieldName.startsWith(ATTACHMENT_PREFIX)) {
+    return fieldName.slice(ATTACHMENT_PREFIX.length);
+  }
+  if (fieldName.startsWith(ATTACHMENT_META_PREFIX)) {
+    return fieldName.slice(ATTACHMENT_META_PREFIX.length);
+  }
+  return '';
+}
+
+export function attachmentFieldName(filename: string): string {
+  return `${ATTACHMENT_PREFIX}${filename}`;
+}
+
+export function attachmentMetaFieldName(filename: string): string {
+  return `${ATTACHMENT_META_PREFIX}${filename}`;
+}
+
+/** Sanitize a user-provided filename for use as an attachment field name. */
+export function sanitizeFilename(name: string): string {
+  // Strip path components.
+  let base = name.replace(/^.*[/\\]/, '');
+  // Replace forbidden characters (colons, double dots).
+  base = base.replace(/\.\./g, '_').replace(/[/:]/g, '_');
+  return base.slice(0, MAX_FILENAME_LENGTH) || 'unnamed';
+}
+
+/** Format a byte count for human display. */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export interface AttachmentMeta {
+  content_type: string;
+  size: number;
+}
+
+export interface AttachmentInfo {
+  filename: string;
+  meta: AttachmentMeta;
+  dataFieldName: string;
+}
+
+/** Extract all attachments from an item's fields as a structured list. */
+export function itemAttachments(item: VaultItem): AttachmentInfo[] {
+  const result: AttachmentInfo[] = [];
+  for (const [key, value] of Object.entries(item.fields)) {
+    if (isAttachmentMetaField(key)) {
+      const filename = attachmentFilename(key);
+      const dataFieldName = attachmentFieldName(filename);
+      try {
+        const meta: AttachmentMeta = JSON.parse(value);
+        result.push({ filename, meta, dataFieldName });
+      } catch {
+        // Skip malformed metadata.
+      }
+    }
+  }
+  return result;
+}
+
 export interface VaultProfile {
   vaultID: string;
   credentials: string;

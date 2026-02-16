@@ -1,4 +1,4 @@
-import { Vault, VaultItem, ItemType, itemName, itemType, userFields, SENSITIVE_FIELDS } from '@/types/vault';
+import { Vault, VaultItem, ItemType, itemName, itemType, userFields, SENSITIVE_FIELDS, isAttachmentMetaField, attachmentFilename } from '@/types/vault';
 
 export interface SearchResult {
   vault: Vault;
@@ -63,6 +63,19 @@ export function searchItems(
           break;
         }
       }
+      // Match against attachment filenames.
+      if (!matched) {
+        for (const key of Object.keys(item.fields)) {
+          if (isAttachmentMetaField(key)) {
+            const filename = attachmentFilename(key);
+            if (filename.toLowerCase().includes(q)) {
+              matched = true;
+              break;
+            }
+          }
+        }
+      }
+
       if (matched) {
         results.push({ vault, item });
       }

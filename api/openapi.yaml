@@ -141,7 +141,12 @@ components:
           type: object
           additionalProperties:
             type: string
-          description: Map of field name to plaintext value.
+          description: >
+            Map of field name to value. Text fields are plain strings.
+            Attachment fields use special prefixes:
+            "_att.<filename>" for base64-encoded binary content (max 768 KiB decoded),
+            "_attmeta.<filename>" for JSON metadata (content_type, size).
+            Each attachment uses 2 fields toward the 64-field limit.
 
     GetItemResponse:
       type: object
@@ -152,7 +157,9 @@ components:
           type: object
           additionalProperties:
             type: string
-          description: Map of field name to plaintext value.
+          description: >
+            Map of field name to value. Text fields are plain strings.
+            Attachment content fields ("_att.*") are base64-encoded.
 
     UpdateItemRequest:
       type: object
@@ -163,7 +170,9 @@ components:
           type: object
           additionalProperties:
             type: string
-          description: Map of field name to plaintext value.
+          description: >
+            Map of field name to value. Text fields are plain strings.
+            See PutItemRequest for attachment field conventions.
 
     AddMemberRequest:
       type: object
@@ -222,7 +231,9 @@ components:
           type: object
           additionalProperties:
             type: string
-          description: Map of field name to plaintext value at this version.
+          description: >
+            Map of field name to value at this version. Text fields are plain strings.
+            Attachment content fields ("_att.*") are base64-encoded.
 
     AuditEntryResponse:
       type: object

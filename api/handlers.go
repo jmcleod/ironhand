@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -17,18 +18,34 @@ import (
 	"github.com/jmcleod/ironhand/vault"
 )
 
-func fieldsFromAPI(apiFields map[string]string) vault.Fields {
+func fieldsFromAPI(apiFields map[string]string) (vault.Fields, error) {
 	fields := make(vault.Fields, len(apiFields))
 	for k, v := range apiFields {
-		fields[k] = []byte(v)
+		if vault.IsAttachmentField(k) {
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid base64 in attachment field %q: %w", k, err)
+			}
+			if len(decoded) > vault.MaxAttachmentSize {
+				return nil, fmt.Errorf("attachment %q exceeds maximum size of %d bytes",
+					vault.AttachmentFilename(k), vault.MaxAttachmentSize)
+			}
+			fields[k] = decoded
+		} else {
+			fields[k] = []byte(v)
+		}
 	}
-	return fields
+	return fields, nil
 }
 
 func fieldsToAPI(fields vault.Fields) map[string]string {
 	apiFields := make(map[string]string, len(fields))
 	for k, v := range fields {
-		apiFields[k] = string(v)
+		if vault.IsAttachmentField(k) {
+			apiFields[k] = base64.StdEncoding.EncodeToString(v)
+		} else {
+			apiFields[k] = string(v)
+		}
 	}
 	return apiFields
 }
@@ -150,7 +167,12 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	if err := session.Put(r.Context(), itemID, fieldsFromAPI(req.Fields)); err != nil {
+	fields, err := fieldsFromAPI(req.Fields)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := session.Put(r.Context(), itemID, fields); err != nil {
 		mapError(w, err)
 		return
 	}
@@ -215,7 +237,12 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	if err := session.Update(r.Context(), itemID, fieldsFromAPI(req.Fields)); err != nil {
+	fields, err := fieldsFromAPI(req.Fields)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := session.Update(r.Context(), itemID, fields); err != nil {
 		mapError(w, err)
 		return
 	}

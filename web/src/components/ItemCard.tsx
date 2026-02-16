@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { VaultItem, itemName, itemType, itemUpdatedAt, userFields, SENSITIVE_FIELDS } from '@/types/vault';
+import { VaultItem, itemName, itemType, itemUpdatedAt, userFields, SENSITIVE_FIELDS, itemAttachments, formatFileSize } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Pencil, History, AlertTriangle } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Pencil, History, AlertTriangle, Paperclip, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import EditItemDialog from '@/components/EditItemDialog';
@@ -49,6 +49,27 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
     navigator.clipboard.writeText(value);
     setCopiedField(fieldName);
     setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleDownload = (filename: string, base64Data: string, contentType: string) => {
+    try {
+      const binary = atob(base64Data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: contentType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: 'Download failed', description: 'Could not decode attachment.', variant: 'destructive' });
+    }
   };
 
   const handleDelete = async () => {
@@ -251,6 +272,35 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
             {fieldEntries.map(([key, value]) => renderField(key, value))}
           </div>
         )}
+        {(() => {
+          const atts = itemAttachments(item);
+          if (atts.length === 0) return null;
+          return (
+            <div className="mt-3 pt-3 border-t border-border/50">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-2">
+                Attachments
+              </span>
+              <div className="space-y-1.5">
+                {atts.map(({ filename, meta, dataFieldName }) => (
+                  <div key={filename} className="flex items-center gap-2 py-1 group">
+                    <Paperclip className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-sm text-foreground flex-1 truncate">{filename}</span>
+                    <span className="text-xs text-muted-foreground">{formatFileSize(meta.size)}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => handleDownload(filename, item.fields[dataFieldName], meta.content_type)}
+                      title="Download"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       <EditItemDialog open={editOpen} onOpenChange={setEditOpen} vaultId={vaultId} item={item} />

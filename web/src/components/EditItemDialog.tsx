@@ -9,7 +9,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import PasswordGenerator from '@/components/PasswordGenerator';
 import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
 import { useToast } from '@/hooks/use-toast';
-import { Eye, EyeOff, Plus, Wand2, X } from 'lucide-react';
+import { Eye, EyeOff, Plus, Wand2, X, Paperclip, Upload } from 'lucide-react';
+import { MAX_ATTACHMENT_SIZE, sanitizeFilename, formatFileSize, attachmentFieldName, attachmentMetaFieldName, itemAttachments, AttachmentInfo } from '@/types/vault';
 
 interface EditItemDialogProps {
   open: boolean;
@@ -56,6 +57,11 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
   // Custom fields
   const [customFields, setCustomFields] = useState<CustomField[]>([{ key: '', value: '' }]);
 
+  // Attachments
+  const [existingAttachments, setExistingAttachments] = useState<AttachmentInfo[]>([]);
+  const [removedAttachments, setRemovedAttachments] = useState<Set<string>>(new Set());
+  const [newAttachments, setNewAttachments] = useState<File[]>([]);
+
   // Populate form from item when opening
   useEffect(() => {
     if (!open) return;
@@ -63,6 +69,9 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
     setName(itemName(item));
     setShowPassword(false);
     setShowGenerator(false);
+    setExistingAttachments(itemAttachments(item));
+    setRemovedAttachments(new Set());
+    setNewAttachments([]);
 
     switch (type) {
       case 'login':
@@ -127,14 +136,67 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
   const canSave = () => {
     if (!name.trim()) return false;
     const fields = buildFields();
-    return Object.keys(fields).length > 0;
+    const keptAttachments = existingAttachments.filter(a => !removedAttachments.has(a.filename));
+    return Object.keys(fields).length > 0 || keptAttachments.length > 0 || newAttachments.length > 0;
+  };
+
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const bytes = new Uint8Array(reader.result as ArrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        resolve(btoa(binary));
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
+  const deduplicateFilename = (filename: string, existingNames: Set<string>): string => {
+    if (!existingNames.has(filename)) return filename;
+    const dotIndex = filename.lastIndexOf('.');
+    const base = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
+    const ext = dotIndex > 0 ? filename.slice(dotIndex) : '';
+    let counter = 2;
+    while (existingNames.has(`${base} (${counter})${ext}`)) counter++;
+    return `${base} (${counter})${ext}`;
   };
 
   const handleSave = async () => {
     if (!canSave()) return;
     setSaving(true);
     try {
-      await updateItem(vaultId, item.id, { ...buildFields(), _name: name.trim() });
+      const fields: Record<string, string> = { ...buildFields(), _name: name.trim() };
+
+      // Add new attachment fields.
+      const usedNames = new Set(
+        existingAttachments
+          .filter(a => !removedAttachments.has(a.filename))
+          .map(a => a.filename),
+      );
+      for (const file of newAttachments) {
+        const safeName = deduplicateFilename(sanitizeFilename(file.name), usedNames);
+        usedNames.add(safeName);
+        const b64 = await readFileAsBase64(file);
+        fields[attachmentFieldName(safeName)] = b64;
+        fields[attachmentMetaFieldName(safeName)] = JSON.stringify({
+          content_type: file.type || 'application/octet-stream',
+          size: file.size,
+        });
+      }
+
+      // Build list of field keys to remove (for deleted attachments).
+      const removeKeys: string[] = [];
+      for (const filename of removedAttachments) {
+        removeKeys.push(attachmentFieldName(filename));
+        removeKeys.push(attachmentMetaFieldName(filename));
+      }
+
+      await updateItem(vaultId, item.id, fields, removeKeys.length > 0 ? removeKeys : undefined);
       onOpenChange(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to update item.';
@@ -142,6 +204,38 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        toast({
+          title: 'File too large',
+          description: `${file.name} exceeds the ${Math.round(MAX_ATTACHMENT_SIZE / 1024)} KB limit.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+    setNewAttachments(prev => [...prev, ...files]);
+    e.target.value = '';
+  };
+
+  const removeNewAttachment = (index: number) => {
+    setNewAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const toggleRemoveExisting = (filename: string) => {
+    setRemovedAttachments(prev => {
+      const next = new Set(prev);
+      if (next.has(filename)) {
+        next.delete(filename);
+      } else {
+        next.add(filename);
+      }
+      return next;
+    });
   };
 
   const addCustomField = () => {
@@ -295,6 +389,53 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
             <Input value={name} onChange={e => setName(e.target.value)} placeholder="Item name" className={FIELD} />
           </div>
           {renderTypeFields()}
+          <div>
+            <label className={LABEL}>Attachments</label>
+            {/* Existing attachments */}
+            {existingAttachments.length > 0 && (
+              <div className="space-y-2 mb-2">
+                {existingAttachments.map(att => {
+                  const removed = removedAttachments.has(att.filename);
+                  return (
+                    <div key={att.filename} className={`flex items-center gap-2 p-2 rounded bg-muted text-sm ${removed ? 'opacity-50' : ''}`}>
+                      <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <span className={`flex-1 truncate ${removed ? 'line-through' : ''}`}>{att.filename}</span>
+                      <span className="text-xs text-muted-foreground">{formatFileSize(att.meta.size)}</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => toggleRemoveExisting(att.filename)}
+                        className="h-7 w-7 shrink-0"
+                        title={removed ? 'Restore' : 'Remove'}
+                      >
+                        <X className={`h-3.5 w-3.5 ${removed ? 'text-primary' : 'text-destructive'}`} />
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* New attachments */}
+            {newAttachments.length > 0 && (
+              <div className="space-y-2 mb-2">
+                {newAttachments.map((file, i) => (
+                  <div key={`new-${i}`} className="flex items-center gap-2 p-2 rounded bg-muted text-sm border border-primary/20">
+                    <Paperclip className="h-4 w-4 text-primary shrink-0" />
+                    <span className="flex-1 truncate">{file.name}</span>
+                    <span className="text-xs text-muted-foreground">{formatFileSize(file.size)}</span>
+                    <Button variant="ghost" size="icon" onClick={() => removeNewAttachment(i)} className="h-7 w-7 shrink-0">
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label className="flex items-center justify-center gap-2 p-3 border border-dashed border-border rounded-lg cursor-pointer hover:bg-accent/50 transition-colors text-sm text-muted-foreground">
+              <Upload className="h-4 w-4" />
+              Add files (max {Math.round(MAX_ATTACHMENT_SIZE / 1024)} KB each)
+              <input type="file" multiple className="hidden" onChange={handleFileSelect} />
+            </label>
+          </div>
           <Button className="w-full" onClick={handleSave} disabled={saving || !canSave()}>
             {saving ? 'Saving...' : 'Save Changes'}
           </Button>

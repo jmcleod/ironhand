@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -47,6 +48,30 @@ func validateFieldName(name string) error {
 	return nil
 }
 
+func validateAttachmentFilename(filename string) error {
+	if filename == "" {
+		return validationErrorf("attachment filename must not be empty")
+	}
+	if len(filename) > MaxFilenameLength {
+		return validationErrorf("attachment filename exceeds maximum length of %d", MaxFilenameLength)
+	}
+	if !utf8.ValidString(filename) {
+		return validationErrorf("attachment filename contains invalid UTF-8")
+	}
+	if strings.Contains(filename, "..") {
+		return validationErrorf("attachment filename contains forbidden sequence %q", "..")
+	}
+	for _, r := range filename {
+		if r == '/' || r == '\\' {
+			return validationErrorf("attachment filename contains forbidden character %q", r)
+		}
+		if unicode.IsControl(r) {
+			return validationErrorf("attachment filename contains control character")
+		}
+	}
+	return nil
+}
+
 func validateFields(fields Fields) error {
 	if len(fields) == 0 {
 		return validationErrorf("item must have at least one field")
@@ -60,6 +85,21 @@ func validateFields(fields Fields) error {
 		}
 		if len(value) > MaxFieldSize {
 			return validationErrorf("field %q size %d exceeds maximum of %d bytes", name, len(value), MaxFieldSize)
+		}
+		// Attachment-specific validation.
+		if IsAttachmentField(name) {
+			if err := validateAttachmentFilename(AttachmentFilename(name)); err != nil {
+				return err
+			}
+			if len(value) > MaxAttachmentSize {
+				return validationErrorf("attachment %q size %d exceeds maximum of %d bytes",
+					AttachmentFilename(name), len(value), MaxAttachmentSize)
+			}
+		}
+		if IsAttachmentMetaField(name) {
+			if err := validateAttachmentFilename(AttachmentFilename(name)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

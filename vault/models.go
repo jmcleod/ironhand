@@ -3,6 +3,7 @@
 package vault
 
 import (
+	"strings"
 	"time"
 
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
@@ -117,6 +118,39 @@ const (
 	MaxFieldSize       = 1 << 20 // 1MB per field
 	MaxHistoryVersions = 100
 )
+
+// Attachment field conventions.
+// Attachments are stored as regular encrypted fields using dot-separated prefixes:
+//   - "_att.<filename>": raw binary content (base64-encoded at the API JSON boundary)
+//   - "_attmeta.<filename>": JSON metadata string with content_type and size
+const (
+	AttachmentPrefix     = "_att."
+	AttachmentMetaPrefix = "_attmeta."
+	MaxAttachmentSize    = 768 << 10 // 768 KiB raw (fits in MaxFieldSize after base64 expansion)
+	MaxFilenameLength    = 119       // MaxFieldNameLength - len("_attmeta.")
+)
+
+// IsAttachmentField reports whether the field name holds attachment binary data.
+func IsAttachmentField(name string) bool {
+	return strings.HasPrefix(name, AttachmentPrefix)
+}
+
+// IsAttachmentMetaField reports whether the field name holds attachment metadata JSON.
+func IsAttachmentMetaField(name string) bool {
+	return strings.HasPrefix(name, AttachmentMetaPrefix)
+}
+
+// AttachmentFilename extracts the filename from an attachment or attachment-metadata field name.
+// Returns the empty string if the field is not an attachment field.
+func AttachmentFilename(name string) string {
+	if strings.HasPrefix(name, AttachmentPrefix) {
+		return name[len(AttachmentPrefix):]
+	}
+	if strings.HasPrefix(name, AttachmentMetaPrefix) {
+		return name[len(AttachmentMetaPrefix):]
+	}
+	return ""
+}
 
 // Record types for storage
 const (

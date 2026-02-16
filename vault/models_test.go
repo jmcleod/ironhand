@@ -8,6 +8,32 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestIsAttachmentField(t *testing.T) {
+	assert.True(t, IsAttachmentField("_att.test.pdf"))
+	assert.True(t, IsAttachmentField("_att.id_rsa"))
+	assert.False(t, IsAttachmentField("_attmeta.test.pdf"))
+	assert.False(t, IsAttachmentField("password"))
+	assert.False(t, IsAttachmentField("_att"))
+	assert.False(t, IsAttachmentField(""))
+}
+
+func TestIsAttachmentMetaField(t *testing.T) {
+	assert.True(t, IsAttachmentMetaField("_attmeta.test.pdf"))
+	assert.True(t, IsAttachmentMetaField("_attmeta.id_rsa"))
+	assert.False(t, IsAttachmentMetaField("_att.test.pdf"))
+	assert.False(t, IsAttachmentMetaField("password"))
+	assert.False(t, IsAttachmentMetaField("_attmeta"))
+	assert.False(t, IsAttachmentMetaField(""))
+}
+
+func TestAttachmentFilename(t *testing.T) {
+	assert.Equal(t, "test.pdf", AttachmentFilename("_att.test.pdf"))
+	assert.Equal(t, "test.pdf", AttachmentFilename("_attmeta.test.pdf"))
+	assert.Equal(t, "my-key.pem", AttachmentFilename("_att.my-key.pem"))
+	assert.Equal(t, "", AttachmentFilename("password"))
+	assert.Equal(t, "", AttachmentFilename(""))
+}
+
 func TestNewVaultState(t *testing.T) {
 	vaultID := "test-vault"
 

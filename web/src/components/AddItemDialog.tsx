@@ -10,7 +10,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import PasswordGenerator from '@/components/PasswordGenerator';
 import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
 import { useToast } from '@/hooks/use-toast';
-import { Eye, EyeOff, Plus, Wand2, X } from 'lucide-react';
+import { Eye, EyeOff, Plus, Wand2, X, Paperclip, Upload } from 'lucide-react';
+import { MAX_ATTACHMENT_SIZE, sanitizeFilename, formatFileSize, attachmentFieldName, attachmentMetaFieldName } from '@/types/vault';
 
 interface AddItemDialogProps {
   open: boolean;
@@ -56,6 +57,9 @@ export default function AddItemDialog({ open, onOpenChange, vaultId }: AddItemDi
   // Custom fields
   const [customFields, setCustomFields] = useState<CustomField[]>([{ key: '', value: '' }]);
 
+  // Attachments
+  const [attachments, setAttachments] = useState<File[]>([]);
+
   const resetForm = () => {
     setName('');
     setType('login');
@@ -73,6 +77,7 @@ export default function AddItemDialog({ open, onOpenChange, vaultId }: AddItemDi
     setCvv('');
     setCardNotes('');
     setCustomFields([{ key: '', value: '' }]);
+    setAttachments([]);
   };
 
   const buildFields = (): Record<string, string> => {
@@ -112,14 +117,55 @@ export default function AddItemDialog({ open, onOpenChange, vaultId }: AddItemDi
   const canSave = () => {
     if (!name.trim()) return false;
     const fields = buildFields();
-    return Object.keys(fields).length > 0;
+    return Object.keys(fields).length > 0 || attachments.length > 0;
+  };
+
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const bytes = new Uint8Array(reader.result as ArrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        resolve(btoa(binary));
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
+  const deduplicateFilename = (filename: string, existingNames: Set<string>): string => {
+    if (!existingNames.has(filename)) return filename;
+    const dotIndex = filename.lastIndexOf('.');
+    const base = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
+    const ext = dotIndex > 0 ? filename.slice(dotIndex) : '';
+    let counter = 2;
+    while (existingNames.has(`${base} (${counter})${ext}`)) counter++;
+    return `${base} (${counter})${ext}`;
   };
 
   const handleAdd = async () => {
     if (!canSave()) return;
     setSaving(true);
     try {
-      await addItem(vaultId, name.trim(), type, buildFields());
+      const fields = buildFields();
+
+      // Encode attachments.
+      const usedNames = new Set<string>();
+      for (const file of attachments) {
+        const safeName = deduplicateFilename(sanitizeFilename(file.name), usedNames);
+        usedNames.add(safeName);
+        const b64 = await readFileAsBase64(file);
+        fields[attachmentFieldName(safeName)] = b64;
+        fields[attachmentMetaFieldName(safeName)] = JSON.stringify({
+          content_type: file.type || 'application/octet-stream',
+          size: file.size,
+        });
+      }
+
+      await addItem(vaultId, name.trim(), type, fields);
       resetForm();
       onOpenChange(false);
     } catch (err) {
@@ -128,6 +174,26 @@ export default function AddItemDialog({ open, onOpenChange, vaultId }: AddItemDi
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        toast({
+          title: 'File too large',
+          description: `${file.name} exceeds the ${Math.round(MAX_ATTACHMENT_SIZE / 1024)} KB limit.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+    setAttachments(prev => [...prev, ...files]);
+    e.target.value = '';
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
   const addCustomField = () => {
@@ -298,6 +364,28 @@ export default function AddItemDialog({ open, onOpenChange, vaultId }: AddItemDi
             </Select>
           </div>
           {renderTypeFields()}
+          <div>
+            <label className={LABEL}>Attachments</label>
+            {attachments.length > 0 && (
+              <div className="space-y-2 mb-2">
+                {attachments.map((file, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 rounded bg-muted text-sm">
+                    <Paperclip className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <span className="flex-1 truncate">{file.name}</span>
+                    <span className="text-xs text-muted-foreground">{formatFileSize(file.size)}</span>
+                    <Button variant="ghost" size="icon" onClick={() => removeAttachment(i)} className="h-7 w-7 shrink-0">
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label className="flex items-center justify-center gap-2 p-3 border border-dashed border-border rounded-lg cursor-pointer hover:bg-accent/50 transition-colors text-sm text-muted-foreground">
+              <Upload className="h-4 w-4" />
+              Choose files (max {Math.round(MAX_ATTACHMENT_SIZE / 1024)} KB each)
+              <input type="file" multiple className="hidden" onChange={handleFileSelect} />
+            </label>
+          </div>
           <Button className="w-full" onClick={handleAdd} disabled={saving || !canSave()}>
             {saving ? 'Adding...' : 'Add Item'}
           </Button>

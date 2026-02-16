@@ -174,6 +174,49 @@ describe('searchItems', () => {
   });
 });
 
+describe('searchItems with attachments', () => {
+  const attachmentItem = makeItem('item-att', {
+    _name: 'SSH Keys',
+    _type: 'custom',
+    _created: '2024-01-01T00:00:00Z',
+    _updated: '2024-01-01T00:00:00Z',
+    '_att.id_rsa': 'base64binarydata',
+    '_attmeta.id_rsa': '{"content_type":"application/octet-stream","size":1234}',
+    note: 'my server key',
+  });
+  const attVault = makeVault('vault-att', 'Keys', [attachmentItem]);
+
+  it('does NOT match by attachment binary content', () => {
+    const results = searchItems([attVault], 'base64binary', 'all');
+    expect(results).toHaveLength(0);
+  });
+
+  it('matches item with attachment by name', () => {
+    const results = searchItems([attVault], 'SSH Keys', 'all');
+    expect(results).toHaveLength(1);
+    expect(results[0].item.id).toBe('item-att');
+  });
+
+  it('matches item with attachment by user field', () => {
+    const results = searchItems([attVault], 'server key', 'all');
+    expect(results).toHaveLength(1);
+    expect(results[0].item.id).toBe('item-att');
+  });
+
+  it('matches item by attachment filename', () => {
+    const results = searchItems([attVault], 'id_rsa', 'all');
+    expect(results).toHaveLength(1);
+    expect(results[0].item.id).toBe('item-att');
+  });
+
+  it('does NOT match by attachment metadata JSON content', () => {
+    // Searching for "octet-stream" should not match — meta values are not searched,
+    // only filenames are.
+    const results = searchItems([attVault], 'octet-stream', 'all');
+    expect(results).toHaveLength(0);
+  });
+});
+
 describe('groupResultsByVault', () => {
   it('groups results by vault', () => {
     const results = searchItems(allVaults, '', 'all');
