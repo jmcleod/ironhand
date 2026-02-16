@@ -1,12 +1,22 @@
-import { useState } from 'react';
-import { Vault } from '@/types/vault';
+import { useEffect, useMemo, useState } from 'react';
+import { Vault, ItemType } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { ArrowLeft, Plus, Trash2, Share2, FileText } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import ItemCard from '@/components/ItemCard';
 import AddItemDialog from '@/components/AddItemDialog';
 import ShareDialog from '@/components/ShareDialog';
 import { useToast } from '@/hooks/use-toast';
+import { searchItems } from '@/lib/search';
+
+const TYPE_FILTERS: { value: ItemType | 'all'; label: string; icon?: React.ReactNode }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'login', label: 'Login', icon: <KeyRound className="h-3 w-3" /> },
+  { value: 'note', label: 'Note', icon: <StickyNote className="h-3 w-3" /> },
+  { value: 'card', label: 'Card', icon: <CreditCard className="h-3 w-3" /> },
+  { value: 'custom', label: 'Custom', icon: <Box className="h-3 w-3" /> },
+];
 
 interface VaultDetailProps {
   vault: Vault;
@@ -18,6 +28,22 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
   const { toast } = useToast();
   const [showAddItem, setShowAddItem] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all');
+
+  // Debounce the search input.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 200);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const isFilterActive = debouncedQuery.trim() !== '' || typeFilter !== 'all';
+
+  const filteredItems = useMemo(() => {
+    if (!isFilterActive) return vault.items;
+    return searchItems([vault], debouncedQuery, typeFilter).map((r) => r.item);
+  }, [vault, debouncedQuery, typeFilter, isFilterActive]);
 
   const handleDelete = async () => {
     if (confirm('Delete this vault and all its items?')) {
@@ -74,10 +100,60 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
             </Button>
           </div>
         ) : (
-          <div className="space-y-3 animate-fade-in">
-            {vault.items.map(item => (
-              <ItemCard key={item.id} item={item} vaultId={vault.id} />
-            ))}
+          <div className="animate-fade-in">
+            {/* Search and filter */}
+            <div className="mb-5 space-y-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Filter items..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 pr-9 bg-muted border-border"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => { setSearchQuery(''); setDebouncedQuery(''); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                {TYPE_FILTERS.map((f) => (
+                  <Button
+                    key={f.value}
+                    variant={typeFilter === f.value ? 'default' : 'ghost'}
+                    size="sm"
+                    className="h-7 text-xs px-2.5 gap-1"
+                    onClick={() => setTypeFilter(f.value)}
+                  >
+                    {f.icon}
+                    {f.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            {/* Items list */}
+            {filteredItems.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Search className="h-8 w-8 text-muted-foreground mb-3" />
+                <p className="text-sm text-muted-foreground">No items match your filter.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {isFilterActive && (
+                  <p className="text-xs text-muted-foreground">
+                    {filteredItems.length} of {vault.items.length} items
+                  </p>
+                )}
+                {filteredItems.map(item => (
+                  <ItemCard key={item.id} item={item} vaultId={vault.id} />
+                ))}
+              </div>
+            )}
           </div>
         )}
       </main>

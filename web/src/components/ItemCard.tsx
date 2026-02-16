@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { VaultItem, itemName, itemType, itemUpdatedAt, userFields, SENSITIVE_FIELDS } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Pencil, History } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Pencil, History, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import EditItemDialog from '@/components/EditItemDialog';
 import ItemHistoryDialog from '@/components/ItemHistoryDialog';
 import TotpCodeDisplay from '@/components/TotpCodeDisplay';
+import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
 import { isValidTOTPSecret } from '@/lib/totp';
+import { assessPasswordStrength } from '@/lib/password-strength';
 
 interface ItemCardProps {
   item: VaultItem;
@@ -26,6 +28,8 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
   const name = itemName(item);
   const updatedAt = itemUpdatedAt(item);
   const fields = userFields(item);
+  const passwordStrength = fields.password ? assessPasswordStrength(fields.password) : null;
+  const hasWeakPassword = !!passwordStrength?.isWeak;
 
   const isSensitive = (fieldName: string) => SENSITIVE_FIELDS.has(fieldName);
 
@@ -154,6 +158,32 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
     if (key === 'totp' && value && isValidTOTPSecret(value)) {
       return renderTotpField(value);
     }
+    if (key === 'password') {
+      const sensitive = isSensitive(key);
+      return (
+        <div key={key} className="py-1.5 group">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[100px] shrink-0">
+              {formatFieldLabel(key)}
+            </span>
+            <div className="flex-1 min-w-0">
+              {renderFieldValue(key, value)}
+              <PasswordStrengthIndicator password={value} showGuidance={false} className="max-w-[280px]" />
+            </div>
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              {sensitive && (
+                <Button variant="ghost" size="icon" onClick={() => toggleReveal(key)} className="h-7 w-7">
+                  {revealedFields.has(key) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </Button>
+              )}
+              <Button variant="ghost" size="icon" onClick={() => handleCopy(key, value)} className="h-7 w-7">
+                {copiedField === key ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+              </Button>
+            </div>
+          </div>
+        </div>
+      );
+    }
 
     const sensitive = isSensitive(key);
     return (
@@ -208,6 +238,14 @@ export default function ItemCard({ item, vaultId }: ItemCardProps) {
             </Button>
           </div>
         </div>
+        {hasWeakPassword && (
+          <div className="mb-3 rounded-lg border border-amber-300/40 bg-amber-500/10 px-3 py-2">
+            <p className="text-xs text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Weak password detected for this item. Update it to a stronger password.
+            </p>
+          </div>
+        )}
         {fieldEntries.length > 0 && (
           <div className="divide-y divide-border/50">
             {fieldEntries.map(([key, value]) => renderField(key, value))}
