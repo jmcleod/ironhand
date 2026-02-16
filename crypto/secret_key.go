@@ -12,7 +12,12 @@ import (
 const (
 	secretKeyVersion = 1
 	secretKeyIDLen   = 6
-	secretLength     = 26
+	// secretLength is the number of random characters in the secret portion
+	// of the key. Each character is drawn uniformly from a 30-character
+	// alphabet using crypto/rand, giving approximately log2(30^26) ≈ 127.5
+	// bits of entropy — well above the 128-bit security level when combined
+	// with the passphrase in the two-secret-key MUK derivation scheme.
+	secretLength = 26
 )
 
 var secretKeyRE = regexp.MustCompile(`^V(\d)-([A-Za-z0-9]{6})-([A-Za-z0-9]{6})-([A-Za-z0-9]{5})-([A-Za-z0-9]{5})-([A-Za-z0-9]{5})-([A-Za-z0-9]{5})$`)

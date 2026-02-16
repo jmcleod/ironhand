@@ -22,8 +22,8 @@ export default function EnrollPage({ onSwitchToLogin }: EnrollPageProps) {
   const [acknowledged, setAcknowledged] = useState(false);
 
   const handleRegister = async () => {
-    if (!passphrase || passphrase.length < 8) {
-      toast({ title: 'Passphrase too short', description: 'Use at least 8 characters.', variant: 'destructive' });
+    if (!passphrase || passphrase.length < 10) {
+      toast({ title: 'Passphrase too short', description: 'Use at least 10 characters.', variant: 'destructive' });
       return;
     }
     if (passphrase !== confirmPassphrase) {

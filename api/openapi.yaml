@@ -42,6 +42,8 @@ components:
       properties:
         passphrase:
           type: string
+          minLength: 10
+          description: Master passphrase (minimum 10 characters).
 
     RegisterResponse:
       type: object
@@ -246,6 +248,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          description: Invalid request (e.g. passphrase too short)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /auth/login:
     post:
@@ -262,6 +270,17 @@ paths:
           description: Logged in
         '401':
           description: Invalid credentials
+        '429':
+          description: Too many failed login attempts
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /auth/logout:
     post:

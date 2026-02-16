@@ -377,3 +377,55 @@ func TestItemHistory(t *testing.T) {
 	assert.Equal(t, "bob", getResp.Fields["username"])
 	assert.Equal(t, "pass3", getResp.Fields["password"])
 }
+
+func TestLoginRateLimiting(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	// Register an account first.
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", map[string]string{
+		"passphrase": "rate-limit-test-passphrase",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var reg api.RegisterResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&reg))
+
+	// Send maxFailures wrong-passphrase attempts.
+	for i := 0; i < 5; i++ {
+		resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/login", map[string]string{
+			"passphrase": "wrong-passphrase!!!",
+			"secret_key": reg.SecretKey,
+		})
+		resp.Body.Close()
+		// These should return 401.
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	}
+
+	// The next attempt (even with correct credentials) should be rate-limited.
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/login", map[string]string{
+		"passphrase": "rate-limit-test-passphrase",
+		"secret_key": reg.SecretKey,
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+	assert.NotEmpty(t, resp.Header.Get("Retry-After"))
+}
+
+func TestRegisterRejectsShortPassphrase(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", map[string]string{
+		"passphrase": "short",
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var errResp api.ErrorResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&errResp))
+	assert.Contains(t, errResp.Error, "at least")
+}

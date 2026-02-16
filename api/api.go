@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	_ "embed"
+	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -15,9 +17,11 @@ import (
 
 // API holds the dependencies needed by the REST handlers.
 type API struct {
-	repo       storage.Repository
-	epochCache vault.EpochCache
-	sessions   *sessionStore
+	repo        storage.Repository
+	epochCache  vault.EpochCache
+	sessions    *sessionStore
+	rateLimiter *loginRateLimiter
+	audit       *auditLogger
 }
 
 type sessionStore struct {
@@ -28,15 +32,34 @@ type sessionStore struct {
 //go:embed openapi.yaml
 var openapiSpec []byte
 
+// Option configures the API instance.
+type Option func(*API)
+
+// WithLogger sets the structured logger for audit events.
+// If not set, a default JSON logger writing to stderr is used.
+func WithLogger(logger *slog.Logger) Option {
+	return func(a *API) {
+		a.audit = newAuditLogger(logger)
+	}
+}
+
 // New creates a new API instance.
-func New(repo storage.Repository, epochCache vault.EpochCache) *API {
-	return &API{
+func New(repo storage.Repository, epochCache vault.EpochCache, opts ...Option) *API {
+	a := &API{
 		repo:       repo,
 		epochCache: epochCache,
 		sessions: &sessionStore{
 			data: make(map[string]authSession),
 		},
+		rateLimiter: newLoginRateLimiter(),
 	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	if a.audit == nil {
+		a.audit = newAuditLogger(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	}
+	return a
 }
 
 // Router returns a chi.Router with all API routes mounted.

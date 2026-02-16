@@ -263,6 +263,12 @@ var exportKDFParams = util.Argon2idParams{
 //	version (1 byte) || salt (16 bytes) || AES-256-GCM ciphertext
 //
 // The encryption key is derived from the passphrase using Argon2id.
+//
+// SECURITY: The exported blob contains the MUK, private key, and all KDF
+// parameters. Anyone who obtains the blob AND knows the passphrase can
+// decrypt all vaults associated with these credentials. Treat exported
+// blobs as highly sensitive — store them only in encrypted storage and
+// delete them after import.
 func ExportCredentials(creds *Credentials, passphrase string) ([]byte, error) {
 	if creds == nil {
 		return nil, fmt.Errorf("credentials must not be nil")

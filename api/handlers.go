@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -65,6 +65,8 @@ func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	a.audit.logEvent(AuditVaultCreated, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID))
 	writeJSON(w, http.StatusCreated, CreateVaultResponse{
 		VaultID:  vaultID,
 		MemberID: creds.MemberID(),
@@ -153,6 +155,9 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.audit.logEvent(AuditItemCreated, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("item_id", itemID))
 	writeJSON(w, http.StatusCreated, struct{}{})
 }
 
@@ -213,6 +218,9 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.audit.logEvent(AuditItemUpdated, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("item_id", itemID))
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
@@ -238,6 +246,9 @@ func (a *API) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.audit.logEvent(AuditItemDeleted, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("item_id", itemID))
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
@@ -259,7 +270,7 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 		session, err := a.openSession(r.Context(), vaultID, creds)
 		if err != nil {
 			// Skip inaccessible vaults, but keep observability for operators.
-			log.Printf("list vaults: skipping vault=%q: open failed: %v", vaultID, err)
+			slog.Debug("list vaults: skipping vault", "vault_id", vaultID, "error", err)
 			continue
 		}
 
@@ -268,12 +279,12 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			meta = decodeVaultMetadata(metaFields)
 		} else if !errors.Is(err, storage.ErrNotFound) {
-			log.Printf("list vaults: vault=%q metadata read failed: %v", vaultID, err)
+			slog.Debug("list vaults: metadata read failed", "vault_id", vaultID, "error", err)
 		}
 		itemIDs, err := session.List(r.Context())
 		epoch := session.Epoch()
 		if err != nil {
-			log.Printf("list vaults: skipping vault=%q: list failed: %v", vaultID, err)
+			slog.Debug("list vaults: list failed", "vault_id", vaultID, "error", err)
 			session.Close()
 			continue
 		}
@@ -319,6 +330,9 @@ func (a *API) DeleteVault(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+
+	a.audit.logEvent(AuditVaultDeleted, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID))
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
@@ -371,6 +385,10 @@ func (a *API) AddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.audit.logEvent(AuditMemberAdded, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("member_id", req.MemberID),
+		slog.String("role", req.Role))
 	writeJSON(w, http.StatusCreated, AddMemberResponse{
 		Epoch: session.Epoch(),
 	})
@@ -394,6 +412,9 @@ func (a *API) RevokeMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.audit.logEvent(AuditMemberRevoked, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("member_id", memberID))
 	writeJSON(w, http.StatusOK, AddMemberResponse{
 		Epoch: session.Epoch(),
 	})
