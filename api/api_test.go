@@ -271,6 +271,67 @@ func TestVaultCRUD(t *testing.T) {
 	assert.Equal(t, "secret", getItem.Fields["password"])
 }
 
+func TestAuditLogTracksItemAccessAndModification(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "AuditVault",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+	itemID := "login-1"
+
+	resp = doJSON(t, client, http.MethodPost, base+"/items/"+itemID, map[string]any{
+		"fields": map[string]string{"username": "alice", "password": "s3cret"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodGet, base+"/items/"+itemID, nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodPut, base+"/items/"+itemID, map[string]any{
+		"fields": map[string]string{"username": "alice", "password": "new-pass"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodDelete, base+"/items/"+itemID, nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodGet, base+"/audit", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var auditResp api.ListAuditLogsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&auditResp))
+	require.GreaterOrEqual(t, len(auditResp.Entries), 4)
+
+	actions := make(map[string]bool)
+	for _, e := range auditResp.Entries {
+		if e.ItemID == itemID {
+			actions[e.Action] = true
+			assert.NotEmpty(t, e.MemberID)
+			assert.NotEmpty(t, e.CreatedAt)
+		}
+	}
+	assert.True(t, actions["item_created"])
+	assert.True(t, actions["item_accessed"])
+	assert.True(t, actions["item_updated"])
+	assert.True(t, actions["item_deleted"])
+}
+
 func TestDeleteVault(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Vault, ItemType } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box, ScrollText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import ItemCard from '@/components/ItemCard';
 import AddItemDialog from '@/components/AddItemDialog';
 import ShareDialog from '@/components/ShareDialog';
+import AuditLogDialog from '@/components/AuditLogDialog';
 import { useToast } from '@/hooks/use-toast';
 import { searchItems } from '@/lib/search';
 
@@ -28,6 +29,7 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
   const { toast } = useToast();
   const [showAddItem, setShowAddItem] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  const [showAudit, setShowAudit] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all');
@@ -78,6 +80,10 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
             <Button variant="outline" size="sm" onClick={() => setShowAddItem(true)}>
               <Plus className="h-4 w-4 mr-1" />
               Add Item
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowAudit(true)}>
+              <ScrollText className="h-4 w-4 mr-1" />
+              Audit
             </Button>
             <Button variant="ghost" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
               <Trash2 className="h-4 w-4" />
@@ -160,6 +166,7 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
 
       <AddItemDialog open={showAddItem} onOpenChange={setShowAddItem} vaultId={vault.id} />
       <ShareDialog open={showShare} onOpenChange={setShowShare} vaultId={vault.id} sharedWith={vault.sharedWith} />
+      <AuditLogDialog open={showAudit} onOpenChange={setShowAudit} vaultId={vault.id} />
     </div>
   );
 }

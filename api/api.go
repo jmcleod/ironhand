@@ -103,6 +103,7 @@ func (a *API) Router() chi.Router {
 		r.Delete("/items/{itemID}", a.DeleteItem)
 		r.Get("/items/{itemID}/history", a.GetItemHistory)
 		r.Get("/items/{itemID}/history/{version}", a.GetHistoryVersion)
+		r.Get("/audit", a.ListAuditLogs)
 		r.Post("/members", a.AddMember)
 		r.Delete("/members/{memberID}", a.RevokeMember)
 	})

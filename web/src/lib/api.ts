@@ -1,4 +1,4 @@
-import { HistoryEntry, VaultSummary } from '@/types/vault';
+import { AuditEntry, HistoryEntry, VaultSummary } from '@/types/vault';
 
 const API_BASE = '/api/v1';
 
@@ -170,4 +170,14 @@ export async function getHistoryVersion(
   );
   const data = (await resp.json()) as { fields: Record<string, string> };
   return data.fields;
+}
+
+export async function listAuditLogs(vaultID: string, itemID?: string): Promise<AuditEntry[]> {
+  const params = new URLSearchParams();
+  if (itemID) params.set('item_id', itemID);
+  const qs = params.toString();
+  const path = `/vaults/${encodeURIComponent(vaultID)}/audit${qs ? `?${qs}` : ''}`;
+  const resp = await request(path);
+  const data = (await resp.json()) as { entries: AuditEntry[] };
+  return data.entries ?? [];
 }

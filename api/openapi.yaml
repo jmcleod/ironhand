@@ -224,6 +224,30 @@ components:
             type: string
           description: Map of field name to plaintext value at this version.
 
+    AuditEntryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        item_id:
+          type: string
+        action:
+          type: string
+          enum: [item_accessed, item_created, item_updated, item_deleted]
+        member_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ListAuditLogsResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntryResponse'
+
     ErrorResponse:
       type: object
       properties:
@@ -599,6 +623,33 @@ paths:
           description: Unauthorized
         '404':
           description: Version not found
+
+  /vaults/{vaultID}/audit:
+    get:
+      summary: List vault audit log entries
+      operationId: listAuditLogs
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: item_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit log entries (newest first)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAuditLogsResponse'
+        '401':
+          description: Unauthorized
 
   /vaults/{vaultID}/members:
     post:

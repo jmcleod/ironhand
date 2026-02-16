@@ -141,6 +141,7 @@ The service provides a REST API exposed by default on port `8443`.
   - `POST /api/v1/vaults` (authenticated, server-generated vault ID)
   - `GET /api/v1/vaults`
   - `DELETE /api/v1/vaults/{vaultID}`
+  - `GET /api/v1/vaults/{vaultID}/audit` (audit trail of item access/changes; optional `item_id` query filter)
 - **OpenAPI Spec**: `/api/v1/openapi.yaml`
 - **Swagger UI**: `/api/v1/docs`
 - **Redoc**: `/api/v1/redoc`

@@ -154,6 +154,7 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemCreated)
 
 	a.audit.logEvent(AuditItemCreated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -183,6 +184,7 @@ func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	writeJSON(w, http.StatusOK, GetItemResponse{
 		ItemID: itemID,
@@ -217,6 +219,7 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemUpdated)
 
 	a.audit.logEvent(AuditItemUpdated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -245,6 +248,7 @@ func (a *API) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemDeleted)
 
 	a.audit.logEvent(AuditItemDeleted, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -442,6 +446,7 @@ func (a *API) GetItemHistory(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	history := make([]HistoryEntryResponse, len(entries))
 	for i, e := range entries {
@@ -488,10 +493,43 @@ func (a *API) GetHistoryVersion(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	writeJSON(w, http.StatusOK, GetHistoryVersionResponse{
 		ItemID:  itemID,
 		Version: version,
 		Fields:  fieldsToAPI(fields),
 	})
+}
+
+// ListAuditLogs handles GET /vaults/{vaultID}/audit.
+func (a *API) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	itemID := strings.TrimSpace(r.URL.Query().Get("item_id"))
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	session.Close()
+
+	entries, err := a.listAuditEntries(vaultID, itemID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	resp := make([]AuditEntryResponse, 0, len(entries))
+	for _, entry := range entries {
+		resp = append(resp, AuditEntryResponse{
+			ID:        entry.ID,
+			ItemID:    entry.ItemID,
+			Action:    string(entry.Action),
+			MemberID:  entry.MemberID,
+			CreatedAt: entry.CreatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ListAuditLogsResponse{Entries: resp})
 }

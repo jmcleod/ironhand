@@ -121,6 +121,20 @@ type GetHistoryVersionResponse struct {
 	Fields  map[string]string `json:"fields"`
 }
 
+// AuditEntryResponse is one vault audit log entry.
+type AuditEntryResponse struct {
+	ID        string `json:"id"`
+	ItemID    string `json:"item_id"`
+	Action    string `json:"action"`
+	MemberID  string `json:"member_id"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ListAuditLogsResponse is returned from GET /vaults/{vaultID}/audit.
+type ListAuditLogsResponse struct {
+	Entries []AuditEntryResponse `json:"entries"`
+}
+
 // ErrorResponse is returned for all error cases.
 type ErrorResponse struct {
 	Error string `json:"error"`
