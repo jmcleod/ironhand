@@ -1,17 +1,26 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	scrypto "github.com/jmcleod/ironhand/crypto"
+	icrypto "github.com/jmcleod/ironhand/internal/crypto"
+	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/storage"
 )
 
 const (
 	accountVaultID    = "__accounts"
 	accountRecordType = "ACCOUNT"
+	accountAADPrefix  = "account:"
 )
+
+var errAccountExists = errors.New("account already exists")
 
 type accountRecord struct {
 	SecretKeyID     string    `json:"secret_key_id"`
@@ -19,31 +28,118 @@ type accountRecord struct {
 	CreatedAt       time.Time `json:"created_at"`
 }
 
-func (a *API) saveAccountRecord(record accountRecord) error {
+func (a *API) saveAccountRecord(secretKey string, record accountRecord) error {
+	accountID, err := accountLookupID(secretKey)
+	if err != nil {
+		return err
+	}
+	// Preserve legacy uniqueness semantics while eliminating collisions from
+	// using only the short secret key ID as the account storage key.
+	if existing, err := a.repo.Get(accountVaultID, accountRecordType, accountID); err == nil && existing != nil {
+		return errAccountExists
+	} else if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
-	env := &storage.Envelope{
-		Ver:        1,
-		Scheme:     "plain-json",
-		Nonce:      nil,
-		Ciphertext: data,
+	recordKey, aad, err := deriveAccountRecordKey(secretKey)
+	if err != nil {
+		return err
 	}
-	return a.repo.Put(accountVaultID, accountRecordType, record.SecretKeyID, env)
+	defer util.WipeBytes(recordKey)
+
+	env, err := storage.SealRecord(recordKey, data, aad)
+	if err != nil {
+		return err
+	}
+	return a.repo.Put(accountVaultID, accountRecordType, accountID, env)
 }
 
-func (a *API) loadAccountRecord(secretKeyID string) (*accountRecord, error) {
-	env, err := a.repo.Get(accountVaultID, accountRecordType, secretKeyID)
+func (a *API) loadAccountRecord(secretKey string) (*accountRecord, error) {
+	accountID, err := accountLookupID(secretKey)
 	if err != nil {
 		return nil, err
+	}
+	recordKey, aad, err := deriveAccountRecordKey(secretKey)
+	if err != nil {
+		return nil, err
+	}
+	defer util.WipeBytes(recordKey)
+
+	env, err := a.repo.Get(accountVaultID, accountRecordType, accountID)
+	if err != nil {
+		if !errors.Is(err, storage.ErrNotFound) {
+			return nil, err
+		}
+		legacyID, legacyErr := secretKeyID(secretKey)
+		if legacyErr != nil {
+			return nil, err
+		}
+		env, err = a.repo.Get(accountVaultID, accountRecordType, legacyID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if env == nil {
 		return nil, fmt.Errorf("account not found")
 	}
+
+	var data []byte
+	switch env.Scheme {
+	case "aes256gcm":
+		data, err = storage.OpenRecord(recordKey, env, aad)
+		if err != nil {
+			return nil, err
+		}
+	case "plain-json":
+		// Legacy compatibility path for records created before encrypted account
+		// envelopes were introduced.
+		data = env.Ciphertext
+	default:
+		return nil, fmt.Errorf("unsupported account record scheme: %s", env.Scheme)
+	}
+
 	var record accountRecord
-	if err := json.Unmarshal(env.Ciphertext, &record); err != nil {
+	if err := json.Unmarshal(data, &record); err != nil {
 		return nil, err
 	}
 	return &record, nil
+}
+
+func accountLookupID(secretKey string) (string, error) {
+	sk, err := scrypto.ParseSecretKey(secretKey)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(sk.String()))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func deriveAccountRecordKey(secretKey string) ([]byte, []byte, error) {
+	sk, err := scrypto.ParseSecretKey(secretKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	secretBytes := sk.Bytes()
+	defer util.WipeBytes(secretBytes)
+	accountID, err := accountLookupID(secretKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	recordKey, err := icrypto.DeriveRecordKey(secretBytes, accountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return recordKey, []byte(accountAADPrefix + accountID), nil
+}
+
+func secretKeyID(secretKey string) (string, error) {
+	sk, err := scrypto.ParseSecretKey(secretKey)
+	if err != nil {
+		return "", err
+	}
+	return sk.ID(), nil
 }

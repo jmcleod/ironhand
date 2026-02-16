@@ -55,16 +55,6 @@ export async function logout(): Promise<void> {
   await request('/auth/logout', { method: 'POST' });
 }
 
-export async function revealSecretKey(passphrase: string): Promise<string> {
-  const resp = await request('/auth/reveal-secret-key', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ passphrase }),
-  });
-  const data = (await resp.json()) as { secret_key: string };
-  return data.secret_key;
-}
-
 export async function listVaults(): Promise<VaultSummary[]> {
   const resp = await request('/vaults');
   const data = (await resp.json()) as { vaults: VaultSummary[] };

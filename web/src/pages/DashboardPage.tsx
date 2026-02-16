@@ -1,20 +1,18 @@
 import { useState } from 'react';
 import { useVault } from '@/contexts/VaultContext';
-import { Plus, Lock, KeyRound, Wand2, Vault as VaultIcon } from 'lucide-react';
+import { Plus, Lock, Wand2, Vault as VaultIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import VaultCard from '@/components/VaultCard';
 import VaultDetail from '@/components/VaultDetail';
 import CreateVaultDialog from '@/components/CreateVaultDialog';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
-import RevealSecretKeyDialog from '@/components/RevealSecretKeyDialog';
 import PasswordGeneratorDialog from '@/components/PasswordGeneratorDialog';
 import logo from '@/assets/logo.png';
 
 export default function DashboardPage() {
-  const { account, lock, isUnlocked } = useVault();
+  const { account, lock } = useVault();
   const [selectedVaultId, setSelectedVaultId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [showSecretKey, setShowSecretKey] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
 
   if (!account) return null;
@@ -43,9 +41,6 @@ export default function DashboardPage() {
             <ThemeSwitcher />
             <Button variant="ghost" size="sm" onClick={() => setShowGenerator(true)} title="Password Generator">
               <Wand2 className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setShowSecretKey(true)} title="View Secret Key">
-              <KeyRound className="h-4 w-4" />
             </Button>
             <Button variant="outline" size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="h-4 w-4 mr-1" />
@@ -83,7 +78,6 @@ export default function DashboardPage() {
       </main>
 
       <CreateVaultDialog open={showCreate} onOpenChange={setShowCreate} />
-      <RevealSecretKeyDialog open={showSecretKey} onOpenChange={setShowSecretKey} />
       <PasswordGeneratorDialog open={showGenerator} onOpenChange={setShowGenerator} />
     </div>
   );

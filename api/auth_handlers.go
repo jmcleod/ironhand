@@ -3,8 +3,8 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/jmcleod/ironhand/internal/uuid"
@@ -44,8 +44,19 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		CredentialsBlob: base64.StdEncoding.EncodeToString(exported),
 		CreatedAt:       time.Now().UTC(),
 	}
-	if err := a.saveAccountRecord(record); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to persist account: "+err.Error())
+	if err := a.saveAccountRecord(secretKey, record); err != nil {
+		if errors.Is(err, errAccountExists) {
+			writeError(w, http.StatusConflict, "account already exists")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to persist account")
+		return
+	}
+
+	sessionPassphrase := uuid.New()
+	sessionBlob, err := vault.ExportCredentials(creds, sessionPassphrase)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize session")
 		return
 	}
 
@@ -53,9 +64,10 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().Add(sessionDuration)
 	a.sessions.mu.Lock()
 	a.sessions.data[token] = authSession{
-		SecretKeyID:     record.SecretKeyID,
-		LoginPassphrase: loginPassphrase,
-		ExpiresAt:       expiresAt,
+		SecretKeyID:       record.SecretKeyID,
+		SessionPassphrase: sessionPassphrase,
+		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
+		ExpiresAt:         expiresAt,
 	}
 	a.sessions.mu.Unlock()
 	writeSessionCookie(w, r, token, expiresAt)
@@ -79,12 +91,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secretKeyID, err := parseSecretKeyID(req.SecretKey)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid credentials")
-		return
-	}
-	record, err := a.loadAccountRecord(secretKeyID)
+	record, err := a.loadAccountRecord(req.SecretKey)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -101,57 +108,27 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	creds.Destroy()
+	defer creds.Destroy()
+
+	sessionPassphrase := uuid.New()
+	sessionBlob, err := vault.ExportCredentials(creds, sessionPassphrase)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize session")
+		return
+	}
 
 	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
 	a.sessions.mu.Lock()
 	a.sessions.data[token] = authSession{
-		SecretKeyID:     secretKeyID,
-		LoginPassphrase: loginPassphrase,
-		ExpiresAt:       expiresAt,
+		SecretKeyID:       record.SecretKeyID,
+		SessionPassphrase: sessionPassphrase,
+		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
+		ExpiresAt:         expiresAt,
 	}
 	a.sessions.mu.Unlock()
 	writeSessionCookie(w, r, token, expiresAt)
 	writeJSON(w, http.StatusOK, struct{}{})
-}
-
-// RevealSecretKey handles POST /auth/reveal-secret-key.
-// Requires an active session and the user's passphrase for verification.
-func (a *API) RevealSecretKey(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie(sessionCookieName)
-	if err != nil || cookie.Value == "" {
-		writeError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-
-	a.sessions.mu.RLock()
-	session, ok := a.sessions.data[cookie.Value]
-	a.sessions.mu.RUnlock()
-	if !ok || time.Now().After(session.ExpiresAt) {
-		writeError(w, http.StatusUnauthorized, "session expired")
-		return
-	}
-
-	var req RevealSecretKeyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	if req.Passphrase == "" {
-		writeError(w, http.StatusBadRequest, "passphrase is required")
-		return
-	}
-
-	// LoginPassphrase is "passphrase:secretKey". Verify the passphrase matches.
-	prefix := req.Passphrase + ":"
-	if !strings.HasPrefix(session.LoginPassphrase, prefix) {
-		writeError(w, http.StatusUnauthorized, "incorrect passphrase")
-		return
-	}
-
-	secretKey := strings.TrimPrefix(session.LoginPassphrase, prefix)
-	writeJSON(w, http.StatusOK, RevealSecretKeyResponse{SecretKey: secretKey})
 }
 
 // Logout handles POST /auth/logout.

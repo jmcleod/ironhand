@@ -160,6 +160,8 @@ Then open:
 - `https://localhost:8443/` for the Web UI
 - `https://localhost:8443/api/v1/openapi.yaml` for the OpenAPI spec
 
+Important: the server only returns a user's secret key during registration. There is no API to reveal it later.
+
 ### Library Credentials
 
 | Function | Description |

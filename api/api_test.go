@@ -83,6 +83,41 @@ func TestAuthRegisterAndLogin(t *testing.T) {
 	assert.NotEmpty(t, secretKey)
 }
 
+func TestLoginRejectsWrongPassphrase(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", map[string]string{
+		"passphrase": "correct-passphrase",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var reg api.RegisterResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&reg))
+	require.NotEmpty(t, reg.SecretKey)
+
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/login", map[string]string{
+		"passphrase": "wrong-passphrase",
+		"secret_key": reg.SecretKey,
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestRevealSecretKeyEndpointRemoved(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/reveal-secret-key", map[string]string{
+		"passphrase": "irrelevant",
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 func TestCreateAndListVaults(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()

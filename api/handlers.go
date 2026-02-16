@@ -3,13 +3,17 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jmcleod/ironhand/internal/uuid"
+	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/vault"
 )
 
@@ -245,6 +249,7 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	sort.Strings(vaultIDs)
 
 	result := make([]VaultSummary, 0, len(vaultIDs))
 	for _, vaultID := range vaultIDs {
@@ -253,8 +258,8 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 		}
 		session, err := a.openSession(r.Context(), vaultID, creds)
 		if err != nil {
-			// For list operations, skip vaults that cannot be opened with the
-			// current credentials/profile and continue with others.
+			// Skip inaccessible vaults, but keep observability for operators.
+			log.Printf("list vaults: skipping vault=%q: open failed: %v", vaultID, err)
 			continue
 		}
 
@@ -262,9 +267,13 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 		metaFields, err := session.Get(r.Context(), vaultMetadataItemID)
 		if err == nil {
 			meta = decodeVaultMetadata(metaFields)
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			log.Printf("list vaults: vault=%q metadata read failed: %v", vaultID, err)
 		}
 		itemIDs, err := session.List(r.Context())
+		epoch := session.Epoch()
 		if err != nil {
+			log.Printf("list vaults: skipping vault=%q: list failed: %v", vaultID, err)
 			session.Close()
 			continue
 		}
@@ -280,7 +289,7 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 			VaultID:     vaultID,
 			Name:        meta.Name,
 			Description: meta.Description,
-			Epoch:       session.Epoch(),
+			Epoch:       epoch,
 			ItemCount:   count,
 		})
 	}

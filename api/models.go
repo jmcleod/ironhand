@@ -83,16 +83,6 @@ type AddMemberResponse struct {
 	Epoch uint64 `json:"epoch"`
 }
 
-// RevealSecretKeyRequest is the JSON body for POST /auth/reveal-secret-key.
-type RevealSecretKeyRequest struct {
-	Passphrase string `json:"passphrase"`
-}
-
-// RevealSecretKeyResponse is returned from POST /auth/reveal-secret-key.
-type RevealSecretKeyResponse struct {
-	SecretKey string `json:"secret_key"`
-}
-
 // HistoryEntryResponse represents a single version in an item's history.
 type HistoryEntryResponse struct {
 	Version   uint64 `json:"version"`
