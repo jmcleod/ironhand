@@ -16,10 +16,12 @@ const (
 type auditAction string
 
 const (
-	auditActionItemAccessed auditAction = "item_accessed"
-	auditActionItemCreated  auditAction = "item_created"
-	auditActionItemUpdated  auditAction = "item_updated"
-	auditActionItemDeleted  auditAction = "item_deleted"
+	auditActionItemAccessed  auditAction = "item_accessed"
+	auditActionItemCreated   auditAction = "item_created"
+	auditActionItemUpdated   auditAction = "item_updated"
+	auditActionItemDeleted   auditAction = "item_deleted"
+	auditActionVaultExported auditAction = "vault_exported"
+	auditActionVaultImported auditAction = "vault_imported"
 )
 
 type auditEntry struct {

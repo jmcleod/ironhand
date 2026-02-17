@@ -168,7 +168,7 @@ export interface HistoryEntry {
 export interface AuditEntry {
   id: string;
   item_id: string;
-  action: 'item_accessed' | 'item_created' | 'item_updated' | 'item_deleted';
+  action: 'item_accessed' | 'item_created' | 'item_updated' | 'item_deleted' | 'vault_exported' | 'vault_imported';
   member_id: string;
   created_at: string;
 }

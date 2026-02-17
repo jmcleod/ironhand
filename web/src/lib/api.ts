@@ -187,3 +187,36 @@ export async function listAuditLogs(vaultID: string, itemID?: string): Promise<A
   const data = (await resp.json()) as { entries: AuditEntry[] };
   return data.entries ?? [];
 }
+
+export async function exportVault(vaultID: string, passphrase: string): Promise<Blob> {
+  const resp = await fetch(`${API_BASE}/vaults/${encodeURIComponent(vaultID)}/export`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passphrase }),
+  });
+  if (!resp.ok) {
+    return readError(resp);
+  }
+  return resp.blob();
+}
+
+export async function importVault(
+  vaultID: string,
+  file: File,
+  passphrase: string,
+): Promise<{ imported_count: number }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('passphrase', passphrase);
+
+  const resp = await fetch(`${API_BASE}/vaults/${encodeURIComponent(vaultID)}/import`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  });
+  if (!resp.ok) {
+    return readError(resp);
+  }
+  return resp.json() as Promise<{ imported_count: number }>;
+}

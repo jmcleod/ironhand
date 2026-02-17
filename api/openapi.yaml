@@ -254,7 +254,7 @@ components:
           type: string
         action:
           type: string
-          enum: [item_accessed, item_created, item_updated, item_deleted]
+          enum: [item_accessed, item_created, item_updated, item_deleted, vault_exported, vault_imported]
         member_id:
           type: string
         created_at:
@@ -274,6 +274,22 @@ components:
       properties:
         error:
           type: string
+
+    ExportVaultRequest:
+      type: object
+      required:
+        - passphrase
+      properties:
+        passphrase:
+          type: string
+          description: Passphrase to encrypt the backup file. Must not be empty.
+
+    ImportVaultResponse:
+      type: object
+      properties:
+        imported_count:
+          type: integer
+          description: Number of items successfully imported.
 
 paths:
   /auth/register:
@@ -746,3 +762,92 @@ paths:
           description: Unauthorized
         '403':
           description: Forbidden
+
+  /vaults/{vaultID}/export:
+    post:
+      summary: Export all vault items as an encrypted backup
+      operationId: exportVault
+      description: >
+        Requires owner access. Decrypts all current items, serializes to JSON,
+        and encrypts with the provided passphrase using Argon2id + AES-256-GCM.
+        History is not exported. The response is a binary blob.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportVaultRequest'
+      responses:
+        '200':
+          description: Encrypted backup file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid request (e.g. empty passphrase)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (not owner)
+
+  /vaults/{vaultID}/import:
+    post:
+      summary: Import items from an encrypted backup into a vault
+      operationId: importVault
+      description: >
+        Accepts a multipart form with the encrypted backup file and passphrase.
+        Each imported item receives a new ID. Duplicates are not detected.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+                - passphrase
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The .ironhand-backup file.
+                passphrase:
+                  type: string
+                  description: Passphrase used to encrypt the backup.
+      responses:
+        '200':
+          description: Items imported successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportVaultResponse'
+        '400':
+          description: Invalid request, wrong passphrase, or corrupt file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized

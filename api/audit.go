@@ -25,6 +25,8 @@ const (
 	AuditItemUpdated         AuditEvent = "item_updated"
 	AuditItemDeleted         AuditEvent = "item_deleted"
 	AuditCredentialsExported AuditEvent = "credentials_exported"
+	AuditVaultExported       AuditEvent = "vault_exported"
+	AuditVaultImported       AuditEvent = "vault_imported"
 )
 
 // auditLogger wraps slog.Logger for structured security audit logging.

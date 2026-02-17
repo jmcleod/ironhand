@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Vault, ItemType, VaultItem, itemName, itemType } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box, ScrollText } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box, ScrollText, Download, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import ItemCard from '@/components/ItemCard';
@@ -9,6 +9,8 @@ import AddItemDialog from '@/components/AddItemDialog';
 import ShareDialog from '@/components/ShareDialog';
 import AuditLogDialog from '@/components/AuditLogDialog';
 import EditItemDialog from '@/components/EditItemDialog';
+import ExportVaultDialog from '@/components/ExportVaultDialog';
+import ImportVaultDialog from '@/components/ImportVaultDialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { searchItems } from '@/lib/search';
@@ -42,6 +44,8 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
   const [itemLoading, setItemLoading] = useState(false);
   const [editFromLightboxOpen, setEditFromLightboxOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
+  const [showExport, setShowExport] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   // Debounce the search input.
   useEffect(() => {
@@ -129,6 +133,14 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
             <Button variant="outline" size="sm" onClick={() => setShowAudit(true)}>
               <ScrollText className="h-4 w-4 mr-1" />
               Audit
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowExport(true)}>
+              <Download className="h-4 w-4 mr-1" />
+              Export
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowImport(true)}>
+              <Upload className="h-4 w-4 mr-1" />
+              Import
             </Button>
             <Button variant="ghost" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
               <Trash2 className="h-4 w-4" />
@@ -259,6 +271,8 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
           item={editingItem}
         />
       )}
+      <ExportVaultDialog open={showExport} onOpenChange={setShowExport} vaultId={vault.id} vaultName={vault.name} />
+      <ImportVaultDialog open={showImport} onOpenChange={setShowImport} vaultId={vault.id} />
     </div>
   );
 }

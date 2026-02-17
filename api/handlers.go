@@ -5,18 +5,31 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/internal/uuid"
 	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/vault"
 )
+
+// backupKDFParams are the Argon2id parameters used to derive the encryption key
+// for vault backup files. These match the hardened parameters used for credential
+// export (see vault/credentials.go).
+var backupKDFParams = util.Argon2idParams{
+	Time:        3,
+	MemoryKiB:   64 * 1024,
+	Parallelism: 4,
+	KeyLen:      32,
+}
 
 func fieldsFromAPI(apiFields map[string]string) (vault.Fields, error) {
 	fields := make(vault.Fields, len(apiFields))
@@ -577,4 +590,218 @@ func (a *API) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, ListAuditLogsResponse{Entries: resp})
+}
+
+// ExportVault handles POST /vaults/{vaultID}/export.
+// Requires owner access. Decrypts all current items, serializes them to JSON,
+// and encrypts the blob with the caller-supplied passphrase using Argon2id + AES-256-GCM.
+// The response is a binary file: version(1B) || salt(16B) || AES-256-GCM ciphertext.
+func (a *API) ExportVault(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	var req ExportVaultRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Passphrase == "" {
+		writeError(w, http.StatusBadRequest, "passphrase must not be empty")
+		return
+	}
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	// Require owner role for export (exposes all plaintext).
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		mapError(w, err)
+		return
+	}
+
+	// List all items.
+	itemIDs, err := session.List(r.Context())
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	// Read vault metadata.
+	var vaultName, vaultDesc string
+	metaFields, err := session.Get(r.Context(), vaultMetadataItemID)
+	if err == nil {
+		meta := decodeVaultMetadata(metaFields)
+		vaultName = meta.Name
+		vaultDesc = meta.Description
+	}
+
+	// Decrypt each item (skip metadata item).
+	exportItems := make([]vaultExportItem, 0, len(itemIDs))
+	for _, itemID := range itemIDs {
+		if itemID == vaultMetadataItemID {
+			continue
+		}
+		fields, err := session.Get(r.Context(), itemID)
+		if err != nil {
+			slog.Warn("export: skipping unreadable item", "item_id", itemID, "error", err)
+			continue
+		}
+		exportItems = append(exportItems, vaultExportItem{
+			Fields: fieldsToAPI(fields),
+		})
+	}
+
+	payload := vaultExportPayload{
+		FormatVersion: 1,
+		VaultName:     vaultName,
+		VaultDesc:     vaultDesc,
+		ExportedAt:    time.Now().UTC().Format(time.RFC3339),
+		Items:         exportItems,
+	}
+
+	plaintext, err := json.Marshal(payload)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	// Encrypt with passphrase.
+	salt, err := util.RandomBytes(16)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	key, err := util.DeriveArgon2idKey(util.Normalize(req.Passphrase), salt, backupKDFParams)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	defer util.WipeBytes(key)
+
+	ciphertext, err := util.EncryptAES(plaintext, key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	// Build output: version(1) || salt(16) || ciphertext
+	out := make([]byte, 0, 1+16+len(ciphertext))
+	out = append(out, 1) // format version
+	out = append(out, salt...)
+	out = append(out, ciphertext...)
+
+	_ = a.appendAuditEntry(vaultID, "", session.MemberID, auditActionVaultExported)
+	a.audit.logEvent(AuditVaultExported, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.Int("item_count", len(exportItems)))
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="vault-backup.ironhand-backup"`)
+	w.WriteHeader(http.StatusOK)
+	w.Write(out)
+}
+
+// ImportVault handles POST /vaults/{vaultID}/import.
+// Accepts multipart form with "file" (the encrypted backup blob) and "passphrase".
+// Each imported item receives a new UUID; original IDs are not preserved.
+func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	// Parse multipart form (50 MB limit).
+	if err := r.ParseMultipartForm(50 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
+		return
+	}
+
+	passphrase := r.FormValue("passphrase")
+	if passphrase == "" {
+		writeError(w, http.StatusBadRequest, "passphrase is required")
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file is required: "+err.Error())
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, 50<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read file: "+err.Error())
+		return
+	}
+
+	// Decrypt the backup blob.
+	if len(data) < 1+16 {
+		writeError(w, http.StatusBadRequest, "backup file too short")
+		return
+	}
+	version := data[0]
+	if version != 1 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported backup version: %d", version))
+		return
+	}
+	salt := data[1:17]
+	ct := data[17:]
+
+	key, err := util.DeriveArgon2idKey(util.Normalize(passphrase), salt, backupKDFParams)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	defer util.WipeBytes(key)
+
+	plaintext, err := util.DecryptAES(ct, key)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "decryption failed: wrong passphrase or corrupt file")
+		return
+	}
+
+	var payload vaultExportPayload
+	if err := json.Unmarshal(plaintext, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid backup format: "+err.Error())
+		return
+	}
+	if payload.FormatVersion != 1 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported format version: %d", payload.FormatVersion))
+		return
+	}
+
+	// Open session to target vault (write access required).
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	// Import each item with a new UUID.
+	importedCount := 0
+	for _, exportItem := range payload.Items {
+		fields, err := fieldsFromAPI(exportItem.Fields)
+		if err != nil {
+			slog.Warn("import: skipping item with invalid fields", "error", err)
+			continue
+		}
+		newItemID := uuid.New()
+		if err := session.Put(r.Context(), newItemID, fields); err != nil {
+			slog.Warn("import: failed to put item", "error", err)
+			continue
+		}
+		_ = a.appendAuditEntry(vaultID, newItemID, session.MemberID, auditActionItemCreated)
+		importedCount++
+	}
+
+	_ = a.appendAuditEntry(vaultID, "", session.MemberID, auditActionVaultImported)
+	a.audit.logEvent(AuditVaultImported, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.Int("imported_count", importedCount))
+
+	writeJSON(w, http.StatusOK, ImportVaultResponse{ImportedCount: importedCount})
 }

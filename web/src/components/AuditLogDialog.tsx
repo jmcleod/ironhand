@@ -20,6 +20,10 @@ function actionLabel(action: AuditEntry['action']) {
       return 'Updated';
     case 'item_deleted':
       return 'Deleted';
+    case 'vault_exported':
+      return 'Vault Exported';
+    case 'vault_imported':
+      return 'Vault Imported';
   }
 }
 

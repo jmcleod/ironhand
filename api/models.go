@@ -154,3 +154,27 @@ type ListAuditLogsResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+// ExportVaultRequest is the JSON body for POST /vaults/{vaultID}/export.
+type ExportVaultRequest struct {
+	Passphrase string `json:"passphrase"`
+}
+
+// ImportVaultResponse is returned from POST /vaults/{vaultID}/import.
+type ImportVaultResponse struct {
+	ImportedCount int `json:"imported_count"`
+}
+
+// vaultExportPayload is the JSON structure inside the encrypted export blob.
+type vaultExportPayload struct {
+	FormatVersion int               `json:"format_version"`
+	VaultName     string            `json:"vault_name"`
+	VaultDesc     string            `json:"vault_description"`
+	ExportedAt    string            `json:"exported_at"`
+	Items         []vaultExportItem `json:"items"`
+}
+
+// vaultExportItem is a single item in the export payload.
+type vaultExportItem struct {
+	Fields map[string]string `json:"fields"`
+}

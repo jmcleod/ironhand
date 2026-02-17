@@ -9,6 +9,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -613,4 +615,187 @@ func TestRegisterRejectsShortPassphrase(t *testing.T) {
 	var errResp api.ErrorResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&errResp))
 	assert.Contains(t, errResp.Error, "at least")
+}
+
+func TestExportAndImportVault(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	// Create a vault.
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name":        "ExportTest",
+		"description": "vault for export testing",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+
+	// Add a plain item.
+	resp = doJSON(t, client, http.MethodPost, base+"/items/item-a", map[string]any{
+		"fields": map[string]string{"_name": "Login A", "_type": "login", "username": "alice", "password": "s3cret"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	// Add an item with attachment.
+	rawContent := []byte("ssh-rsa AAAA test-key")
+	b64Content := base64.StdEncoding.EncodeToString(rawContent)
+	resp = doJSON(t, client, http.MethodPost, base+"/items/item-b", map[string]any{
+		"fields": map[string]string{
+			"_name":           "With Attachment",
+			"_type":           "custom",
+			"_att.id_rsa":     b64Content,
+			"_attmeta.id_rsa": `{"content_type":"application/octet-stream","size":21}`,
+		},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	// Export the vault.
+	exportPassphrase := "export-test-passphrase-long-enough"
+	resp = doJSON(t, client, http.MethodPost, base+"/export", map[string]string{
+		"passphrase": exportPassphrase,
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "application/octet-stream", resp.Header.Get("Content-Type"))
+
+	backupData, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.True(t, len(backupData) > 17) // version + salt + ciphertext
+
+	// Create a second vault to import into.
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "ImportTarget",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create2 api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create2))
+
+	// Import into the second vault using multipart form.
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "backup.ironhand-backup")
+	require.NoError(t, err)
+	_, err = part.Write(backupData)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteField("passphrase", exportPassphrase))
+	require.NoError(t, writer.Close())
+
+	base2 := srv.URL + "/api/v1/vaults/" + create2.VaultID
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base2+"/import", &body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err = client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var importResp api.ImportVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&importResp))
+	assert.Equal(t, 2, importResp.ImportedCount)
+
+	// Verify items were imported by listing them.
+	resp = doJSON(t, client, http.MethodGet, base2+"/items", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var list api.ListItemsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+	assert.Len(t, list.Items, 2)
+
+	// Verify attachment data round-trips correctly.
+	var attachmentItemID string
+	for _, item := range list.Items {
+		if item.Name == "With Attachment" {
+			attachmentItemID = item.ItemID
+		}
+	}
+	require.NotEmpty(t, attachmentItemID)
+
+	resp = doJSON(t, client, http.MethodGet, base2+"/items/"+attachmentItemID, nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var getResp api.GetItemResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&getResp))
+	decoded, err := base64.StdEncoding.DecodeString(getResp.Fields["_att.id_rsa"])
+	require.NoError(t, err)
+	assert.Equal(t, rawContent, decoded)
+}
+
+func TestExportRequiresPassphrase(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	registerAndLogin(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "V"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	resp = doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults/"+create.VaultID+"/export", map[string]string{
+		"passphrase": "",
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestImportWrongPassphraseFails(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	registerAndLogin(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "V"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+
+	// Add an item and export.
+	resp = doJSON(t, client, http.MethodPost, base+"/items/item-1", map[string]any{
+		"fields": map[string]string{"_name": "Test", "_type": "note", "content": "hello"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodPost, base+"/export", map[string]string{
+		"passphrase": "correct-passphrase-long",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	backupData, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	// Try to import with wrong passphrase.
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "backup.ironhand-backup")
+	require.NoError(t, err)
+	_, err = part.Write(backupData)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteField("passphrase", "wrong-passphrase-long"))
+	require.NoError(t, writer.Close())
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/import", &body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err = client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }

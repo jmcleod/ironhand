@@ -106,6 +106,8 @@ func (a *API) Router() chi.Router {
 		r.Get("/audit", a.ListAuditLogs)
 		r.Post("/members", a.AddMember)
 		r.Delete("/members/{memberID}", a.RevokeMember)
+		r.Post("/export", a.ExportVault)
+		r.Post("/import", a.ImportVault)
 	})
 
 	return r
