@@ -799,3 +799,275 @@ func TestImportWrongPassphraseFails(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
+
+// ---------------------------------------------------------------------------
+// PKI / Certificate Authority integration tests
+// ---------------------------------------------------------------------------
+
+// createVaultForPKI registers, logs in, and creates a vault. Returns the
+// vault base URL (e.g., "http://…/api/v1/vaults/{id}").
+func createVaultForPKI(t *testing.T, client *http.Client, baseURL string) string {
+	t.Helper()
+	registerAndLogin(t, client, baseURL)
+
+	resp := doJSON(t, client, http.MethodPost, baseURL+"/api/v1/vaults", map[string]string{
+		"name": "PKI Vault",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+	return baseURL + "/api/v1/vaults/" + create.VaultID
+}
+
+func TestPKIInitAndIssueCert(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	// Init CA.
+	resp := doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
+		"common_name":    "Test Root CA",
+		"organization":   "TestOrg",
+		"country":        "US",
+		"validity_years": 10,
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var initResp api.InitCAResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&initResp))
+	assert.Contains(t, initResp.Subject, "CN=Test Root CA")
+
+	// Get CA info.
+	resp = doJSON(t, client, http.MethodGet, base+"/pki/info", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var info api.CAInfoResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&info))
+	assert.True(t, info.IsCA)
+	assert.Equal(t, 0, info.CertCount)
+
+	// Issue 2 certificates.
+	for i := 0; i < 2; i++ {
+		resp = doJSON(t, client, http.MethodPost, base+"/pki/issue", map[string]any{
+			"common_name":    fmt.Sprintf("cert-%d.example.com", i),
+			"validity_days":  365,
+			"dns_names":      []string{fmt.Sprintf("cert-%d.example.com", i)},
+			"ext_key_usages": []string{"server_auth"},
+		})
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+		var issueResp api.IssueCertResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&issueResp))
+		assert.NotEmpty(t, issueResp.ItemID)
+		assert.NotEmpty(t, issueResp.SerialNumber)
+		assert.Contains(t, issueResp.Subject, fmt.Sprintf("cert-%d.example.com", i))
+	}
+
+	// Verify cert count.
+	resp = doJSON(t, client, http.MethodGet, base+"/pki/info", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&info))
+	assert.Equal(t, 2, info.CertCount)
+
+	// Verify certs appear in item listing.
+	resp = doJSON(t, client, http.MethodGet, base+"/items", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var items api.ListItemsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&items))
+	assert.Len(t, items.Items, 2)
+
+	// Download CA cert.
+	resp = doJSON(t, client, http.MethodGet, base+"/pki/ca.pem", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "BEGIN CERTIFICATE")
+}
+
+func TestPKIRevokeCert(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	// Init CA and issue cert.
+	doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
+		"common_name":    "Test CA",
+		"validity_years": 10,
+	})
+
+	resp := doJSON(t, client, http.MethodPost, base+"/pki/issue", map[string]any{
+		"common_name":   "leaf.example.com",
+		"validity_days": 365,
+	})
+	defer resp.Body.Close()
+	var issueResp api.IssueCertResponse
+	json.NewDecoder(resp.Body).Decode(&issueResp)
+
+	// Revoke.
+	resp = doJSON(t, client, http.MethodPost, base+"/pki/items/"+issueResp.ItemID+"/revoke", map[string]string{
+		"reason": "key_compromise",
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	// Verify status changed by reading the item.
+	resp = doJSON(t, client, http.MethodGet, base+"/items/"+issueResp.ItemID, nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var item api.GetItemResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&item))
+	assert.Equal(t, "revoked", item.Fields["status"])
+
+	// Revoke again should fail.
+	resp = doJSON(t, client, http.MethodPost, base+"/pki/items/"+issueResp.ItemID+"/revoke", map[string]string{})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+}
+
+func TestPKIRenewCert(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
+		"common_name":    "Test CA",
+		"validity_years": 10,
+	})
+
+	resp := doJSON(t, client, http.MethodPost, base+"/pki/issue", map[string]any{
+		"common_name":   "renew.example.com",
+		"validity_days": 90,
+		"dns_names":     []string{"renew.example.com"},
+	})
+	defer resp.Body.Close()
+	var issueResp api.IssueCertResponse
+	json.NewDecoder(resp.Body).Decode(&issueResp)
+
+	// Renew.
+	resp = doJSON(t, client, http.MethodPost, base+"/pki/items/"+issueResp.ItemID+"/renew", map[string]any{
+		"validity_days": 365,
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var renewResp api.RenewCertResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&renewResp))
+	assert.NotEqual(t, issueResp.ItemID, renewResp.NewItemID)
+	assert.Equal(t, issueResp.ItemID, renewResp.OldItemID)
+
+	// Old cert should be revoked.
+	resp = doJSON(t, client, http.MethodGet, base+"/items/"+issueResp.ItemID, nil)
+	defer resp.Body.Close()
+	var oldItem api.GetItemResponse
+	json.NewDecoder(resp.Body).Decode(&oldItem)
+	assert.Equal(t, "revoked", oldItem.Fields["status"])
+
+	// New cert should link to old.
+	resp = doJSON(t, client, http.MethodGet, base+"/items/"+renewResp.NewItemID, nil)
+	defer resp.Body.Close()
+	var newItem api.GetItemResponse
+	json.NewDecoder(resp.Body).Decode(&newItem)
+	assert.Equal(t, "active", newItem.Fields["status"])
+	assert.Equal(t, issueResp.ItemID, newItem.Fields["previous_item_id"])
+}
+
+func TestPKIGetCRL(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
+		"common_name":    "CRL Test CA",
+		"validity_years": 10,
+	})
+
+	// Issue 2 certs, revoke 1.
+	resp := doJSON(t, client, http.MethodPost, base+"/pki/issue", map[string]any{
+		"common_name":   "revoke-me.example.com",
+		"validity_days": 365,
+	})
+	defer resp.Body.Close()
+	var issue1 api.IssueCertResponse
+	json.NewDecoder(resp.Body).Decode(&issue1)
+
+	doJSON(t, client, http.MethodPost, base+"/pki/issue", map[string]any{
+		"common_name":   "keep-me.example.com",
+		"validity_days": 365,
+	})
+
+	doJSON(t, client, http.MethodPost, base+"/pki/items/"+issue1.ItemID+"/revoke", map[string]string{
+		"reason": "superseded",
+	})
+
+	// Get CRL.
+	resp = doJSON(t, client, http.MethodGet, base+"/pki/crl.pem", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "BEGIN X509 CRL")
+}
+
+func TestPKIInfoReturns404WhenNotCA(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodGet, base+"/pki/info", nil)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestPKIReservedItemsBlockedFromCRUD(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	// Init CA (creates __ca_state, __ca_cert, __ca_key, __ca_revocations).
+	doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
+		"common_name":    "Test CA",
+		"validity_years": 10,
+	})
+
+	// Attempt to read reserved items via normal CRUD should fail.
+	for _, id := range []string{"__ca_state", "__ca_cert", "__ca_key", "__ca_revocations"} {
+		resp := doJSON(t, client, http.MethodGet, base+"/items/"+id, nil)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "GET /items/%s should be blocked", id)
+
+		resp = doJSON(t, client, http.MethodPost, base+"/items/"+id, map[string]any{
+			"fields": map[string]string{"foo": "bar"},
+		})
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "POST /items/%s should be blocked", id)
+
+		resp = doJSON(t, client, http.MethodDelete, base+"/items/"+id, nil)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "DELETE /items/%s should be blocked", id)
+	}
+
+	// CA reserved items should not appear in item listings.
+	resp := doJSON(t, client, http.MethodGet, base+"/items", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var items api.ListItemsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&items))
+	for _, item := range items.Items {
+		assert.False(t, strings.HasPrefix(item.ItemID, "__"), "reserved item %s should not appear in listings", item.ItemID)
+	}
+}

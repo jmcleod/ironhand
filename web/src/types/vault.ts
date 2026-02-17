@@ -1,4 +1,4 @@
-export type ItemType = 'login' | 'note' | 'card' | 'custom';
+export type ItemType = 'login' | 'note' | 'card' | 'certificate' | 'custom';
 
 export interface VaultItem {
   id: string;
@@ -51,7 +51,7 @@ export function userFields(item: VaultItem): Record<string, string> {
 }
 
 // Field names that should be masked by default
-export const SENSITIVE_FIELDS = new Set(['password', 'cvv', 'card_number', 'totp']);
+export const SENSITIVE_FIELDS = new Set(['password', 'cvv', 'card_number', 'totp', 'private_key']);
 
 // ---------------------------------------------------------------------------
 // Attachment helpers
@@ -137,6 +137,31 @@ export function itemAttachments(item: VaultItem): AttachmentInfo[] {
   return result;
 }
 
+export interface CAInfo {
+  is_ca: boolean;
+  is_intermediate: boolean;
+  subject: string;
+  not_before: string;
+  not_after: string;
+  next_serial: number;
+  crl_number: number;
+  cert_count: number;
+}
+
+export interface IssueCertResult {
+  item_id: string;
+  serial_number: string;
+  subject: string;
+  not_before: string;
+  not_after: string;
+}
+
+export interface RenewCertResult {
+  new_item_id: string;
+  old_item_id: string;
+  serial_number: string;
+}
+
 export interface VaultProfile {
   vaultID: string;
   credentials: string;
@@ -168,7 +193,7 @@ export interface HistoryEntry {
 export interface AuditEntry {
   id: string;
   item_id: string;
-  action: 'item_accessed' | 'item_created' | 'item_updated' | 'item_deleted' | 'vault_exported' | 'vault_imported';
+  action: 'item_accessed' | 'item_created' | 'item_updated' | 'item_deleted' | 'vault_exported' | 'vault_imported' | 'ca_initialized' | 'cert_issued' | 'cert_revoked' | 'cert_renewed' | 'crl_generated' | 'csr_signed';
   member_id: string;
   created_at: string;
 }

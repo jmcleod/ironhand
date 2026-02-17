@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Vault, ItemType, VaultItem, itemName, itemType } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box, ScrollText, Download, Upload } from 'lucide-react';
+import { CAInfo } from '@/types/vault';
+import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box, Shield, ScrollText, Download, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import ItemCard from '@/components/ItemCard';
@@ -11,16 +12,19 @@ import AuditLogDialog from '@/components/AuditLogDialog';
 import EditItemDialog from '@/components/EditItemDialog';
 import ExportVaultDialog from '@/components/ExportVaultDialog';
 import ImportVaultDialog from '@/components/ImportVaultDialog';
+import InitCADialog from '@/components/InitCADialog';
+import IssueCertDialog from '@/components/IssueCertDialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { searchItems } from '@/lib/search';
-import { getItem as apiGetItem } from '@/lib/api';
+import { getItem as apiGetItem, getCAInfo, getCACert, getCRL } from '@/lib/api';
 
 const TYPE_FILTERS: { value: ItemType | 'all'; label: string; icon?: React.ReactNode }[] = [
   { value: 'all', label: 'All' },
   { value: 'login', label: 'Login', icon: <KeyRound className="h-3 w-3" /> },
   { value: 'note', label: 'Note', icon: <StickyNote className="h-3 w-3" /> },
   { value: 'card', label: 'Card', icon: <CreditCard className="h-3 w-3" /> },
+  { value: 'certificate', label: 'Cert', icon: <Shield className="h-3 w-3" /> },
   { value: 'custom', label: 'Custom', icon: <Box className="h-3 w-3" /> },
 ];
 
@@ -30,7 +34,7 @@ interface VaultDetailProps {
 }
 
 export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
-  const { deleteVault } = useVault();
+  const { deleteVault, refresh } = useVault();
   const { toast } = useToast();
   const [showAddItem, setShowAddItem] = useState(false);
   const [showShare, setShowShare] = useState(false);
@@ -46,6 +50,51 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
   const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [caInfo, setCAInfo] = useState<CAInfo | null>(null);
+  const [showInitCA, setShowInitCA] = useState(false);
+  const [showIssueCert, setShowIssueCert] = useState(false);
+
+  // Fetch CA info on mount / refresh.
+  const refreshCAInfo = () => {
+    getCAInfo(vault.id).then(setCAInfo).catch(() => setCAInfo(null));
+  };
+  useEffect(() => { refreshCAInfo(); }, [vault.id]);
+
+  const handleDownloadCACert = async () => {
+    try {
+      const pem = await getCACert(vault.id);
+      const blob = new Blob([pem], { type: 'application/x-pem-file' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'ca-cert.pem';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to download CA certificate.';
+      toast({ title: 'Download failed', description: msg, variant: 'destructive' });
+    }
+  };
+
+  const handleDownloadCRL = async () => {
+    try {
+      const pem = await getCRL(vault.id);
+      const blob = new Blob([pem], { type: 'application/x-pem-file' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'crl.pem';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to generate CRL.';
+      toast({ title: 'Download failed', description: msg, variant: 'destructive' });
+    }
+  };
 
   // Debounce the search input.
   useEffect(() => {
@@ -76,6 +125,8 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
         return <StickyNote className="h-4 w-4" />;
       case 'card':
         return <CreditCard className="h-4 w-4" />;
+      case 'certificate':
+        return <Shield className="h-4 w-4" />;
       case 'custom':
         return <Box className="h-4 w-4" />;
     }
@@ -142,12 +193,48 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
               <Upload className="h-4 w-4 mr-1" />
               Import
             </Button>
+            {caInfo?.is_ca ? (
+              <>
+                <Button variant="outline" size="sm" onClick={() => setShowIssueCert(true)}>
+                  <Shield className="h-4 w-4 mr-1" />
+                  Issue Cert
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleDownloadCACert}>
+                  <Download className="h-4 w-4 mr-1" />
+                  CA Cert
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleDownloadCRL}>
+                  <Download className="h-4 w-4 mr-1" />
+                  CRL
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => setShowInitCA(true)}>
+                <Shield className="h-4 w-4 mr-1" />
+                Init CA
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>
         </div>
       </header>
+
+      {caInfo?.is_ca && (
+        <div className="max-w-4xl mx-auto px-6 pt-4">
+          <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
+            <div className="flex items-center gap-2 text-sm">
+              <Shield className="h-4 w-4 text-primary" />
+              <span className="font-medium">Certificate Authority</span>
+              <span className="text-muted-foreground">&middot;</span>
+              <span className="text-muted-foreground">{caInfo.subject}</span>
+              <span className="text-muted-foreground">&middot;</span>
+              <span className="text-muted-foreground">{caInfo.cert_count} cert{caInfo.cert_count !== 1 ? 's' : ''} issued</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-4xl mx-auto px-6 py-8">
         {vault.items.length === 0 ? (
@@ -273,6 +360,8 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
       )}
       <ExportVaultDialog open={showExport} onOpenChange={setShowExport} vaultId={vault.id} vaultName={vault.name} />
       <ImportVaultDialog open={showImport} onOpenChange={setShowImport} vaultId={vault.id} />
+      <InitCADialog open={showInitCA} onOpenChange={setShowInitCA} vaultId={vault.id} onSuccess={() => { refreshCAInfo(); refresh(); }} />
+      <IssueCertDialog open={showIssueCert} onOpenChange={setShowIssueCert} vaultId={vault.id} onSuccess={() => { refreshCAInfo(); refresh(); }} />
     </div>
   );
 }

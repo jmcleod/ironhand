@@ -108,6 +108,18 @@ func (a *API) Router() chi.Router {
 		r.Delete("/members/{memberID}", a.RevokeMember)
 		r.Post("/export", a.ExportVault)
 		r.Post("/import", a.ImportVault)
+
+		// PKI / Certificate Authority routes
+		r.Route("/pki", func(r chi.Router) {
+			r.Post("/init", a.InitCA)
+			r.Get("/info", a.GetCAInfo)
+			r.Get("/ca.pem", a.GetCACert)
+			r.Post("/issue", a.IssueCert)
+			r.Get("/crl.pem", a.GetCRL)
+			r.Post("/sign-csr", a.SignCSR)
+			r.Post("/items/{itemID}/revoke", a.RevokeCert)
+			r.Post("/items/{itemID}/renew", a.RenewCert)
+		})
 	})
 
 	return r

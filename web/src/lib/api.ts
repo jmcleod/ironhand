@@ -1,4 +1,4 @@
-import { AuditEntry, HistoryEntry, VaultSummary } from '@/types/vault';
+import { AuditEntry, CAInfo, HistoryEntry, IssueCertResult, RenewCertResult, VaultSummary } from '@/types/vault';
 
 const API_BASE = '/api/v1';
 
@@ -219,4 +219,107 @@ export async function importVault(
     return readError(resp);
   }
   return resp.json() as Promise<{ imported_count: number }>;
+}
+
+// ---------------------------------------------------------------------------
+// PKI / Certificate Authority
+// ---------------------------------------------------------------------------
+
+export interface InitCARequestParams {
+  common_name: string;
+  organization?: string;
+  org_unit?: string;
+  country?: string;
+  province?: string;
+  locality?: string;
+  validity_years?: number;
+  is_intermediate?: boolean;
+}
+
+export async function initCA(
+  vaultID: string,
+  req: InitCARequestParams,
+): Promise<{ subject: string }> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/pki/init`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  return resp.json() as Promise<{ subject: string }>;
+}
+
+export async function getCAInfo(vaultID: string): Promise<CAInfo | null> {
+  try {
+    const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/pki/info`);
+    return (await resp.json()) as CAInfo;
+  } catch (err) {
+    if ((err as ApiError).status === 404) return null;
+    throw err;
+  }
+}
+
+export async function getCACert(vaultID: string): Promise<string> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/pki/ca.pem`);
+  return resp.text();
+}
+
+export interface IssueCertRequestParams {
+  common_name: string;
+  organization?: string;
+  org_unit?: string;
+  country?: string;
+  validity_days?: number;
+  key_usages?: string[];
+  ext_key_usages?: string[];
+  dns_names?: string[];
+  ip_addresses?: string[];
+  email_addresses?: string[];
+}
+
+export async function issueCert(
+  vaultID: string,
+  req: IssueCertRequestParams,
+): Promise<IssueCertResult> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/pki/issue`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  return resp.json() as Promise<IssueCertResult>;
+}
+
+export async function revokeCert(
+  vaultID: string,
+  itemID: string,
+  reason?: string,
+): Promise<void> {
+  await request(
+    `/vaults/${encodeURIComponent(vaultID)}/pki/items/${encodeURIComponent(itemID)}/revoke`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason ?? 'unspecified' }),
+    },
+  );
+}
+
+export async function renewCert(
+  vaultID: string,
+  itemID: string,
+  validityDays?: number,
+): Promise<RenewCertResult> {
+  const resp = await request(
+    `/vaults/${encodeURIComponent(vaultID)}/pki/items/${encodeURIComponent(itemID)}/renew`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ validity_days: validityDays ?? 365 }),
+    },
+  );
+  return resp.json() as Promise<RenewCertResult>;
+}
+
+export async function getCRL(vaultID: string): Promise<string> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/pki/crl.pem`);
+  return resp.text();
 }

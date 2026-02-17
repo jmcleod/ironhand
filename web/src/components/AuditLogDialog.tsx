@@ -24,6 +24,18 @@ function actionLabel(action: AuditEntry['action']) {
       return 'Vault Exported';
     case 'vault_imported':
       return 'Vault Imported';
+    case 'ca_initialized':
+      return 'CA Initialized';
+    case 'cert_issued':
+      return 'Certificate Issued';
+    case 'cert_revoked':
+      return 'Certificate Revoked';
+    case 'cert_renewed':
+      return 'Certificate Renewed';
+    case 'crl_generated':
+      return 'CRL Generated';
+    case 'csr_signed':
+      return 'CSR Signed';
   }
 }
 

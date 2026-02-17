@@ -254,7 +254,7 @@ components:
           type: string
         action:
           type: string
-          enum: [item_accessed, item_created, item_updated, item_deleted, vault_exported, vault_imported]
+          enum: [item_accessed, item_created, item_updated, item_deleted, vault_exported, vault_imported, ca_initialized, cert_issued, cert_revoked, cert_renewed, crl_generated, csr_signed]
         member_id:
           type: string
         created_at:
@@ -290,6 +290,172 @@ components:
         imported_count:
           type: integer
           description: Number of items successfully imported.
+
+    InitCARequest:
+      type: object
+      required:
+        - common_name
+      properties:
+        common_name:
+          type: string
+        organization:
+          type: string
+        org_unit:
+          type: string
+        country:
+          type: string
+        province:
+          type: string
+        locality:
+          type: string
+        validity_years:
+          type: integer
+          description: CA certificate validity in years (default 10).
+        is_intermediate:
+          type: boolean
+          description: Whether this is an intermediate CA (default false = root CA).
+
+    InitCAResponse:
+      type: object
+      properties:
+        subject:
+          type: string
+
+    CAInfoResponse:
+      type: object
+      properties:
+        is_ca:
+          type: boolean
+        is_intermediate:
+          type: boolean
+        subject:
+          type: string
+        not_before:
+          type: string
+          format: date-time
+        not_after:
+          type: string
+          format: date-time
+        next_serial:
+          type: integer
+          format: int64
+        crl_number:
+          type: integer
+          format: int64
+        cert_count:
+          type: integer
+
+    IssueCertRequest:
+      type: object
+      required:
+        - common_name
+      properties:
+        common_name:
+          type: string
+        organization:
+          type: string
+        org_unit:
+          type: string
+        country:
+          type: string
+        validity_days:
+          type: integer
+          description: Certificate validity in days (default 365).
+        key_usages:
+          type: array
+          items:
+            type: string
+          description: >
+            Key usage flags. Values: digital_signature, key_encipherment,
+            data_encipherment, content_commitment.
+        ext_key_usages:
+          type: array
+          items:
+            type: string
+          description: >
+            Extended key usage values. Values: server_auth, client_auth,
+            code_signing, email_protection.
+        dns_names:
+          type: array
+          items:
+            type: string
+        ip_addresses:
+          type: array
+          items:
+            type: string
+        email_addresses:
+          type: array
+          items:
+            type: string
+
+    IssueCertResponse:
+      type: object
+      properties:
+        item_id:
+          type: string
+        serial_number:
+          type: string
+        subject:
+          type: string
+        not_before:
+          type: string
+          format: date-time
+        not_after:
+          type: string
+          format: date-time
+
+    RevokeCertRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: >
+            Revocation reason. Values: unspecified, key_compromise,
+            ca_compromise, affiliation_changed, superseded, cessation_of_operation.
+
+    RenewCertRequest:
+      type: object
+      properties:
+        validity_days:
+          type: integer
+          description: New certificate validity in days (default 365).
+
+    RenewCertResponse:
+      type: object
+      properties:
+        new_item_id:
+          type: string
+        old_item_id:
+          type: string
+        serial_number:
+          type: string
+
+    SignCSRRequest:
+      type: object
+      required:
+        - csr
+      properties:
+        csr:
+          type: string
+          description: PEM-encoded PKCS#10 certificate signing request.
+        validity_days:
+          type: integer
+          description: Certificate validity in days (default 365).
+        ext_key_usages:
+          type: array
+          items:
+            type: string
+
+    SignCSRResponse:
+      type: object
+      properties:
+        item_id:
+          type: string
+        serial_number:
+          type: string
+        certificate:
+          type: string
+          description: PEM-encoded signed certificate.
 
 paths:
   /auth/register:
@@ -803,6 +969,280 @@ paths:
           description: Unauthorized
         '403':
           description: Forbidden (not owner)
+
+  /vaults/{vaultID}/pki/init:
+    post:
+      summary: Initialize vault as a Certificate Authority
+      operationId: initCA
+      description: >
+        Creates a self-signed root CA (or intermediate CA) with the given subject.
+        Generates an ECDSA P-256 CA key pair stored encrypted in the vault.
+        Requires admin access.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitCARequest'
+      responses:
+        '200':
+          description: CA initialized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitCAResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+        '409':
+          description: Vault is already a CA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vaults/{vaultID}/pki/info:
+    get:
+      summary: Get CA information
+      operationId: getCAInfo
+      description: Returns CA metadata including subject, validity, serial counter, and certificate count.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: CA information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CAInfoResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Vault is not a CA
+
+  /vaults/{vaultID}/pki/ca.pem:
+    get:
+      summary: Download CA certificate
+      operationId: getCACert
+      description: Returns the CA's X.509 certificate in PEM format.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: CA certificate PEM
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          description: Unauthorized
+        '404':
+          description: Vault is not a CA
+
+  /vaults/{vaultID}/pki/issue:
+    post:
+      summary: Issue a new certificate
+      operationId: issueCert
+      description: >
+        Issues a new X.509 certificate signed by the vault's CA.
+        Generates a new ECDSA P-256 key pair. The certificate and private key
+        are stored as a vault item. Requires admin access.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueCertRequest'
+      responses:
+        '200':
+          description: Certificate issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueCertResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/pki/items/{itemID}/revoke:
+    post:
+      summary: Revoke a certificate
+      operationId: revokeCert
+      description: >
+        Marks a certificate as revoked. The revocation is recorded for CRL
+        generation. Requires admin access.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: itemID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeCertRequest'
+      responses:
+        '200':
+          description: Certificate revoked
+        '401':
+          description: Unauthorized
+        '404':
+          description: Certificate not found
+        '409':
+          description: Certificate already revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vaults/{vaultID}/pki/items/{itemID}/renew:
+    post:
+      summary: Renew a certificate
+      operationId: renewCert
+      description: >
+        Revokes the existing certificate and issues a new one with the same
+        subject and SANs. The new item links back to the old one via
+        previous_item_id. Requires admin access.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: itemID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenewCertRequest'
+      responses:
+        '200':
+          description: Certificate renewed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenewCertResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Certificate not found
+
+  /vaults/{vaultID}/pki/crl.pem:
+    get:
+      summary: Generate and download Certificate Revocation List
+      operationId: getCRL
+      description: >
+        Generates a CRL on demand from the vault's revocation list, signed
+        by the CA. Returns the CRL in PEM format.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: CRL in PEM format
+          content:
+            application/x-pem-file:
+              schema:
+                type: string
+        '401':
+          description: Unauthorized
+        '404':
+          description: Vault is not a CA
+
+  /vaults/{vaultID}/pki/sign-csr:
+    post:
+      summary: Sign a Certificate Signing Request
+      operationId: signCSR
+      description: >
+        Signs a PEM-encoded PKCS#10 CSR with the vault's CA. The resulting
+        certificate is stored as a vault item (without private key, since the
+        requester keeps their own key). Requires admin access.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignCSRRequest'
+      responses:
+        '200':
+          description: CSR signed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignCSRResponse'
+        '400':
+          description: Invalid CSR
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
 
   /vaults/{vaultID}/import:
     post:

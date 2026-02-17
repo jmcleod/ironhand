@@ -1,12 +1,15 @@
 package api
 
 import (
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/internal/uuid"
+	"github.com/jmcleod/ironhand/pki"
 	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/vault"
 )
@@ -29,6 +33,12 @@ var backupKDFParams = util.Argon2idParams{
 	MemoryKiB:   64 * 1024,
 	Parallelism: 4,
 	KeyLen:      32,
+}
+
+// isReservedItemID reports whether itemID is reserved for internal use
+// (vault metadata or PKI CA state) and should be blocked from user CRUD.
+func isReservedItemID(itemID string) bool {
+	return itemID == vaultMetadataItemID || pki.IsReservedItemID(itemID)
 }
 
 func fieldsFromAPI(apiFields map[string]string) (vault.Fields, error) {
@@ -144,7 +154,7 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 
 	filtered := items[:0]
 	for _, itemID := range items {
-		if itemID == vaultMetadataItemID {
+		if isReservedItemID(itemID) {
 			continue
 		}
 		filtered = append(filtered, itemID)
@@ -179,7 +189,7 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
-	if itemID == vaultMetadataItemID {
+	if isReservedItemID(itemID) {
 		writeError(w, http.StatusBadRequest, "item_id is reserved")
 		return
 	}
@@ -219,7 +229,7 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
-	if itemID == vaultMetadataItemID {
+	if isReservedItemID(itemID) {
 		writeError(w, http.StatusBadRequest, "item_id is reserved")
 		return
 	}
@@ -249,7 +259,7 @@ func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
-	if itemID == vaultMetadataItemID {
+	if isReservedItemID(itemID) {
 		writeError(w, http.StatusBadRequest, "item_id is reserved")
 		return
 	}
@@ -289,7 +299,7 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 func (a *API) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
-	if itemID == vaultMetadataItemID {
+	if isReservedItemID(itemID) {
 		writeError(w, http.StatusBadRequest, "item_id is reserved")
 		return
 	}
@@ -486,7 +496,7 @@ func (a *API) RevokeMember(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetItemHistory(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
-	if itemID == vaultMetadataItemID {
+	if isReservedItemID(itemID) {
 		writeError(w, http.StatusBadRequest, "item_id is reserved")
 		return
 	}
@@ -526,7 +536,7 @@ func (a *API) GetHistoryVersion(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
 	versionStr := chi.URLParam(r, "version")
-	if itemID == vaultMetadataItemID {
+	if isReservedItemID(itemID) {
 		writeError(w, http.StatusBadRequest, "item_id is reserved")
 		return
 	}
@@ -642,7 +652,7 @@ func (a *API) ExportVault(w http.ResponseWriter, r *http.Request) {
 	// Decrypt each item (skip metadata item).
 	exportItems := make([]vaultExportItem, 0, len(itemIDs))
 	for _, itemID := range itemIDs {
-		if itemID == vaultMetadataItemID {
+		if isReservedItemID(itemID) {
 			continue
 		}
 		fields, err := session.Get(r.Context(), itemID)
@@ -804,4 +814,455 @@ func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
 		slog.Int("imported_count", importedCount))
 
 	writeJSON(w, http.StatusOK, ImportVaultResponse{ImportedCount: importedCount})
+}
+
+// ---------------------------------------------------------------------------
+// PKI / Certificate Authority handlers
+// ---------------------------------------------------------------------------
+
+// parseExtKeyUsages converts string names to x509.ExtKeyUsage constants.
+func parseExtKeyUsages(names []string) []x509.ExtKeyUsage {
+	var usages []x509.ExtKeyUsage
+	for _, name := range names {
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "server_auth", "serverauth":
+			usages = append(usages, x509.ExtKeyUsageServerAuth)
+		case "client_auth", "clientauth":
+			usages = append(usages, x509.ExtKeyUsageClientAuth)
+		case "code_signing", "codesigning":
+			usages = append(usages, x509.ExtKeyUsageCodeSigning)
+		case "email_protection", "emailprotection":
+			usages = append(usages, x509.ExtKeyUsageEmailProtection)
+		}
+	}
+	return usages
+}
+
+// parseRevocationReason maps a reason string to an x509 CRL reason code.
+func parseRevocationReason(reason string) int {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "key_compromise":
+		return 1
+	case "ca_compromise":
+		return 2
+	case "affiliation_changed":
+		return 3
+	case "superseded":
+		return 4
+	case "cessation_of_operation":
+		return 5
+	default:
+		return 0 // Unspecified
+	}
+}
+
+// InitCA handles POST /vaults/{vaultID}/pki/init.
+func (a *API) InitCA(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	var req InitCARequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.CommonName == "" {
+		writeError(w, http.StatusBadRequest, "common_name is required")
+		return
+	}
+	if req.ValidityYears <= 0 {
+		req.ValidityYears = 10
+	}
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	subject := pkix.Name{CommonName: req.CommonName}
+	if req.Organization != "" {
+		subject.Organization = []string{req.Organization}
+	}
+	if req.OrgUnit != "" {
+		subject.OrganizationalUnit = []string{req.OrgUnit}
+	}
+	if req.Country != "" {
+		subject.Country = []string{req.Country}
+	}
+	if req.Province != "" {
+		subject.Province = []string{req.Province}
+	}
+	if req.Locality != "" {
+		subject.Locality = []string{req.Locality}
+	}
+
+	if err := pki.InitCA(r.Context(), session, subject, req.ValidityYears, req.IsIntermediate); err != nil {
+		if errors.Is(err, pki.ErrAlreadyCA) {
+			writeError(w, http.StatusConflict, "vault is already initialized as a CA")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	_ = a.appendAuditEntry(vaultID, "", session.MemberID, auditActionCAInitialized)
+	a.audit.logEvent(AuditCAInitialized, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID))
+
+	info, _ := pki.GetCAInfo(r.Context(), session)
+	resp := InitCAResponse{Subject: ""}
+	if info != nil {
+		resp.Subject = info.Subject
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+// GetCAInfo handles GET /vaults/{vaultID}/pki/info.
+func (a *API) GetCAInfo(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	info, err := pki.GetCAInfo(r.Context(), session)
+	if err != nil {
+		if errors.Is(err, pki.ErrNotCA) {
+			writeError(w, http.StatusNotFound, "vault is not initialized as a CA")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, CAInfoResponse{
+		IsCA:           info.IsCA,
+		IsIntermediate: info.IsIntermediate,
+		Subject:        info.Subject,
+		NotBefore:      info.NotBefore,
+		NotAfter:       info.NotAfter,
+		NextSerial:     info.NextSerial,
+		CRLNumber:      info.CRLNumber,
+		CertCount:      info.CertCount,
+	})
+}
+
+// GetCACert handles GET /vaults/{vaultID}/pki/ca.pem.
+func (a *API) GetCACert(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	certPEM, err := pki.GetCACertificate(r.Context(), session)
+	if err != nil {
+		if errors.Is(err, pki.ErrNotCA) {
+			writeError(w, http.StatusNotFound, "vault is not initialized as a CA")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"ca.pem\"")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(certPEM))
+}
+
+// IssueCert handles POST /vaults/{vaultID}/pki/issue.
+func (a *API) IssueCert(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	var req IssueCertAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.CommonName == "" {
+		writeError(w, http.StatusBadRequest, "common_name is required")
+		return
+	}
+	if req.ValidityDays <= 0 {
+		req.ValidityDays = 365
+	}
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	subject := pkix.Name{CommonName: req.CommonName}
+	if req.Organization != "" {
+		subject.Organization = []string{req.Organization}
+	}
+	if req.OrgUnit != "" {
+		subject.OrganizationalUnit = []string{req.OrgUnit}
+	}
+	if req.Country != "" {
+		subject.Country = []string{req.Country}
+	}
+
+	// Parse IP addresses.
+	var ips []net.IP
+	for _, s := range req.IPAddresses {
+		if ip := net.ParseIP(strings.TrimSpace(s)); ip != nil {
+			ips = append(ips, ip)
+		}
+	}
+
+	issueReq := pki.IssueCertRequest{
+		Subject:        subject,
+		ValidityDays:   req.ValidityDays,
+		ExtKeyUsages:   parseExtKeyUsages(req.ExtKeyUsages),
+		DNSNames:       req.DNSNames,
+		IPAddresses:    ips,
+		EmailAddresses: req.EmailAddresses,
+	}
+
+	itemID, err := pki.IssueCertificate(r.Context(), session, issueReq)
+	if err != nil {
+		if errors.Is(err, pki.ErrNotCA) {
+			writeError(w, http.StatusBadRequest, "vault is not initialized as a CA")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Read back the issued cert fields for the response.
+	fields, _ := session.Get(r.Context(), itemID)
+
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionCertIssued)
+	a.audit.logEvent(AuditCertIssued, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("item_id", itemID))
+
+	writeJSON(w, http.StatusCreated, IssueCertResponse{
+		ItemID:       itemID,
+		SerialNumber: string(fields[pki.FieldSerialNumber]),
+		Subject:      string(fields[pki.FieldSubject]),
+		NotBefore:    string(fields[pki.FieldNotBefore]),
+		NotAfter:     string(fields[pki.FieldNotAfter]),
+	})
+}
+
+// RevokeCert handles POST /vaults/{vaultID}/pki/items/{itemID}/revoke.
+func (a *API) RevokeCert(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	itemID := chi.URLParam(r, "itemID")
+	creds := credentialsFromContext(r.Context())
+
+	var req RevokeCertAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Allow empty body (defaults to unspecified reason).
+		req.Reason = "unspecified"
+	}
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	reason := parseRevocationReason(req.Reason)
+	if err := pki.RevokeCertificate(r.Context(), session, itemID, reason); err != nil {
+		switch {
+		case errors.Is(err, pki.ErrNotCA):
+			writeError(w, http.StatusBadRequest, "vault is not initialized as a CA")
+		case errors.Is(err, pki.ErrCertNotFound):
+			writeError(w, http.StatusNotFound, "certificate not found")
+		case errors.Is(err, pki.ErrNotCertificateItem):
+			writeError(w, http.StatusBadRequest, "item is not a certificate")
+		case errors.Is(err, pki.ErrCertAlreadyRevoked):
+			writeError(w, http.StatusConflict, "certificate is already revoked")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionCertRevoked)
+	a.audit.logEvent(AuditCertRevoked, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("item_id", itemID))
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RenewCert handles POST /vaults/{vaultID}/pki/items/{itemID}/renew.
+func (a *API) RenewCert(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	itemID := chi.URLParam(r, "itemID")
+	creds := credentialsFromContext(r.Context())
+
+	var req RenewCertAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ValidityDays <= 0 {
+		req.ValidityDays = 365
+	}
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	newItemID, err := pki.RenewCertificate(r.Context(), session, itemID, req.ValidityDays)
+	if err != nil {
+		switch {
+		case errors.Is(err, pki.ErrNotCA):
+			writeError(w, http.StatusBadRequest, "vault is not initialized as a CA")
+		case errors.Is(err, pki.ErrCertNotFound):
+			writeError(w, http.StatusNotFound, "certificate not found")
+		case errors.Is(err, pki.ErrNotCertificateItem):
+			writeError(w, http.StatusBadRequest, "item is not a certificate")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	// Read serial from new cert.
+	newFields, _ := session.Get(r.Context(), newItemID)
+
+	_ = a.appendAuditEntry(vaultID, newItemID, session.MemberID, auditActionCertRenewed)
+	a.audit.logEvent(AuditCertRenewed, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("old_item_id", itemID),
+		slog.String("new_item_id", newItemID))
+
+	writeJSON(w, http.StatusOK, RenewCertResponse{
+		NewItemID:    newItemID,
+		OldItemID:    itemID,
+		SerialNumber: string(newFields[pki.FieldSerialNumber]),
+	})
+}
+
+// GetCRL handles GET /vaults/{vaultID}/pki/crl.pem.
+func (a *API) GetCRL(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	crlPEM, err := pki.GenerateCRL(r.Context(), session)
+	if err != nil {
+		if errors.Is(err, pki.ErrNotCA) {
+			writeError(w, http.StatusNotFound, "vault is not initialized as a CA")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	_ = a.appendAuditEntry(vaultID, "", session.MemberID, auditActionCRLGenerated)
+	a.audit.logEvent(AuditCRLGenerated, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID))
+
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"crl.pem\"")
+	w.WriteHeader(http.StatusOK)
+	w.Write(crlPEM)
+}
+
+// SignCSR handles POST /vaults/{vaultID}/pki/sign-csr.
+func (a *API) SignCSR(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	var req SignCSRAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.CSR == "" {
+		writeError(w, http.StatusBadRequest, "csr is required")
+		return
+	}
+	if req.ValidityDays <= 0 {
+		req.ValidityDays = 365
+	}
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	extKeyUsages := parseExtKeyUsages(req.ExtKeyUsages)
+
+	itemID, err := pki.SignCSR(r.Context(), session, req.CSR, req.ValidityDays, extKeyUsages)
+	if err != nil {
+		if errors.Is(err, pki.ErrNotCA) {
+			writeError(w, http.StatusBadRequest, "vault is not initialized as a CA")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Read the issued cert PEM.
+	fields, _ := session.Get(r.Context(), itemID)
+
+	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionCSRSigned)
+	a.audit.logEvent(AuditCSRSigned, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("item_id", itemID))
+
+	writeJSON(w, http.StatusCreated, SignCSRResponse{
+		ItemID:       itemID,
+		SerialNumber: string(fields[pki.FieldSerialNumber]),
+		Certificate:  string(fields[pki.FieldCertificate]),
+	})
 }

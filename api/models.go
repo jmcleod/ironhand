@@ -178,3 +178,90 @@ type vaultExportPayload struct {
 type vaultExportItem struct {
 	Fields map[string]string `json:"fields"`
 }
+
+// ---------------------------------------------------------------------------
+// PKI / Certificate Authority
+// ---------------------------------------------------------------------------
+
+// InitCARequest is the JSON body for POST /vaults/{vaultID}/pki/init.
+type InitCARequest struct {
+	CommonName     string `json:"common_name"`
+	Organization   string `json:"organization,omitempty"`
+	OrgUnit        string `json:"org_unit,omitempty"`
+	Country        string `json:"country,omitempty"`
+	Province       string `json:"province,omitempty"`
+	Locality       string `json:"locality,omitempty"`
+	ValidityYears  int    `json:"validity_years"`
+	IsIntermediate bool   `json:"is_intermediate"`
+}
+
+// InitCAResponse is returned from POST /vaults/{vaultID}/pki/init.
+type InitCAResponse struct {
+	Subject string `json:"subject"`
+}
+
+// CAInfoResponse is returned from GET /vaults/{vaultID}/pki/info.
+type CAInfoResponse struct {
+	IsCA           bool   `json:"is_ca"`
+	IsIntermediate bool   `json:"is_intermediate"`
+	Subject        string `json:"subject"`
+	NotBefore      string `json:"not_before"`
+	NotAfter       string `json:"not_after"`
+	NextSerial     int64  `json:"next_serial"`
+	CRLNumber      int64  `json:"crl_number"`
+	CertCount      int    `json:"cert_count"`
+}
+
+// IssueCertAPIRequest is the JSON body for POST /vaults/{vaultID}/pki/issue.
+type IssueCertAPIRequest struct {
+	CommonName     string   `json:"common_name"`
+	Organization   string   `json:"organization,omitempty"`
+	OrgUnit        string   `json:"org_unit,omitempty"`
+	Country        string   `json:"country,omitempty"`
+	ValidityDays   int      `json:"validity_days"`
+	KeyUsages      []string `json:"key_usages,omitempty"`
+	ExtKeyUsages   []string `json:"ext_key_usages,omitempty"`
+	DNSNames       []string `json:"dns_names,omitempty"`
+	IPAddresses    []string `json:"ip_addresses,omitempty"`
+	EmailAddresses []string `json:"email_addresses,omitempty"`
+}
+
+// IssueCertResponse is returned from POST /vaults/{vaultID}/pki/issue.
+type IssueCertResponse struct {
+	ItemID       string `json:"item_id"`
+	SerialNumber string `json:"serial_number"`
+	Subject      string `json:"subject"`
+	NotBefore    string `json:"not_before"`
+	NotAfter     string `json:"not_after"`
+}
+
+// RevokeCertAPIRequest is the JSON body for POST /vaults/{vaultID}/pki/items/{itemID}/revoke.
+type RevokeCertAPIRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// RenewCertAPIRequest is the JSON body for POST /vaults/{vaultID}/pki/items/{itemID}/renew.
+type RenewCertAPIRequest struct {
+	ValidityDays int `json:"validity_days"`
+}
+
+// RenewCertResponse is returned from POST /vaults/{vaultID}/pki/items/{itemID}/renew.
+type RenewCertResponse struct {
+	NewItemID    string `json:"new_item_id"`
+	OldItemID    string `json:"old_item_id"`
+	SerialNumber string `json:"serial_number"`
+}
+
+// SignCSRAPIRequest is the JSON body for POST /vaults/{vaultID}/pki/sign-csr.
+type SignCSRAPIRequest struct {
+	CSR          string   `json:"csr"`
+	ValidityDays int      `json:"validity_days"`
+	ExtKeyUsages []string `json:"ext_key_usages,omitempty"`
+}
+
+// SignCSRResponse is returned from POST /vaults/{vaultID}/pki/sign-csr.
+type SignCSRResponse struct {
+	ItemID       string `json:"item_id"`
+	SerialNumber string `json:"serial_number"`
+	Certificate  string `json:"certificate"`
+}

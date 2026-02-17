@@ -54,6 +54,11 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
   const [cvv, setCvv] = useState('');
   const [cardNotes, setCardNotes] = useState('');
 
+  // Certificate fields
+  const [certPem, setCertPem] = useState('');
+  const [keyPem, setKeyPem] = useState('');
+  const [certNotes, setCertNotes] = useState('');
+
   // Custom fields
   const [customFields, setCustomFields] = useState<CustomField[]>([{ key: '', value: '' }]);
 
@@ -91,6 +96,11 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
         setCvv(fields.cvv || '');
         setCardNotes(fields.notes || '');
         break;
+      case 'certificate':
+        setCertPem(fields.certificate || '');
+        setKeyPem(fields.private_key || '');
+        setCertNotes(fields.notes || '');
+        break;
       case 'custom': {
         const entries = Object.entries(fields);
         setCustomFields(entries.length > 0 ? entries.map(([key, value]) => ({ key, value })) : [{ key: '', value: '' }]);
@@ -119,6 +129,13 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
         if (expiry) f.expiry = expiry;
         if (cvv) f.cvv = cvv;
         if (cardNotes) f.notes = cardNotes;
+        return f;
+      }
+      case 'certificate': {
+        const f: Record<string, string> = {};
+        if (certPem) f.certificate = certPem;
+        if (keyPem) f.private_key = keyPem;
+        if (certNotes) f.notes = certNotes;
         return f;
       }
       case 'custom': {
@@ -257,6 +274,7 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
       case 'login': return 'Login';
       case 'note': return 'Note';
       case 'card': return 'Card';
+      case 'certificate': return 'Certificate';
       case 'custom': return 'Custom';
     }
   };
@@ -344,6 +362,35 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
     </>
   );
 
+  const renderCertificateFields = () => (
+    <>
+      <div>
+        <label className={LABEL}>Certificate PEM</label>
+        <Textarea
+          value={certPem}
+          onChange={e => setCertPem(e.target.value)}
+          placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
+          rows={5}
+          className={`${FIELD} font-mono text-xs`}
+        />
+      </div>
+      <div>
+        <label className={LABEL}>Private Key PEM (optional)</label>
+        <Textarea
+          value={keyPem}
+          onChange={e => setKeyPem(e.target.value)}
+          placeholder={"-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----"}
+          rows={4}
+          className={`${FIELD} font-mono text-xs`}
+        />
+      </div>
+      <div>
+        <label className={LABEL}>Notes</label>
+        <Textarea value={certNotes} onChange={e => setCertNotes(e.target.value)} placeholder="Additional notes (optional)" rows={2} className={FIELD} />
+      </div>
+    </>
+  );
+
   const renderCustomFields = () => (
     <>
       {customFields.map((cf, i) => (
@@ -373,6 +420,7 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
       case 'login': return renderLoginFields();
       case 'note': return renderNoteFields();
       case 'card': return renderCardFields();
+      case 'certificate': return renderCertificateFields();
       case 'custom': return renderCustomFields();
     }
   };

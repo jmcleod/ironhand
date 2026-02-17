@@ -22,6 +22,12 @@ const (
 	auditActionItemDeleted   auditAction = "item_deleted"
 	auditActionVaultExported auditAction = "vault_exported"
 	auditActionVaultImported auditAction = "vault_imported"
+	auditActionCAInitialized auditAction = "ca_initialized"
+	auditActionCertIssued    auditAction = "cert_issued"
+	auditActionCertRevoked   auditAction = "cert_revoked"
+	auditActionCertRenewed   auditAction = "cert_renewed"
+	auditActionCRLGenerated  auditAction = "crl_generated"
+	auditActionCSRSigned     auditAction = "csr_signed"
 )
 
 type auditEntry struct {

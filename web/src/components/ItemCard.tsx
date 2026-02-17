@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { VaultItem, itemName, itemType, itemUpdatedAt, userFields, SENSITIVE_FIELDS, itemAttachments, formatFileSize } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Pencil, History, AlertTriangle, Paperclip, Download } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Shield, Pencil, History, AlertTriangle, Paperclip, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import EditItemDialog from '@/components/EditItemDialog';
@@ -73,6 +73,28 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
     }
   };
 
+  const handleDownloadPEM = (filename: string, pemContent: string) => {
+    const blob = new Blob([pemContent], { type: 'application/x-pem-file' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const pemFilename = (key: string): string => {
+    const baseName = (name || 'cert').replace(/[^a-zA-Z0-9._-]/g, '_');
+    switch (key) {
+      case 'certificate': return `${baseName}.pem`;
+      case 'private_key': return `${baseName}.key`;
+      case 'chain': return `${baseName}-chain.pem`;
+      default: return `${baseName}-${key}.pem`;
+    }
+  };
+
   const handleDelete = async () => {
     if (confirm('Delete this item?')) {
       try {
@@ -97,6 +119,7 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
       case 'login': return <KeyRound className="h-4 w-4 text-primary" />;
       case 'note': return <StickyNote className="h-4 w-4 text-primary" />;
       case 'card': return <CreditCard className="h-4 w-4 text-primary" />;
+      case 'certificate': return <Shield className="h-4 w-4 text-primary" />;
       case 'custom': return <Box className="h-4 w-4 text-primary" />;
     }
   };
@@ -106,6 +129,7 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
       case 'login': return 'Login';
       case 'note': return 'Note';
       case 'card': return 'Card';
+      case 'certificate': return 'Certificate';
       case 'custom': return 'Custom';
     }
   };
@@ -121,6 +145,45 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
   const renderFieldValue = (key: string, value: string) => {
     const sensitive = isSensitive(key);
     const revealed = revealedFields.has(key);
+
+    // Certificate status badge
+    if (key === 'status' && type === 'certificate') {
+      const color = value === 'active'
+        ? 'bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30'
+        : 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30';
+      return (
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${color}`}>
+          {value.charAt(0).toUpperCase() + value.slice(1)}
+        </span>
+      );
+    }
+
+    // Certificate expiry countdown
+    if (key === 'not_after' && type === 'certificate' && value) {
+      const expiry = new Date(value);
+      const now = new Date();
+      const diffMs = expiry.getTime() - now.getTime();
+      const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+      const expiryText = diffDays > 0 ? `Expires in ${diffDays} days` : `Expired ${Math.abs(diffDays)} days ago`;
+      const expiryColor = diffDays > 30 ? 'text-muted-foreground' : diffDays > 0 ? 'text-amber-500' : 'text-red-500';
+      return (
+        <span className="text-sm">
+          <span className="text-foreground">{expiry.toLocaleDateString()}</span>
+          <span className={`ml-2 text-xs ${expiryColor}`}>({expiryText})</span>
+        </span>
+      );
+    }
+
+    // PEM fields: show truncated preview with copy button
+    if ((key === 'certificate' || key === 'chain') && value.startsWith('-----BEGIN')) {
+      const lines = value.split('\n');
+      const preview = lines.length > 4 ? lines.slice(0, 3).join('\n') + '\n...' : value;
+      return (
+        <div className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-all max-h-20 overflow-hidden">
+          {preview}
+        </div>
+      );
+    }
 
     if (key === 'url' && value) {
       return (
@@ -183,6 +246,9 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
     );
   };
 
+  const isPEMField = (key: string, value: string) =>
+    type === 'certificate' && (key === 'certificate' || key === 'private_key' || key === 'chain') && value.includes('-----BEGIN');
+
   const renderField = (key: string, value: string) => {
     // TOTP fields get special rendering with live code generation
     if (key === 'totp' && value && isValidTOTPSecret(value)) {
@@ -216,6 +282,7 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
     }
 
     const sensitive = isSensitive(key);
+    const canDownloadPEM = isPEMField(key, value);
     return (
       <div key={key} className="flex items-center gap-2 py-1.5 group">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[100px] shrink-0">
@@ -228,6 +295,11 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
           {sensitive && (
             <Button variant="ghost" size="icon" onClick={() => toggleReveal(key)} className="h-7 w-7">
               {revealedFields.has(key) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </Button>
+          )}
+          {canDownloadPEM && (
+            <Button variant="ghost" size="icon" onClick={() => handleDownloadPEM(pemFilename(key), value)} className="h-7 w-7" title={`Download ${pemFilename(key)}`}>
+              <Download className="h-3.5 w-3.5" />
             </Button>
           )}
           <Button variant="ghost" size="icon" onClick={() => handleCopy(key, value)} className="h-7 w-7">
