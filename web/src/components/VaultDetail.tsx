@@ -14,6 +14,7 @@ import ExportVaultDialog from '@/components/ExportVaultDialog';
 import ImportVaultDialog from '@/components/ImportVaultDialog';
 import InitCADialog from '@/components/InitCADialog';
 import IssueCertDialog from '@/components/IssueCertDialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { searchItems } from '@/lib/search';
@@ -194,20 +195,56 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
               Import
             </Button>
             {caInfo?.is_ca ? (
-              <>
-                <Button variant="outline" size="sm" onClick={() => setShowIssueCert(true)}>
-                  <Shield className="h-4 w-4 mr-1" />
-                  Issue Cert
-                </Button>
-                <Button variant="outline" size="sm" onClick={handleDownloadCACert}>
-                  <Download className="h-4 w-4 mr-1" />
-                  CA Cert
-                </Button>
-                <Button variant="outline" size="sm" onClick={handleDownloadCRL}>
-                  <Download className="h-4 w-4 mr-1" />
-                  CRL
-                </Button>
-              </>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Shield className="h-4 w-4 mr-1" />
+                    CA
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 p-4 bg-card border-border" align="end">
+                  <div className="space-y-3">
+                    <div>
+                      <h4 className="text-sm font-semibold mb-1">Certificate Authority</h4>
+                      <p className="text-xs text-muted-foreground">{caInfo.is_intermediate ? 'Intermediate' : 'Root'} CA</p>
+                    </div>
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Subject</span>
+                        <span className="text-foreground font-medium text-right max-w-[160px] truncate" title={caInfo.subject}>{caInfo.subject}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Valid Until</span>
+                        <span className="text-foreground">{new Date(caInfo.not_after).toLocaleDateString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Certs Issued</span>
+                        <span className="text-foreground">{caInfo.cert_count}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Next Serial</span>
+                        <span className="text-foreground">{caInfo.next_serial}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1.5 pt-1 border-t border-border">
+                      <Button variant="default" size="sm" className="w-full" onClick={() => setShowIssueCert(true)}>
+                        <Shield className="h-3.5 w-3.5 mr-1.5" />
+                        Issue Certificate
+                      </Button>
+                      <div className="flex gap-1.5">
+                        <Button variant="outline" size="sm" className="flex-1" onClick={handleDownloadCACert}>
+                          <Download className="h-3.5 w-3.5 mr-1.5" />
+                          CA Cert
+                        </Button>
+                        <Button variant="outline" size="sm" className="flex-1" onClick={handleDownloadCRL}>
+                          <Download className="h-3.5 w-3.5 mr-1.5" />
+                          CRL
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
             ) : (
               <Button variant="outline" size="sm" onClick={() => setShowInitCA(true)}>
                 <Shield className="h-4 w-4 mr-1" />
@@ -220,21 +257,6 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
           </div>
         </div>
       </header>
-
-      {caInfo?.is_ca && (
-        <div className="max-w-4xl mx-auto px-6 pt-4">
-          <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
-            <div className="flex items-center gap-2 text-sm">
-              <Shield className="h-4 w-4 text-primary" />
-              <span className="font-medium">Certificate Authority</span>
-              <span className="text-muted-foreground">&middot;</span>
-              <span className="text-muted-foreground">{caInfo.subject}</span>
-              <span className="text-muted-foreground">&middot;</span>
-              <span className="text-muted-foreground">{caInfo.cert_count} cert{caInfo.cert_count !== 1 ? 's' : ''} issued</span>
-            </div>
-          </div>
-        </div>
-      )}
 
       <main className="max-w-4xl mx-auto px-6 py-8">
         {vault.items.length === 0 ? (

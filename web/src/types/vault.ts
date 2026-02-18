@@ -15,6 +15,7 @@ export interface Vault {
   updatedAt: string;
   epoch: number;
   itemCount: number;
+  isCA?: boolean;
 }
 
 // Conventional metadata field names (prefixed with _)

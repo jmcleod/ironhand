@@ -16,6 +16,7 @@ import {
   setupTwoFactor as apiSetupTwoFactor,
   enableTwoFactor as apiEnableTwoFactor,
   updateItem as apiUpdateItem,
+  getCAInfo as apiGetCAInfo,
 } from '@/lib/api';
 import { generateId } from '@/lib/crypto';
 import { FIELD_CREATED, FIELD_NAME, FIELD_TYPE, FIELD_UPDATED, ItemType, Vault, VaultItem } from '@/types/vault';
@@ -57,7 +58,10 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     const summaries = await apiListVaults();
     const nextVaults: Vault[] = [];
     for (const summary of summaries) {
-      const listed = await apiListItems(summary.vault_id).catch(() => []);
+      const [listed, caInfo] = await Promise.all([
+        apiListItems(summary.vault_id).catch(() => []),
+        apiGetCAInfo(summary.vault_id).catch(() => null),
+      ]);
       const items: VaultItem[] = [];
       for (const item of listed) {
         items.push({
@@ -78,6 +82,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         updatedAt: new Date().toISOString(),
         epoch: summary.epoch,
         itemCount: summary.item_count,
+        isCA: caInfo?.is_ca ?? false,
       });
     }
     const status = await apiTwoFactorStatus().catch(() => ({ enabled: false }));

@@ -1,5 +1,5 @@
 import { Vault } from '@/types/vault';
-import { FolderLock, Share2 } from 'lucide-react';
+import { FolderLock, Share2, Shield } from 'lucide-react';
 
 interface VaultCardProps {
   vault: Vault;
@@ -16,12 +16,20 @@ export default function VaultCard({ vault, onClick }: VaultCardProps) {
         <div className="h-11 w-11 rounded-xl bg-accent flex items-center justify-center group-hover:glow-primary-sm transition-all">
           <FolderLock className="h-5 w-5 text-primary" />
         </div>
-        {vault.sharedWith.length > 0 && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-1 rounded-full">
-            <Share2 className="h-3 w-3" />
-            {vault.sharedWith.length}
-          </div>
-        )}
+        <div className="flex items-center gap-1.5">
+          {vault.isCA && (
+            <div className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-1 rounded-full" title="Certificate Authority">
+              <Shield className="h-3 w-3" />
+              CA
+            </div>
+          )}
+          {vault.sharedWith.length > 0 && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-1 rounded-full">
+              <Share2 className="h-3 w-3" />
+              {vault.sharedWith.length}
+            </div>
+          )}
+        </div>
       </div>
       <h3 className="font-semibold text-foreground mb-1 truncate">{vault.name}</h3>
       <p className="text-sm text-muted-foreground line-clamp-2 mb-3">{vault.description || 'No description'}</p>
