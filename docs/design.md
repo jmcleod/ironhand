@@ -1,0 +1,593 @@
+# IronHand Design Documentation
+
+This document describes the architecture and design of the IronHand library and server. For details on the cryptographic schemes used, see [encryption.md](encryption.md).
+
+## Overview
+
+IronHand is a secure, encrypted vault library written in Go. It provides member-based access control, epoch-based key rotation, rollback detection, and a pluggable storage layer. The library can be used directly as a Go package or accessed through a REST API served by the built-in HTTPS server.
+
+## Package Structure
+
+### Public Packages
+
+| Package | Purpose |
+|---|---|
+| `vault/` | Core vault operations, sessions, membership, epoch rotation |
+| `crypto/` | Credential and key generation abstractions |
+| `storage/` | Storage abstraction layer with pluggable backends |
+| `pki/` | Certificate Authority operations built on vault sessions |
+| `api/` | REST API handlers and HTTP middleware |
+| `web/` | Embedded web UI assets and handler |
+
+### Internal Packages
+
+| Package | Purpose |
+|---|---|
+| `internal/util/` | Low-level crypto primitives (AES-256-GCM, X25519, Argon2id, HKDF) |
+| `internal/crypto/` | Mid-level crypto operations (AAD construction, member key wrapping) |
+| `internal/uuid/` | UUID generation |
+
+### CLI
+
+| Package | Purpose |
+|---|---|
+| `cmd/ironhand/` | Cobra-based CLI with `server` subcommand |
+
+## Vault Lifecycle
+
+### Creating a Vault Handle
+
+A `Vault` struct combines a vault identifier, a storage backend, and an epoch cache:
+
+```go
+type Vault struct {
+    id         string
+    repo       storage.Repository
+    epochCache EpochCache
+}
+```
+
+Create a handle with `vault.New(id, repo, ...opts)`. By default an in-memory epoch cache is used; production deployments should supply a persistent cache via the `WithEpochCache` option to retain rollback protection across restarts.
+
+### Vault Creation
+
+`v.Create(ctx, creds, ...opts)` initialises a new vault:
+
+1. Validates the vault ID and credentials.
+2. Derives a record key from the owner's Master Unlock Key (MUK) and the vault ID.
+3. Generates a random 32-byte KEK (Key Encryption Key) for epoch 1.
+4. Builds a `vaultState` containing epoch number, KDF parameters, and salts.
+5. Creates the owner's member record with role `owner` and status `active`.
+6. Wraps the KEK for the owner using X25519 public-key sealing.
+7. Writes state, member, and KEK wrap atomically via `repo.Batch()`.
+8. Returns an open `Session` with the KEK and record key held in memguard Enclaves.
+
+### Opening a Vault
+
+`v.Open(ctx, creds)` opens an existing vault for a member:
+
+1. Loads vault state and verifies the KDF profile matches the credentials.
+2. Checks the epoch cache for rollback (`GetMaxEpochSeen`). If the stored epoch exceeds the vault's current epoch, returns `ErrRollbackDetected`.
+3. Loads the member record and verifies status is `active`.
+4. Loads and unwraps the member's KEK wrap using their X25519 private key.
+5. Updates the epoch cache with the current epoch.
+6. Returns an active `Session`.
+
+### Vault State
+
+Vault state is stored as a single encrypted record:
+
+```go
+type vaultState struct {
+    VaultID    string
+    Epoch      uint64
+    KDFParams  Argon2idParams
+    SaltPass   []byte    // 16 bytes
+    SaltSecret []byte    // 16 bytes
+    CreatedAt  time.Time
+    Ver        int       // currently 1
+}
+```
+
+The KDF parameters and salts are shared across all vault members, enabling any member with the correct passphrase and secret key to derive the same MUK.
+
+## Sessions
+
+### Session Structure
+
+A `Session` holds the decrypted key material for an authenticated vault member:
+
+```go
+type Session struct {
+    vault     *Vault
+    epoch     uint64
+    MemberID  string
+    kek       *memguard.Enclave
+    recordKey *memguard.Enclave
+}
+```
+
+Both the KEK and record key are stored in memguard Enclaves, which encrypt keys at rest in process memory. Keys are decrypted briefly into mlock'd `LockedBuffer` instances only during operations, then wiped immediately. Callers must call `Close()` when finished.
+
+### Item Operations
+
+**Put** creates a new encrypted item:
+1. Generates a random 32-byte DEK (Data Encryption Key) for the item.
+2. Encrypts each field independently with the DEK and field-specific AAD.
+3. Wraps the DEK with the vault KEK and epoch-specific AAD.
+4. Serialises the item and seals it with the record key.
+5. Stores via `PutCAS` with `expectedVersion=0` (create-only semantics).
+
+**Get** retrieves and decrypts an item:
+1. Loads the sealed envelope from storage.
+2. Opens the envelope with the record key and verifies AAD.
+3. Unwraps the DEK using the KEK.
+4. Decrypts each field with the DEK and field-specific AAD.
+5. Returns a `Fields` map (`map[string][]byte`).
+
+**Update** re-encrypts an existing item:
+1. Loads the current item to obtain its version number.
+2. Snapshots the current item to an `ITEM_HISTORY` record.
+3. Generates a new DEK and increments the item version.
+4. Encrypts fields and wraps the DEK as in Put.
+5. Stores via `PutCAS` with the previous version as the expected version (optimistic concurrency).
+
+**Delete** removes an item from the vault.
+
+**List** returns all item IDs in the vault.
+
+### Field Constraints
+
+| Constraint | Limit |
+|---|---|
+| Field name length | 128 characters |
+| Fields per item | 64 |
+| Field value size | 1 MB (1,048,576 bytes) |
+| Attachment size | 768 KiB (raw, before base64 encoding) |
+| Filename length | 119 characters |
+| ID length | 256 characters |
+| Forbidden ID characters | `:`, `/`, control characters |
+
+### Well-Known Fields
+
+- `_name` — Display name
+- `_type` — Item type
+- `_created` — Creation timestamp
+- `_updated` — Last update timestamp
+- `_att.<filename>` — Attachment content (base64-encoded at API boundary)
+- `_attmeta.<filename>` — Attachment metadata (JSON)
+
+### Item History
+
+Updates automatically snapshot the previous version to `ITEM_HISTORY` records. History operations:
+
+- `GetHistory(ctx, itemID)` — Returns a list of past versions (newest first), each with version number, timestamp, and updating member ID.
+- `GetHistoryVersion(ctx, itemID, version)` — Decrypts a specific historical version.
+
+History records use the key format `{itemID}#{version}` and are re-encrypted during epoch rotation alongside current items.
+
+## Membership Model
+
+### Member Structure
+
+```go
+type Member struct {
+    MemberID     string
+    PubKey       [32]byte      // X25519 public key
+    Role         MemberRole    // owner, writer, or reader
+    Status       MemberStatus  // active or revoked
+    AddedEpoch   uint64
+    RevokedEpoch uint64
+}
+```
+
+### Roles and Access Control
+
+| Role | Read | Write | Admin (add/revoke members) |
+|---|---|---|---|
+| `owner` | Yes | Yes | Yes |
+| `writer` | Yes | Yes | No |
+| `reader` | Yes | No | No |
+
+Every session operation checks the member's role before proceeding via an internal `authorize()` call.
+
+### Epoch Rotation
+
+Adding or revoking a member triggers epoch rotation, which is the core mechanism for forward secrecy:
+
+1. **Generate a new KEK** — A fresh random 32-byte key.
+2. **Update the member list** — Add the new member or mark the revoked member.
+3. **Re-wrap KEK for all active members** — Each active member's X25519 public key is used to seal the new KEK. The wrap record ID is `{epoch}:{memberID}`.
+4. **Re-encrypt all items** — For each item: decrypt the DEK with the old KEK, decrypt all fields, re-encrypt fields with new-epoch AAD, re-wrap the DEK with the new KEK.
+5. **Re-encrypt all history records** — Same process as items.
+6. **Update vault state** — Increment the epoch number.
+7. **Atomic batch write** — All records are written in a single `repo.Batch()` transaction.
+8. **Update session** — The session's KEK Enclave is replaced with the new KEK.
+
+After rotation, revoked members cannot decrypt data at the new epoch because they do not have a KEK wrap for that epoch.
+
+### Rollback Detection
+
+The `EpochCache` interface tracks the highest epoch seen per vault:
+
+```go
+type EpochCache interface {
+    GetMaxEpochSeen(vaultID string) uint64
+    SetMaxEpochSeen(vaultID string, epoch uint64) error
+}
+```
+
+Three implementations are provided:
+
+| Implementation | Persistence | Use Case |
+|---|---|---|
+| `MemoryEpochCache` | None | Testing |
+| `BoltEpochCache` | BBolt file | Single-instance production |
+| PostgreSQL `EpochCache` | Database | Multi-instance production |
+
+On `Open()`, if the vault's current epoch is lower than the cached maximum, `ErrRollbackDetected` is returned. This prevents an attacker from reverting storage to a prior state to re-grant access to revoked members.
+
+## Storage Layer
+
+### Repository Interface
+
+All storage backends implement the `Repository` interface:
+
+```go
+type Repository interface {
+    Put(vaultID, recordType, recordID string, envelope *Envelope) error
+    Get(vaultID, recordType, recordID string) (*Envelope, error)
+    List(vaultID, recordType string) ([]string, error)
+    ListVaults() ([]string, error)
+    Delete(vaultID, recordType, recordID string) error
+    DeleteVault(vaultID string) error
+    PutCAS(vaultID, recordType, recordID string, expectedVersion uint64, envelope *Envelope) error
+    Batch(vaultID string, fn func(tx BatchTx) error) error
+}
+```
+
+`BatchTx` provides `Put`, `PutCAS`, and `Delete` scoped to a single vault for atomic multi-record writes (used by epoch rotation).
+
+### Envelope
+
+Every record is stored as an `Envelope`:
+
+```go
+type Envelope struct {
+    Ver        int    // 1
+    Scheme     string // "aes256gcm"
+    Nonce      []byte // 12 bytes
+    Ciphertext []byte
+    Version    uint64 // CAS tracking
+}
+```
+
+Envelopes are created with `SealRecord(recordKey, plaintext, aad)` and opened with `OpenRecord(recordKey, envelope, aad)`.
+
+### Record Types
+
+| Type | Description | Record ID Pattern |
+|---|---|---|
+| `STATE` | Vault metadata | `current` |
+| `MEMBER` | Member records | `{memberID}` |
+| `KEKWRAP` | Per-member KEK wraps | `{epoch}:{memberID}` |
+| `ITEM` | Encrypted items | `{itemID}` |
+| `ITEM_HISTORY` | Historical item snapshots | `{itemID}#{version}` |
+| `AUDIT` | Audit trail entries | `{auditID}` |
+
+### Sentinel Errors
+
+| Error | Meaning |
+|---|---|
+| `ErrNotFound` | Record does not exist |
+| `ErrVaultNotFound` | Vault does not exist |
+| `ErrCASFailed` | Compare-and-swap version mismatch |
+
+### Backend: In-Memory
+
+- **Package:** `storage/memory`
+- **Structure:** Thread-safe `map[vaultID]map[key]Envelope` with `sync.RWMutex`
+- **Persistence:** None
+- **Use case:** Testing and demos
+
+### Backend: BBolt
+
+- **Package:** `storage/bbolt`
+- **Structure:** One BBolt bucket per vault, key format `{recordType}:{recordID}`
+- **Persistence:** Single file on disk
+- **Transactions:** BBolt's `Update()` and `View()` callbacks provide serialised access
+- **Use case:** Default backend for single-instance deployments
+
+### Backend: PostgreSQL
+
+- **Package:** `storage/postgres`
+- **Schema:** `records` table with composite primary key `(vault_id, record_type, record_id)`, plus `epoch_cache` table
+- **Connection:** `pgx/v5` with connection pooling via `pgxpool`
+- **CAS:** `SELECT ... FOR UPDATE` row locks within transactions
+- **Batch:** PostgreSQL transactions for atomic multi-record writes
+- **Use case:** Multi-instance deployments
+
+The PostgreSQL schema is embedded in the binary via `//go:embed` and applied automatically on first connection through `EnsureSchema()`.
+
+## REST API
+
+### Server Setup
+
+The server is started with:
+
+```sh
+ironhand server [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port` | 8443 | HTTPS listen port |
+| `--data-dir` | `./data` | Directory for BBolt files |
+| `--storage` | `bbolt` | Storage backend (`bbolt` or `postgres`) |
+| `--postgres-dsn` | | PostgreSQL connection string |
+| `--tls-cert` | | Path to TLS certificate |
+| `--tls-key` | | Path to TLS key |
+
+If no TLS certificate is provided, the server generates a self-signed certificate at startup.
+
+### Routing
+
+The server uses Chi for HTTP routing with middleware:
+
+- `middleware.Logger` — Request logging
+- `middleware.Recoverer` — Panic recovery
+- `AuthMiddleware` — Session cookie or header-based authentication
+
+### API Structure
+
+```go
+type API struct {
+    repo        storage.Repository
+    epochCache  vault.EpochCache
+    sessions    *sessionStore
+    rateLimiter *loginRateLimiter
+    audit       *auditLogger
+}
+```
+
+### Endpoint Summary
+
+#### Authentication
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/auth/register` | Register (passphrase -> secret key + session cookie) |
+| `POST` | `/api/v1/auth/login` | Login (passphrase + secret key -> session cookie) |
+| `POST` | `/api/v1/auth/logout` | Logout (clear session) |
+| `GET` | `/api/v1/auth/2fa` | Get 2FA status |
+| `POST` | `/api/v1/auth/2fa/setup` | Begin TOTP setup |
+| `POST` | `/api/v1/auth/2fa/enable` | Verify code and enable 2FA |
+
+#### Vaults
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/vaults` | Create a vault |
+| `GET` | `/api/v1/vaults` | List vaults |
+| `DELETE` | `/api/v1/vaults/{vaultID}` | Delete a vault |
+| `GET` | `/api/v1/vaults/{vaultID}/audit` | Audit trail |
+
+#### Items
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/vaults/{vaultID}/items/{itemID}` | Create item |
+| `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}` | Get item |
+| `PUT` | `/api/v1/vaults/{vaultID}/items/{itemID}` | Update item |
+| `DELETE` | `/api/v1/vaults/{vaultID}/items/{itemID}` | Delete item |
+| `GET` | `/api/v1/vaults/{vaultID}/items` | List items |
+| `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}/history` | List history |
+| `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}/history/{version}` | Get version |
+
+#### Members
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/vaults/{vaultID}/members` | Add member |
+| `DELETE` | `/api/v1/vaults/{vaultID}/members/{memberID}` | Revoke member |
+
+#### Export/Import
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/vaults/{vaultID}/export` | Export vault data |
+| `POST` | `/api/v1/vaults/{vaultID}/import` | Import vault data |
+
+#### PKI (Certificate Authority)
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/vaults/{vaultID}/pki/init` | Initialise vault as a CA |
+| `GET` | `/api/v1/vaults/{vaultID}/pki/info` | Get CA metadata |
+| `GET` | `/api/v1/vaults/{vaultID}/pki/ca.pem` | Download CA certificate |
+| `POST` | `/api/v1/vaults/{vaultID}/pki/issue` | Issue certificate |
+| `POST` | `/api/v1/vaults/{vaultID}/pki/items/{itemID}/revoke` | Revoke certificate |
+| `POST` | `/api/v1/vaults/{vaultID}/pki/items/{itemID}/renew` | Renew certificate |
+| `GET` | `/api/v1/vaults/{vaultID}/pki/crl.pem` | Generate and download CRL |
+| `POST` | `/api/v1/vaults/{vaultID}/pki/sign-csr` | Sign a CSR |
+
+#### Documentation
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/openapi.yaml` | OpenAPI specification |
+| `GET` | `/api/v1/docs` | Swagger UI |
+| `GET` | `/api/v1/redoc` | ReDoc |
+
+### Authentication
+
+Sessions are managed in-memory with a 24-hour expiry:
+
+```go
+type authSession struct {
+    SecretKeyID       string
+    SessionPassphrase string
+    CredentialsBlob   string
+    ExpiresAt         time.Time
+    PendingTOTPSecret string
+    PendingTOTPExpiry time.Time
+}
+```
+
+The `AuthMiddleware` checks for a session cookie (`ironhand_session`) first, then falls back to `X-Credentials` and `X-Passphrase` headers. Credentials are imported from the encrypted blob and stored in the request context.
+
+Registration returns the secret key only once; there is no API to retrieve it later.
+
+## Certificate Authority (PKI)
+
+### Overview
+
+Any vault can be initialised as a Certificate Authority. CA private keys, certificates, and revocation lists are stored as encrypted vault items, benefiting from the same field-level encryption, epoch-based rotation, and access control as all other vault data.
+
+### CA State Storage
+
+CA state is stored in reserved items prefixed with `__ca_`:
+
+| Item ID | Contents |
+|---|---|
+| `__ca_state` | CA metadata: subject, validity, next serial number, CRL number, intermediate flag |
+| `__ca_cert` | PEM-encoded CA certificate |
+| `__ca_key` | PEM-encoded CA private key (encrypted by vault field-level encryption) |
+| `__ca_revocations` | JSON array of revocation entries |
+
+These items are hidden from the regular item listing API and blocked from direct CRUD operations via `isReservedItemID()`.
+
+### CA Operations
+
+| Operation | Description |
+|---|---|
+| `InitCA` | Generate an ECDSA P-256 keypair, create a self-signed CA certificate, store CA state |
+| `IssueCertificate` | Sign a new leaf certificate with SANs, key usages, and validity period |
+| `RevokeCertificate` | Mark a certificate as revoked with an optional reason code |
+| `RenewCertificate` | Reissue with new serial and validity, automatically revoke the old certificate |
+| `GenerateCRL` | Produce a PEM-encoded CRL containing all revoked certificates |
+| `SignCSR` | Accept a PEM-encoded CSR and issue a signed certificate using the requester's public key |
+
+### Certificate Item Fields
+
+Each issued certificate is stored as a vault item with these well-known fields:
+
+| Field | Description |
+|---|---|
+| `subject` | Distinguished Name |
+| `issuer` | Issuer Distinguished Name |
+| `serial_number` | Hex-encoded serial number |
+| `not_before` / `not_after` | Validity period (RFC 3339) |
+| `certificate` | PEM-encoded X.509 certificate |
+| `private_key` | PEM-encoded ECDSA private key |
+| `chain` | PEM bundle of intermediate certificates (optional) |
+| `fingerprint_sha256` | Hex SHA-256 fingerprint |
+| `key_algorithm` | Key algorithm (e.g., `ECDSA P-256`) |
+| `status` | `active`, `expired`, or `revoked` |
+| `issued_by_ca` | Whether issued by this vault's CA |
+| `previous_item_id` | Links to predecessor after renewal |
+
+## Audit System
+
+### Audit Events
+
+The API layer logs security-relevant events:
+
+| Category | Events |
+|---|---|
+| Authentication | `login_success`, `login_failure`, `login_rate_limited`, `register`, `logout` |
+| 2FA | `two_factor_setup`, `two_factor_enabled` |
+| Vault | `vault_created`, `vault_deleted` |
+| Membership | `member_added`, `member_revoked` |
+| Items | `item_created`, `item_updated`, `item_deleted` |
+| Credentials | `credentials_exported`, `vault_exported`, `vault_imported` |
+| PKI | `ca_initialized`, `cert_issued`, `cert_revoked`, `cert_renewed`, `crl_generated`, `csr_signed` |
+
+Audit entries include timestamp, client IP, account ID (secret key ID, not the raw key), and event-specific context. They are written as structured JSON via `log/slog` and also stored as encrypted vault items under the `AUDIT` record type for per-vault querying.
+
+## Web UI
+
+The web UI is a browser-based SPA served by the Go server:
+
+- **Embedding:** Assets in `web/dist/` are embedded via `//go:embed` and served at `/`.
+- **SPA routing:** Deep links are redirected to `index.html`.
+- **Same origin:** The UI and API share the same host and port, avoiding CORS configuration.
+
+## Concurrency and Thread Safety
+
+| Component | Mechanism |
+|---|---|
+| In-memory storage | `sync.RWMutex` |
+| Session store | `sync.RWMutex` |
+| Epoch caches | `sync.RWMutex` (in-memory map) + backend persistence |
+| BBolt | Database-level serialised transactions |
+| PostgreSQL | Connection pool + SQL transactions |
+| memguard Enclaves | Thread-safe by design |
+
+Vault and Session operations are stateless beyond the Repository interface, so concurrent access to different vaults is fully parallel.
+
+## Error Types
+
+| Error | Meaning |
+|---|---|
+| `UnauthorizedError` | Invalid credentials or insufficient permissions |
+| `StaleSessionError` | Session epoch is behind the vault's current epoch |
+| `SessionClosedError` | Session key material has been destroyed |
+| `RollbackError` | Epoch cache detected a storage rollback |
+| `ValidationError` | Invalid input (ID format, field limits, etc.) |
+| `VaultExistsError` | Vault with this ID already exists |
+
+## Threat Model
+
+### Protected Against
+
+- **Data-at-rest compromise** — All content is AES-256-GCM encrypted with unique per-item keys.
+- **Passphrase-only attacks** — MUK derivation requires both passphrase and secret key.
+- **Member revocation** — Epoch rotation ensures revoked members lose access to new and re-wrapped data.
+- **Storage rollback** — Epoch cache detects if storage is reverted to a prior state.
+- **Record swapping** — AAD binds ciphertext to its identity (vault, type, ID, epoch, version), preventing substitution.
+- **Brute-force** — Argon2id with configurable memory-hard parameters.
+
+### Not Protected Against
+
+- Compromise of a running process (memory dumps).
+- Side-channel attacks on the host.
+- Denial of service at the storage layer.
+
+## Deployment
+
+### Single Instance (BBolt)
+
+```sh
+ironhand server --port 8443 --data-dir ./data
+```
+
+### Multi-Instance (PostgreSQL)
+
+```sh
+ironhand server --port 8443 --storage postgres \
+    --postgres-dsn "postgres://ironhand:pass@localhost:5432/ironhand?sslmode=disable"
+```
+
+The DSN can also be set via the `IRONHAND_POSTGRES_DSN` environment variable.
+
+### Docker Compose
+
+A `docker-compose.yml` is provided for running IronHand with PostgreSQL:
+
+```sh
+docker compose up
+```
+
+This starts PostgreSQL 17 and the IronHand server with the PostgreSQL backend configured automatically.
+
+### Configuration Summary
+
+| Setting | Flag | Environment Variable | Default |
+|---|---|---|---|
+| Port | `--port` | | 8443 |
+| Data directory | `--data-dir` | | `./data` |
+| Storage backend | `--storage` | | `bbolt` |
+| PostgreSQL DSN | `--postgres-dsn` | `IRONHAND_POSTGRES_DSN` | |
+| TLS certificate | `--tls-cert` | | (self-signed) |
+| TLS key | `--tls-key` | | (self-signed) |

@@ -13,6 +13,13 @@ A secure, encrypted vault library for Go with member-based access control, epoch
 - **Pluggable storage** — in-memory (testing), BBolt (default), or PostgreSQL backends
 - **Built-in Certificate Authority** — turn any vault into a CA, issue/revoke/renew X.509 certificates, generate CRLs, and sign CSRs
 
+## Documentation
+
+Detailed documentation is available in the [`docs/`](docs/) directory:
+
+- **[Design](docs/design.md)** — Architecture, vault lifecycle, sessions, membership, storage backends, REST API, PKI, and audit system
+- **[Encryption](docs/encryption.md)** — Cryptographic schemes: MUK derivation, key hierarchy, AES-256-GCM, AAD construction, field-level encryption, epoch rotation, and credential export
+
 ## Quick Start
 
 ```go
