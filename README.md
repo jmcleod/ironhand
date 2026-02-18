@@ -10,7 +10,7 @@ A secure, encrypted vault library for Go with member-based access control, epoch
 - **Epoch-based key rotation** — adding or revoking members rotates the vault KEK and re-wraps all items atomically
 - **Rollback detection** — persistent epoch cache detects storage rollback attacks
 - **Credential export/import** — single encrypted blob for portable vault access
-- **Pluggable storage** — in-memory (testing) or BBolt (production) backends
+- **Pluggable storage** — in-memory (testing), BBolt (default), or PostgreSQL backends
 - **Built-in Certificate Authority** — turn any vault into a CA, issue/revoke/renew X.509 certificates, generate CRLs, and sign CSRs
 
 ## Quick Start
@@ -103,10 +103,34 @@ Revoked members cannot decrypt items at the new epoch.
 
 All records are stored as AES-256-GCM encrypted envelopes with AAD that binds the ciphertext to its vault, record type, record ID, epoch, and version. This prevents record swapping and cross-vault replay attacks.
 
-Two backends are provided:
+Three backends are provided:
 
 - `storage/memory` — in-memory, suitable for testing
-- `storage/bbolt` — persistent BBolt-backed storage for production
+- `storage/bbolt` — persistent BBolt-backed storage (default)
+- `storage/postgres` — PostgreSQL-backed storage for multi-instance deployments
+
+#### Running with PostgreSQL
+
+The server defaults to BBolt. To use PostgreSQL instead, pass `--storage postgres` and a connection string:
+
+```sh
+# Start a local PostgreSQL (e.g. via Docker Compose)
+docker compose up -d postgres
+
+# Run IronHand with PostgreSQL
+go run ./cmd/ironhand server --storage postgres \
+    --postgres-dsn "postgres://ironhand:ironhand@localhost:5432/ironhand?sslmode=disable"
+```
+
+The DSN can also be provided via the `IRONHAND_POSTGRES_DSN` environment variable.
+
+To run the full stack (IronHand + PostgreSQL) with Docker Compose:
+
+```sh
+docker compose up
+```
+
+The schema is created automatically on first startup. Pool parameters can be tuned via the DSN (e.g. `pool_max_conns=20`).
 
 ### Threat Model
 

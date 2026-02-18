@@ -17,36 +17,76 @@ import (
 
 	"github.com/jmcleod/ironhand/api"
 	"github.com/jmcleod/ironhand/internal/util"
+	"github.com/jmcleod/ironhand/storage"
 	bboltstorage "github.com/jmcleod/ironhand/storage/bbolt"
+	pgstorage "github.com/jmcleod/ironhand/storage/postgres"
 	"github.com/jmcleod/ironhand/vault"
 	"github.com/jmcleod/ironhand/web"
 )
 
 var (
-	port    int
-	dataDir string
-	tlsCert string
-	tlsKey  string
+	port           int
+	dataDir        string
+	tlsCert        string
+	tlsKey         string
+	storageBackend string
+	postgresDSN    string
 )
 
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the encryption service server",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := os.MkdirAll(dataDir, 0o700); err != nil {
-			return fmt.Errorf("failed to create data directory: %w", err)
-		}
+		var (
+			repo       storage.Repository
+			epochCache vault.EpochCache
+			closeFn    func()
+		)
 
-		repo, err := bboltstorage.NewRepositoryFromFile(dataDir+"/vault.db", nil)
-		if err != nil {
-			return fmt.Errorf("failed to open vault storage: %w", err)
-		}
-		defer repo.Close()
+		switch storageBackend {
+		case "bbolt":
+			if err := os.MkdirAll(dataDir, 0o700); err != nil {
+				return fmt.Errorf("failed to create data directory: %w", err)
+			}
+			boltRepo, err := bboltstorage.NewRepositoryFromFile(dataDir+"/vault.db", nil)
+			if err != nil {
+				return fmt.Errorf("failed to open vault storage: %w", err)
+			}
+			boltEpochCache, err := vault.NewBoltEpochCacheFromFile(dataDir+"/epoch.db", nil)
+			if err != nil {
+				boltRepo.Close()
+				return fmt.Errorf("failed to open epoch cache: %w", err)
+			}
+			repo = boltRepo
+			epochCache = boltEpochCache
+			closeFn = func() { boltRepo.Close() }
 
-		epochCache, err := vault.NewBoltEpochCacheFromFile(dataDir+"/epoch.db", nil)
-		if err != nil {
-			return fmt.Errorf("failed to open epoch cache: %w", err)
+		case "postgres":
+			dsn := postgresDSN
+			if dsn == "" {
+				dsn = os.Getenv("IRONHAND_POSTGRES_DSN")
+			}
+			if dsn == "" {
+				return fmt.Errorf("--postgres-dsn or IRONHAND_POSTGRES_DSN required when --storage=postgres")
+			}
+			ctx := context.Background()
+			pgStore, err := pgstorage.NewRepositoryFromDSN(ctx, dsn)
+			if err != nil {
+				return fmt.Errorf("failed to connect to postgres: %w", err)
+			}
+			pgEpoch, err := pgstorage.NewEpochCache(ctx, pgStore.Pool())
+			if err != nil {
+				pgStore.Close()
+				return fmt.Errorf("failed to initialize epoch cache: %w", err)
+			}
+			repo = pgStore
+			epochCache = pgEpoch
+			closeFn = func() { pgStore.Close() }
+
+		default:
+			return fmt.Errorf("unknown storage backend: %q (supported: bbolt, postgres)", storageBackend)
 		}
+		defer closeFn()
 
 		a := api.New(repo, epochCache)
 
@@ -109,7 +149,7 @@ var serverCmd = &cobra.Command{
 		}()
 
 		printBanner()
-		fmt.Printf("Starting server on port %d (data: %s)...\n", port, dataDir)
+		fmt.Printf("Starting server on port %d (storage: %s)...\n", port, storageBackend)
 
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -135,4 +175,6 @@ func init() {
 	serverCmd.Flags().StringVar(&dataDir, "data-dir", "./data", "Directory for persistent data")
 	serverCmd.Flags().StringVar(&tlsCert, "tls-cert", "", "Path to TLS certificate file")
 	serverCmd.Flags().StringVar(&tlsKey, "tls-key", "", "Path to TLS key file")
+	serverCmd.Flags().StringVar(&storageBackend, "storage", "bbolt", "Storage backend: bbolt or postgres")
+	serverCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", "", "PostgreSQL connection string (required when --storage=postgres)")
 }

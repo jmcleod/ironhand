@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ironhand
+      POSTGRES_USER: ironhand
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ironhand}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ironhand -d ironhand"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  ironhand:
+    build: .
+    ports:
+      - "8443:8443"
+    environment:
+      IRONHAND_POSTGRES_DSN: "postgres://ironhand:${POSTGRES_PASSWORD:-ironhand}@postgres:5432/ironhand?sslmode=disable"
+    command:
+      - server
+      - --port
+      - "8443"
+      - --storage
+      - postgres
+      - --postgres-dsn
+      - "postgres://ironhand:${POSTGRES_PASSWORD:-ironhand}@postgres:5432/ironhand?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
