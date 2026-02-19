@@ -124,10 +124,19 @@ func New(repo storage.Repository, epochCache vault.EpochCache, opts ...Option) *
 	if a.audit == nil {
 		a.audit = newAuditLogger(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	}
-	// Wire metrics collector into the audit logger if alerting is configured.
-	if a.metrics != nil {
-		a.audit.metrics = a.metrics
+	// Default to a logging-based alert handler so anomaly detection is
+	// always active, even when no custom callback is provided.
+	if a.metrics == nil {
+		a.metrics = newMetricsCollector(func(e AlertEvent) {
+			a.audit.logger.Warn("anomaly detected",
+				slog.String("alert_type", string(e.Type)),
+				slog.String("message", e.Message),
+				slog.Int("count", e.Count),
+				slog.Int("threshold", e.Threshold),
+			)
+		})
 	}
+	a.audit.metrics = a.metrics
 	return a
 }
 
