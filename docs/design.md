@@ -274,6 +274,9 @@ Envelopes are created with `SealRecord(recordKey, plaintext, aad)` and opened wi
 | `ITEM` | Encrypted items | `{itemID}` |
 | `ITEM_HISTORY` | Historical item snapshots | `{itemID}#{version}` |
 | `AUDIT` | Audit trail entries | `{auditID}` |
+| `AUDIT_TIP` | Latest audit chain hash | `tip` |
+| `SESSION` | Encrypted session data (persistent mode) | `{token}` |
+| `SESSION_KEY` | Session encryption key (persistent mode) | `current` |
 
 ### Sentinel Errors
 
@@ -327,6 +330,11 @@ ironhand server [flags]
 | `--postgres-dsn` | | PostgreSQL connection string |
 | `--tls-cert` | | Path to TLS certificate |
 | `--tls-key` | | Path to TLS key |
+| `--enable-header-auth` | `false` | Allow X-Credentials/X-Passphrase header-based authentication |
+| `--session-storage` | `memory` | Session storage: `memory` or `persistent` |
+| `--webauthn-rp-id` | `localhost` | WebAuthn Relying Party ID (domain) |
+| `--webauthn-rp-origin` | | WebAuthn Relying Party origin (default: `https://localhost:<port>`) |
+| `--webauthn-rp-name` | `IronHand` | WebAuthn Relying Party display name |
 
 If no TLS certificate is provided, the server generates a self-signed certificate at startup.
 
@@ -336,17 +344,26 @@ The server uses Chi for HTTP routing with middleware:
 
 - `middleware.Logger` — Request logging
 - `middleware.Recoverer` — Panic recovery
-- `AuthMiddleware` — Session cookie or header-based authentication
+- `SecurityHeaders` — CSP, HSTS, X-Frame-Options, Permissions-Policy, X-Content-Type-Options
+- `AuthMiddleware` — Session cookie or header-based authentication (header auth disabled by default)
+- `CSRFMiddleware` — Double-submit cookie CSRF protection for mutating requests
 
 ### API Structure
 
 ```go
 type API struct {
-    repo        storage.Repository
-    epochCache  vault.EpochCache
-    sessions    *sessionStore
-    rateLimiter *loginRateLimiter
-    audit       *auditLogger
+    repo               storage.Repository
+    epochCache         vault.EpochCache
+    sessions           SessionStore
+    rateLimiter        *loginRateLimiter
+    ipLimiter          *ipRateLimiter
+    globalLimiter      *globalRateLimiter
+    audit              *auditLogger
+    metrics            *metricsCollector
+    headerAuthEnabled  bool
+    idleTimeout        time.Duration
+    keyStore           pki.KeyStore
+    webauthn           *webauthn.WebAuthn
 }
 ```
 
@@ -362,6 +379,11 @@ type API struct {
 | `GET` | `/api/v1/auth/2fa` | Get 2FA status |
 | `POST` | `/api/v1/auth/2fa/setup` | Begin TOTP setup |
 | `POST` | `/api/v1/auth/2fa/enable` | Verify code and enable 2FA |
+| `GET` | `/api/v1/auth/webauthn/status` | Get passkey status and credential count |
+| `POST` | `/api/v1/auth/webauthn/register/begin` | Start passkey registration ceremony |
+| `POST` | `/api/v1/auth/webauthn/register/finish` | Complete passkey registration |
+| `POST` | `/api/v1/auth/webauthn/login/begin` | Start passkey login ceremony |
+| `POST` | `/api/v1/auth/webauthn/login/finish` | Complete passkey login (creates session) |
 
 #### Vaults
 
@@ -371,6 +393,7 @@ type API struct {
 | `GET` | `/api/v1/vaults` | List vaults |
 | `DELETE` | `/api/v1/vaults/{vaultID}` | Delete a vault |
 | `GET` | `/api/v1/vaults/{vaultID}/audit` | Audit trail |
+| `GET` | `/api/v1/vaults/{vaultID}/audit/export` | Export tamper-evident audit log |
 
 #### Items
 
@@ -383,6 +406,7 @@ type API struct {
 | `GET` | `/api/v1/vaults/{vaultID}/items` | List items |
 | `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}/history` | List history |
 | `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}/history/{version}` | Get version |
+| `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}/private-key` | Get private key (owner only) |
 
 #### Members
 
@@ -421,22 +445,52 @@ type API struct {
 
 ### Authentication
 
-Sessions are managed in-memory with a 24-hour expiry:
+Sessions are managed via a `SessionStore` interface with two implementations:
+
+- **`MemorySessionStore`** (default) — in-memory with `sync.RWMutex`; sessions lost on restart
+- **`PersistentSessionStore`** — backed by the storage layer with AES-256-GCM encryption; sessions survive restarts
 
 ```go
-type authSession struct {
-    SecretKeyID       string
-    SessionPassphrase string
-    CredentialsBlob   string
-    ExpiresAt         time.Time
-    PendingTOTPSecret string
-    PendingTOTPExpiry time.Time
+type AuthSession struct {
+    SecretKeyID           string
+    SessionPassphrase     string
+    CredentialsBlob       string
+    ExpiresAt             time.Time
+    LastAccessedAt        time.Time
+    PendingTOTPSecret     string
+    PendingTOTPExpiry     time.Time
+    WebAuthnSessionData   string
+    WebAuthnSessionExpiry time.Time
 }
 ```
 
-The `AuthMiddleware` checks for a session cookie (`ironhand_session`) first, then falls back to `X-Credentials` and `X-Passphrase` headers. Credentials are imported from the encrypted blob and stored in the request context.
+Sessions have a 24-hour absolute expiry and a 30-minute idle timeout. The idle timeout is reset on each request.
+
+The `AuthMiddleware` checks for a session cookie (`ironhand_session`) first. Header-based authentication via `X-Credentials` and `X-Passphrase` is **disabled by default** and must be explicitly enabled with `--enable-header-auth`.
+
+All mutating requests (POST/PUT/DELETE) with cookie-based auth require a `X-CSRF-Token` header matching the `ironhand_csrf` cookie (double-submit cookie pattern). The CSRF token is set on login/register and cleared on logout.
 
 Registration returns the secret key only once; there is no API to retrieve it later.
+
+### WebAuthn/Passkey MFA
+
+WebAuthn provides phishing-resistant second-factor authentication. The passphrase is still required for vault decryption (zero-knowledge architecture). WebAuthn replaces TOTP as the recommended MFA method.
+
+- **Registration** — Authenticated users register passkeys via a two-step ceremony (`/register/begin` → browser prompt → `/register/finish`)
+- **Login** — Users provide their secret key and passphrase, then complete the WebAuthn assertion (`/login/begin` → browser prompt → `/login/finish`)
+- **Configuration** — WebAuthn is auto-configured on server startup using `--webauthn-rp-id`, `--webauthn-rp-origin`, and `--webauthn-rp-name`
+
+### Rate Limiting
+
+Login endpoints enforce three tiers of rate limiting:
+
+| Tier | Key | Max Failures | Lockout Range |
+|---|---|---|---|
+| Per-account | SHA-256(secret_key) | 5 | 1 min → 30 min (exponential) |
+| Per-IP | Client IP | 20 | 1 min → 30 min |
+| Global | — | 100/min | 5 min |
+
+Rate limits apply to both password-based and WebAuthn login flows. Successful login clears per-account and per-IP counters.
 
 ## Certificate Authority (PKI)
 
@@ -497,13 +551,14 @@ The API layer logs security-relevant events:
 |---|---|
 | Authentication | `login_success`, `login_failure`, `login_rate_limited`, `register`, `logout` |
 | 2FA | `two_factor_setup`, `two_factor_enabled` |
+| WebAuthn | `webauthn_registered`, `webauthn_login_success` |
 | Vault | `vault_created`, `vault_deleted` |
 | Membership | `member_added`, `member_revoked` |
 | Items | `item_created`, `item_updated`, `item_deleted` |
 | Credentials | `credentials_exported`, `vault_exported`, `vault_imported` |
-| PKI | `ca_initialized`, `cert_issued`, `cert_revoked`, `cert_renewed`, `crl_generated`, `csr_signed` |
+| PKI | `ca_initialized`, `cert_issued`, `cert_revoked`, `cert_renewed`, `crl_generated`, `csr_signed`, `private_key_accessed` |
 
-Audit entries include timestamp, client IP, account ID (secret key ID, not the raw key), and event-specific context. They are written as structured JSON via `log/slog` and also stored as encrypted vault items under the `AUDIT` record type for per-vault querying.
+Audit entries include timestamp, client IP, account ID (secret key ID, not the raw key), and event-specific context. They are written as structured JSON via `log/slog` and stored as AES-256-GCM encrypted records under the `AUDIT` record type. Each entry contains a `prev_hash` field forming a tamper-evident hash chain (SHA-256). The audit entry and chain tip are written atomically via `repo.Batch()`. Exported audit logs include an HMAC-SHA256 signature for forensic integrity verification.
 
 ## Web UI
 
@@ -518,10 +573,13 @@ The web UI is a browser-based SPA served by the Go server:
 | Component | Mechanism |
 |---|---|
 | In-memory storage | `sync.RWMutex` |
-| Session store | `sync.RWMutex` |
+| Session store | `sync.RWMutex` (memory) or encrypted persistent storage with background cleanup |
+| Rate limiters | `sync.Mutex` per limiter (per-account, per-IP, global) |
+| Audit appends | Per-vault `vaultMutex` + `repo.Batch()` atomic writes |
 | Epoch caches | `sync.RWMutex` (in-memory map) + backend persistence |
 | BBolt | Database-level serialised transactions |
 | PostgreSQL | Connection pool + SQL transactions |
+| WebAuthn ceremonies | `sync.Mutex` on ceremony map |
 | memguard Enclaves | Thread-safe by design |
 
 Vault and Session operations are stateless beyond the Repository interface, so concurrent access to different vaults is fully parallel.
@@ -591,3 +649,8 @@ This starts PostgreSQL 17 and the IronHand server with the PostgreSQL backend co
 | PostgreSQL DSN | `--postgres-dsn` | `IRONHAND_POSTGRES_DSN` | |
 | TLS certificate | `--tls-cert` | | (self-signed) |
 | TLS key | `--tls-key` | | (self-signed) |
+| Header auth | `--enable-header-auth` | | `false` |
+| Session storage | `--session-storage` | | `memory` |
+| WebAuthn RP ID | `--webauthn-rp-id` | | `localhost` |
+| WebAuthn RP origin | `--webauthn-rp-origin` | | `https://localhost:<port>` |
+| WebAuthn RP name | `--webauthn-rp-name` | | `IronHand` |

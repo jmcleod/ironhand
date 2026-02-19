@@ -15,6 +15,19 @@ components:
       name: ironhand_session
       description: HTTP-only session cookie returned by /auth/register or /auth/login.
 
+  parameters:
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: >
+        CSRF double-submit token. Must match the value of the `ironhand_csrf`
+        cookie. Required on all mutating (POST/PUT/DELETE) requests that use
+        cookie-based session authentication. GET/HEAD/OPTIONS requests and
+        header-authenticated requests are exempt.
+      schema:
+        type: string
+
   schemas:
     CreateVaultRequest:
       type: object
@@ -89,6 +102,65 @@ components:
       properties:
         enabled:
           type: boolean
+
+    WebAuthnStatusResponse:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        credential_count:
+          type: integer
+
+    WebAuthnLoginRequest:
+      type: object
+      required:
+        - secret_key
+        - passphrase
+      properties:
+        secret_key:
+          type: string
+        passphrase:
+          type: string
+          description: Passphrase for vault decryption after WebAuthn verification.
+
+    WebAuthnRegistrationResponse:
+      type: object
+      properties:
+        credential_id:
+          type: string
+
+    ExportAuditEntryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        vault_id:
+          type: string
+        item_id:
+          type: string
+        action:
+          type: string
+        member_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        prev_hash:
+          type: string
+          description: SHA-256 hash linking this entry to its predecessor in the tamper-evident chain.
+
+    ExportAuditLogResponse:
+      type: object
+      properties:
+        vault_id:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportAuditEntryResponse'
+        signature:
+          type: string
+          description: HMAC-SHA256 signature over all entries for forensic integrity verification.
 
     OpenVaultResponse:
       type: object
@@ -170,6 +242,8 @@ components:
           description: >
             Map of field name to value. Text fields are plain strings.
             Attachment content fields ("_att.*") are base64-encoded.
+            Sensitive fields such as `private_key` are returned as "[REDACTED]".
+            Use the dedicated /private-key endpoint to retrieve the full value.
 
     UpdateItemRequest:
       type: object
@@ -254,7 +328,7 @@ components:
           type: string
         action:
           type: string
-          enum: [item_accessed, item_created, item_updated, item_deleted, vault_exported, vault_imported, ca_initialized, cert_issued, cert_revoked, cert_renewed, crl_generated, csr_signed]
+          enum: [item_accessed, item_created, item_updated, item_deleted, vault_exported, vault_imported, ca_initialized, cert_issued, cert_revoked, cert_renewed, crl_generated, csr_signed, private_key_accessed, webauthn_registered, webauthn_login_success]
         member_id:
           type: string
         created_at:
@@ -573,6 +647,113 @@ paths:
         '401':
           description: Invalid one-time code or unauthorized
 
+  /auth/webauthn/status:
+    get:
+      summary: Get WebAuthn/passkey status
+      operationId: webauthnStatus
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: WebAuthn status and credential count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebAuthnStatusResponse'
+        '401':
+          description: Unauthorized
+
+  /auth/webauthn/register/begin:
+    post:
+      summary: Begin WebAuthn credential registration
+      operationId: beginWebAuthnRegistration
+      description: >
+        Starts a WebAuthn registration ceremony. Returns PublicKeyCredentialCreationOptions
+        for the browser to pass to navigator.credentials.create().
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Credential creation options
+        '401':
+          description: Unauthorized
+        '404':
+          description: WebAuthn not configured on server
+
+  /auth/webauthn/register/finish:
+    post:
+      summary: Complete WebAuthn credential registration
+      operationId: finishWebAuthnRegistration
+      description: >
+        Completes the WebAuthn registration ceremony by verifying the browser's
+        attestation response and storing the credential.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Credential registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebAuthnRegistrationResponse'
+        '400':
+          description: Registration failed or ceremony expired
+        '401':
+          description: Unauthorized
+        '404':
+          description: WebAuthn not configured on server
+
+  /auth/webauthn/login/begin:
+    post:
+      summary: Begin WebAuthn login ceremony
+      operationId: beginWebAuthnLogin
+      description: >
+        Starts a WebAuthn login ceremony. Requires secret_key and passphrase in the
+        body because the passphrase is needed for vault decryption after successful
+        WebAuthn verification. Returns PublicKeyCredentialRequestOptions for the
+        browser to pass to navigator.credentials.get().
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebAuthnLoginRequest'
+      responses:
+        '200':
+          description: Credential request options
+        '400':
+          description: No WebAuthn credentials registered
+        '404':
+          description: WebAuthn not configured on server
+        '429':
+          description: Too many failed login attempts
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+
+  /auth/webauthn/login/finish:
+    post:
+      summary: Complete WebAuthn login ceremony
+      operationId: finishWebAuthnLogin
+      description: >
+        Completes the WebAuthn login ceremony by verifying the browser's assertion
+        response. On success, creates a full session (sets session and CSRF cookies).
+      responses:
+        '200':
+          description: Login successful (session cookie set)
+        '400':
+          description: Ceremony expired or invalid response
+        '401':
+          description: WebAuthn verification failed or invalid passphrase
+        '404':
+          description: WebAuthn not configured on server
+
   /vaults:
     get:
       summary: List vaults visible to authenticated member
@@ -827,6 +1008,42 @@ paths:
         '404':
           description: Version not found
 
+  /vaults/{vaultID}/items/{itemID}/private-key:
+    get:
+      summary: Get the private key for a certificate item
+      operationId: getItemPrivateKey
+      description: >
+        Returns the full PEM-encoded private key for a certificate item.
+        Requires owner access. The standard GetItem endpoint redacts the
+        private_key field to "[REDACTED]" for security. This dedicated
+        endpoint provides the real value and logs an audit event.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: itemID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Private key PEM
+          content:
+            application/x-pem-file:
+              schema:
+                type: string
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (not owner)
+        '404':
+          description: Item not found or has no private key
+
   /vaults/{vaultID}/audit:
     get:
       summary: List vault audit log entries
@@ -851,6 +1068,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListAuditLogsResponse'
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/audit/export:
+    get:
+      summary: Export tamper-evident audit log
+      operationId: exportAuditLog
+      description: >
+        Returns all audit entries for the vault with their chain hashes and
+        an HMAC-SHA256 signature for forensic integrity verification. Entries
+        are ordered chronologically (oldest first) and linked via prev_hash
+        to form a tamper-evident chain.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit log with chain integrity data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportAuditLogResponse'
         '401':
           description: Unauthorized
 

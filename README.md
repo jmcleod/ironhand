@@ -12,6 +12,14 @@ A secure, encrypted vault library for Go with member-based access control, epoch
 - **Credential export/import** — single encrypted blob for portable vault access
 - **Pluggable storage** — in-memory (testing), BBolt (default), or PostgreSQL backends
 - **Built-in Certificate Authority** — turn any vault into a CA, issue/revoke/renew X.509 certificates, generate CRLs, and sign CSRs
+- **WebAuthn/Passkey MFA** — phishing-resistant second factor using browser passkeys (replaces TOTP as the recommended MFA method)
+- **CSRF protection** — double-submit cookie pattern on all mutating endpoints
+- **Security headers** — CSP, HSTS, X-Frame-Options, and Permissions-Policy on every response
+- **Rate limiting** — per-account, per-IP, and global login throttling with exponential backoff
+- **Session management** — 24-hour absolute expiry with 30-minute idle timeout; optional persistent session storage
+- **Private key redaction** — certificate private keys returned as `[REDACTED]` via the standard API; dedicated owner-only endpoint for retrieval
+- **Encrypted audit trail** — AES-256-GCM encrypted audit entries with tamper-evident hash chains
+- **Anomaly detection** — automated alerting for login failure spikes and bulk data exports
 
 ## Documentation
 
@@ -149,12 +157,40 @@ IronHand protects against:
 - **Storage rollback** — epoch cache detects if storage is reverted to a prior state
 - **Record swapping** — AAD binds ciphertext to its identity, preventing substitution
 - **Brute-force** — Argon2id with configurable memory-hard parameters
+- **CSRF attacks** — double-submit cookie token required on all mutating endpoints
+- **Clickjacking** — X-Frame-Options: DENY and CSP frame-ancestors 'none'
+- **Credential leakage** — header-based auth disabled by default; private keys redacted in API responses
+- **Session fixation** — CSRF token rotated on login; idle timeout invalidates stale sessions
 
 IronHand does **not** protect against:
 
 - Compromise of a running process (memory dumps)
 - Side-channel attacks on the host
 - Denial of service at the storage layer
+
+## Security
+
+### CSRF Protection
+
+All mutating API requests (POST, PUT, DELETE) that use cookie-based session authentication require a `X-CSRF-Token` header matching the value of the `ironhand_csrf` cookie. The token is set automatically on login/register and cleared on logout. GET requests and header-authenticated requests are exempt.
+
+### Rate Limiting
+
+Login endpoints enforce three levels of rate limiting:
+
+- **Per-account** — 5 consecutive failures trigger exponential backoff (1 min → 30 min max)
+- **Per-IP** — 20 failures from the same IP trigger IP-level throttling
+- **Global** — 100 failures per minute trigger a global cooldown
+
+Rate limits apply to both password-based and WebAuthn login flows.
+
+### Session Management
+
+Sessions have a 24-hour absolute expiry and a 30-minute idle timeout (configurable via `--idle-timeout`). Session storage defaults to in-memory but can be switched to persistent encrypted storage via `--session-storage persistent`.
+
+### Header-Based Authentication
+
+The `X-Credentials` / `X-Passphrase` header authentication method is **disabled by default**. Enable it only for non-browser API clients via `--enable-header-auth`.
 
 ## Certificate Authority (PKI)
 
@@ -201,7 +237,7 @@ Each issued certificate is stored as a vault item of type `certificate` with the
 | `not_before` | Validity start (RFC 3339) |
 | `not_after` | Validity end (RFC 3339) |
 | `certificate` | PEM-encoded X.509 certificate |
-| `private_key` | PEM-encoded ECDSA private key (sensitive — masked in UI) |
+| `private_key` | PEM-encoded ECDSA private key (redacted to `[REDACTED]` in API responses; use `/private-key` endpoint) |
 | `chain` | PEM bundle of intermediate certificates (optional) |
 | `fingerprint_sha256` | Hex SHA-256 fingerprint of the DER-encoded certificate |
 | `key_algorithm` | Key algorithm (e.g., `ECDSA P-256`) |
@@ -254,6 +290,11 @@ The service provides a REST API exposed by default on port `8443`.
   - `GET /api/v1/auth/2fa` (session auth; returns 2FA status)
   - `POST /api/v1/auth/2fa/setup` (session auth; returns temporary TOTP secret)
   - `POST /api/v1/auth/2fa/enable` (session auth; verifies code and enables 2FA)
+  - `GET /api/v1/auth/webauthn/status` (session auth; returns passkey status and credential count)
+  - `POST /api/v1/auth/webauthn/register/begin` (session auth; starts passkey registration ceremony)
+  - `POST /api/v1/auth/webauthn/register/finish` (session auth; completes passkey registration)
+  - `POST /api/v1/auth/webauthn/login/begin` (secret key + passphrase; starts passkey login ceremony)
+  - `POST /api/v1/auth/webauthn/login/finish` (completes passkey login; sets session cookie)
 - **Vaults**:
   - `POST /api/v1/vaults` (authenticated, server-generated vault ID)
   - `GET /api/v1/vaults`
