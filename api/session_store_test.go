@@ -12,7 +12,7 @@ func sessionStoreTests(t *testing.T, store SessionStore) {
 	t.Helper()
 
 	t.Run("PutAndGet", func(t *testing.T) {
-		s := authSession{
+		s := AuthSession{
 			SecretKeyID:       "sk-1",
 			SessionPassphrase: "pass",
 			CredentialsBlob:   "blob",
@@ -40,7 +40,7 @@ func sessionStoreTests(t *testing.T, store SessionStore) {
 	})
 
 	t.Run("Delete", func(t *testing.T) {
-		s := authSession{
+		s := AuthSession{
 			SecretKeyID:    "sk-del",
 			ExpiresAt:      time.Now().Add(time.Hour),
 			LastAccessedAt: time.Now(),
@@ -59,14 +59,14 @@ func sessionStoreTests(t *testing.T, store SessionStore) {
 	})
 
 	t.Run("Overwrite", func(t *testing.T) {
-		s1 := authSession{
+		s1 := AuthSession{
 			SecretKeyID:    "sk-v1",
 			ExpiresAt:      time.Now().Add(time.Hour),
 			LastAccessedAt: time.Now(),
 		}
 		store.Put("tok-ow", s1)
 
-		s2 := authSession{
+		s2 := AuthSession{
 			SecretKeyID:    "sk-v2",
 			ExpiresAt:      time.Now().Add(time.Hour),
 			LastAccessedAt: time.Now(),
@@ -83,7 +83,7 @@ func sessionStoreTests(t *testing.T, store SessionStore) {
 	})
 
 	t.Run("ExpiredSession", func(t *testing.T) {
-		s := authSession{
+		s := AuthSession{
 			SecretKeyID:    "sk-exp",
 			ExpiresAt:      time.Now().Add(-time.Second),
 			LastAccessedAt: time.Now(),
@@ -96,7 +96,7 @@ func sessionStoreTests(t *testing.T, store SessionStore) {
 	})
 
 	t.Run("PendingTOTPFields", func(t *testing.T) {
-		s := authSession{
+		s := AuthSession{
 			SecretKeyID:       "sk-totp",
 			ExpiresAt:         time.Now().Add(time.Hour),
 			LastAccessedAt:    time.Now(),
@@ -114,7 +114,7 @@ func sessionStoreTests(t *testing.T, store SessionStore) {
 	})
 
 	t.Run("WebAuthnFields", func(t *testing.T) {
-		s := authSession{
+		s := AuthSession{
 			SecretKeyID:           "sk-wa",
 			ExpiresAt:             time.Now().Add(time.Hour),
 			LastAccessedAt:        time.Now(),
@@ -138,7 +138,7 @@ func TestMemorySessionStore(t *testing.T) {
 
 	t.Run("IdleTimeout", func(t *testing.T) {
 		s := NewMemorySessionStore(100 * time.Millisecond)
-		s.Put("tok-idle", authSession{
+		s.Put("tok-idle", AuthSession{
 			SecretKeyID:    "sk-idle",
 			ExpiresAt:      time.Now().Add(time.Hour),
 			LastAccessedAt: time.Now().Add(-200 * time.Millisecond),
@@ -151,7 +151,7 @@ func TestMemorySessionStore(t *testing.T) {
 
 	t.Run("IdleTimeoutDisabled", func(t *testing.T) {
 		s := NewMemorySessionStore(0)
-		s.Put("tok-no-idle", authSession{
+		s.Put("tok-no-idle", AuthSession{
 			SecretKeyID:    "sk-no-idle",
 			ExpiresAt:      time.Now().Add(time.Hour),
 			LastAccessedAt: time.Now().Add(-24 * time.Hour),
@@ -181,7 +181,7 @@ func TestPersistentSessionStore(t *testing.T) {
 		}
 		defer s.Close()
 
-		s.Put("tok-idle", authSession{
+		s.Put("tok-idle", AuthSession{
 			SecretKeyID:    "sk-idle",
 			ExpiresAt:      time.Now().Add(time.Hour),
 			LastAccessedAt: time.Now().Add(-200 * time.Millisecond),
@@ -200,7 +200,7 @@ func TestPersistentSessionStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewPersistentSessionStore: %v", err)
 		}
-		s1.Put("tok-persist", authSession{
+		s1.Put("tok-persist", AuthSession{
 			SecretKeyID:       "sk-persist",
 			SessionPassphrase: "p",
 			CredentialsBlob:   "b",
@@ -262,7 +262,7 @@ func TestPersistentSessionStore(t *testing.T) {
 		defer s.Close()
 
 		// Add an expired session.
-		s.Put("tok-sweep", authSession{
+		s.Put("tok-sweep", AuthSession{
 			SecretKeyID:    "sk-sweep",
 			ExpiresAt:      time.Now().Add(-time.Hour),
 			LastAccessedAt: time.Now(),

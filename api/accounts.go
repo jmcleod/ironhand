@@ -21,7 +21,6 @@ const (
 	accountRecordType    = "ACCOUNT"
 	accountAADPrefix     = "account:"
 	vaultIndexRecordType = "VAULT_INDEX"
-	vaultIndexRecordID   = "current"
 	vaultIndexAADPrefix  = "vault-index:"
 )
 

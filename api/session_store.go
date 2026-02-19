@@ -7,15 +7,15 @@ import "time"
 type SessionStore interface {
 	// Get retrieves a session by token. Returns false if the session
 	// does not exist, has expired, or has exceeded the idle timeout.
-	Get(token string) (authSession, bool)
+	Get(token string) (AuthSession, bool)
 	// Put creates or updates a session for the given token.
-	Put(token string, session authSession)
+	Put(token string, session AuthSession)
 	// Delete removes a session by token.
 	Delete(token string)
 }
 
-// authSession holds the server-side state for an authenticated session.
-type authSession struct {
+// AuthSession holds the server-side state for an authenticated session.
+type AuthSession struct {
 	SecretKeyID           string    `json:"secret_key_id"`
 	SessionPassphrase     string    `json:"session_passphrase"`
 	CredentialsBlob       string    `json:"credentials_blob"`

@@ -348,7 +348,7 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
-	a.sessions.Put(token, authSession{
+	a.sessions.Put(token, AuthSession{
 		SecretKeyID:       record.SecretKeyID,
 		SessionPassphrase: sessionPassphrase,
 		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),

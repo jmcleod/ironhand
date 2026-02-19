@@ -57,32 +57,32 @@ func (s *PersistentSessionStore) Close() {
 	})
 }
 
-func (s *PersistentSessionStore) Get(token string) (authSession, bool) {
+func (s *PersistentSessionStore) Get(token string) (AuthSession, bool) {
 	env, err := s.repo.Get(sessionVaultID, sessionRecordType, token)
 	if err != nil {
-		return authSession{}, false
+		return AuthSession{}, false
 	}
 	aad := []byte(sessionAADPrefix + token)
 	data, err := storage.OpenRecord(s.key, env, aad)
 	if err != nil {
-		return authSession{}, false
+		return AuthSession{}, false
 	}
-	var session authSession
+	var session AuthSession
 	if err := json.Unmarshal(data, &session); err != nil {
-		return authSession{}, false
+		return AuthSession{}, false
 	}
 	if time.Now().After(session.ExpiresAt) {
 		s.Delete(token)
-		return authSession{}, false
+		return AuthSession{}, false
 	}
 	if s.idleTimeout > 0 && time.Since(session.LastAccessedAt) > s.idleTimeout {
 		s.Delete(token)
-		return authSession{}, false
+		return AuthSession{}, false
 	}
 	return session, true
 }
 
-func (s *PersistentSessionStore) Put(token string, session authSession) {
+func (s *PersistentSessionStore) Put(token string, session AuthSession) {
 	data, err := json.Marshal(session)
 	if err != nil {
 		return
@@ -131,7 +131,7 @@ func (s *PersistentSessionStore) sweepExpired() {
 			_ = s.repo.Delete(sessionVaultID, sessionRecordType, token)
 			continue
 		}
-		var session authSession
+		var session AuthSession
 		if err := json.Unmarshal(data, &session); err != nil {
 			_ = s.repo.Delete(sessionVaultID, sessionRecordType, token)
 			continue

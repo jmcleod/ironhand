@@ -70,7 +70,7 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
-	a.sessions.Put(token, authSession{
+	a.sessions.Put(token, AuthSession{
 		SecretKeyID:       record.SecretKeyID,
 		SessionPassphrase: sessionPassphrase,
 		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
@@ -182,7 +182,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
-	a.sessions.Put(token, authSession{
+	a.sessions.Put(token, AuthSession{
 		SecretKeyID:       record.SecretKeyID,
 		SessionPassphrase: sessionPassphrase,
 		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
@@ -292,15 +292,15 @@ func (a *API) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, TwoFactorStatusResponse{Enabled: true})
 }
 
-func (a *API) sessionFromRequest(r *http.Request) (string, authSession, bool) {
+func (a *API) sessionFromRequest(r *http.Request) (string, AuthSession, bool) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil || cookie.Value == "" {
-		return "", authSession{}, false
+		return "", AuthSession{}, false
 	}
 	token := cookie.Value
 	session, ok := a.sessions.Get(token)
 	if !ok {
-		return "", authSession{}, false
+		return "", AuthSession{}, false
 	}
 	return token, session, true
 }
