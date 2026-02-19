@@ -26,18 +26,38 @@ function getCsrfToken(): string | null {
 }
 
 async function request(path: string, init: RequestInit = {}) {
-  const headers = new Headers(init.headers);
+  // Build a clean headers map from caller-provided headers, then layer on
+  // the CSRF token for mutating requests so it is never accidentally lost.
+  const headers: Record<string, string> = {};
+
+  // Copy caller-supplied headers into our plain object.
+  if (init.headers) {
+    if (init.headers instanceof Headers) {
+      init.headers.forEach((v, k) => {
+        headers[k] = v;
+      });
+    } else if (Array.isArray(init.headers)) {
+      for (const [k, v] of init.headers) {
+        headers[k] = v;
+      }
+    } else {
+      Object.assign(headers, init.headers);
+    }
+  }
+
   // Attach CSRF token for mutating requests (POST/PUT/DELETE).
   const method = (init.method ?? 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
     const token = getCsrfToken();
     if (token) {
-      headers.set('X-CSRF-Token', token);
+      headers['X-CSRF-Token'] = token;
     }
   }
+
   const resp = await fetch(`${API_BASE}${path}`, {
+    method: init.method,
+    body: init.body,
     credentials: 'include',
-    ...init,
     headers,
   });
   if (!resp.ok) {

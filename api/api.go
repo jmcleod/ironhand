@@ -34,6 +34,7 @@ type API struct {
 	webauthn           *webauthn.WebAuthn
 	webauthnCeremonies map[string]webauthnCeremonyState
 	webauthnCeremonyMu sync.Mutex
+	auditMu            vaultMutex // serialises audit appends per vault
 }
 
 // DefaultIdleTimeout is the default session idle timeout (30 minutes).

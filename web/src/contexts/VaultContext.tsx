@@ -248,6 +248,13 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
           delete merged[key];
         }
       }
+      // Never write back server-redacted sentinel values — they would
+      // destroy the real data stored on the backend.
+      for (const key of Object.keys(merged)) {
+        if (merged[key] === '[REDACTED]') {
+          delete merged[key];
+        }
+      }
       await apiUpdateItem(vaultID, itemID, merged);
       await refresh();
     },

@@ -98,7 +98,10 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
         break;
       case 'certificate':
         setCertPem(fields.certificate || '');
-        setKeyPem(fields.private_key || '');
+        // Never populate the key field with [REDACTED] — it would overwrite
+        // the real key material on save. Leave blank so the user can
+        // optionally paste a replacement key.
+        setKeyPem(fields.private_key && fields.private_key !== '[REDACTED]' ? fields.private_key : '');
         setCertNotes(fields.notes || '');
         break;
       case 'custom': {
@@ -379,10 +382,15 @@ export default function EditItemDialog({ open, onOpenChange, vaultId, item }: Ed
         <Textarea
           value={keyPem}
           onChange={e => setKeyPem(e.target.value)}
-          placeholder={"-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----"}
+          placeholder={item.fields.private_key === '[REDACTED]'
+            ? 'Private key stored on server. Leave blank to keep, or paste a new key to replace.'
+            : "-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----"}
           rows={4}
           className={`${FIELD} font-mono text-xs`}
         />
+        {!keyPem && item.fields.private_key === '[REDACTED]' && (
+          <p className="text-xs text-muted-foreground mt-1">Existing private key will be preserved.</p>
+        )}
       </div>
       <div>
         <label className={LABEL}>Notes</label>

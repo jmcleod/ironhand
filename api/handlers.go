@@ -45,6 +45,11 @@ func isReservedItemID(itemID string) bool {
 func fieldsFromAPI(apiFields map[string]string) (vault.Fields, error) {
 	fields := make(vault.Fields, len(apiFields))
 	for k, v := range apiFields {
+		// Reject any field that carries the redaction sentinel — writing it
+		// back would destroy the real value stored in the vault.
+		if sensitiveFields[k] && v == redactionSentinel {
+			return nil, fmt.Errorf("field %q contains the redaction placeholder and cannot be written", k)
+		}
 		if vault.IsAttachmentField(k) {
 			decoded, err := base64.StdEncoding.DecodeString(v)
 			if err != nil {
@@ -74,6 +79,10 @@ func fieldsToAPI(fields vault.Fields) map[string]string {
 	return apiFields
 }
 
+// redactionSentinel is the placeholder value returned for sensitive fields.
+// It must never be accepted as a write — doing so would destroy key material.
+const redactionSentinel = "[REDACTED]"
+
 // sensitiveFields are field names that should be redacted in normal item
 // responses. They are only accessible via dedicated endpoints that enforce
 // additional access control (e.g. owner-only private key retrieval).
@@ -85,7 +94,7 @@ func fieldsToAPIRedacted(fields vault.Fields) map[string]string {
 	apiFields := make(map[string]string, len(fields))
 	for k, v := range fields {
 		if sensitiveFields[k] {
-			apiFields[k] = "[REDACTED]"
+			apiFields[k] = redactionSentinel
 		} else if vault.IsAttachmentField(k) {
 			apiFields[k] = base64.StdEncoding.EncodeToString(v)
 		} else {
