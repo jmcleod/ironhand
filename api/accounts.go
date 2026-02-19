@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
+
 	scrypto "github.com/jmcleod/ironhand/crypto"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
 	"github.com/jmcleod/ironhand/internal/util"
@@ -15,17 +17,21 @@ import (
 )
 
 const (
-	accountVaultID    = "__accounts"
-	accountRecordType = "ACCOUNT"
-	accountAADPrefix  = "account:"
+	accountVaultID       = "__accounts"
+	accountRecordType    = "ACCOUNT"
+	accountAADPrefix     = "account:"
+	vaultIndexRecordType = "VAULT_INDEX"
+	vaultIndexRecordID   = "current"
+	vaultIndexAADPrefix  = "vault-index:"
 )
 
 type accountRecord struct {
-	SecretKeyID     string    `json:"secret_key_id"`
-	CredentialsBlob string    `json:"credentials_blob"`
-	CreatedAt       time.Time `json:"created_at"`
-	TOTPEnabled     bool      `json:"totp_enabled,omitempty"`
-	TOTPSecret      string    `json:"totp_secret,omitempty"`
+	SecretKeyID         string                `json:"secret_key_id"`
+	CredentialsBlob     string                `json:"credentials_blob"`
+	CreatedAt           time.Time             `json:"created_at"`
+	TOTPEnabled         bool                  `json:"totp_enabled,omitempty"`
+	TOTPSecret          string                `json:"totp_secret,omitempty"`
+	WebAuthnCredentials []webauthn.Credential `json:"webauthn_credentials,omitempty"`
 }
 
 func (a *API) saveAccountRecord(secretKey string, record accountRecord) error {
@@ -134,4 +140,99 @@ func deriveAccountRecordKey(secretKey string) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	return recordKey, []byte(accountAADPrefix + accountID), nil
+}
+
+// ---------------------------------------------------------------------------
+// Vault index — maps account → list of vault IDs the account can access.
+// ---------------------------------------------------------------------------
+
+type vaultIndexRecord struct {
+	VaultIDs []string `json:"vault_ids"`
+}
+
+func (a *API) loadVaultIndex(secretKey string) (vaultIndexRecord, error) {
+	accountID, err := accountLookupID(secretKey)
+	if err != nil {
+		return vaultIndexRecord{}, err
+	}
+	recordKey, _, err := deriveAccountRecordKey(secretKey)
+	if err != nil {
+		return vaultIndexRecord{}, err
+	}
+	defer util.WipeBytes(recordKey)
+	aad := []byte(vaultIndexAADPrefix + accountID)
+
+	env, err := a.repo.Get(accountVaultID, vaultIndexRecordType, accountID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrVaultNotFound) {
+			return vaultIndexRecord{}, nil // no index yet
+		}
+		return vaultIndexRecord{}, err
+	}
+	if env == nil {
+		return vaultIndexRecord{}, nil
+	}
+
+	data, err := storage.OpenRecord(recordKey, env, aad)
+	if err != nil {
+		return vaultIndexRecord{}, err
+	}
+	var idx vaultIndexRecord
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return vaultIndexRecord{}, err
+	}
+	return idx, nil
+}
+
+func (a *API) saveVaultIndex(secretKey string, idx vaultIndexRecord) error {
+	accountID, err := accountLookupID(secretKey)
+	if err != nil {
+		return err
+	}
+	recordKey, _, err := deriveAccountRecordKey(secretKey)
+	if err != nil {
+		return err
+	}
+	defer util.WipeBytes(recordKey)
+	aad := []byte(vaultIndexAADPrefix + accountID)
+
+	data, err := json.Marshal(idx)
+	if err != nil {
+		return err
+	}
+	env, err := storage.SealRecord(recordKey, data, aad)
+	if err != nil {
+		return err
+	}
+	return a.repo.Put(accountVaultID, vaultIndexRecordType, accountID, env)
+}
+
+func (a *API) addVaultToIndex(secretKey, vaultID string) error {
+	idx, err := a.loadVaultIndex(secretKey)
+	if err != nil {
+		return err
+	}
+	// Avoid duplicates.
+	for _, id := range idx.VaultIDs {
+		if id == vaultID {
+			return nil
+		}
+	}
+	idx.VaultIDs = append(idx.VaultIDs, vaultID)
+	return a.saveVaultIndex(secretKey, idx)
+}
+
+func (a *API) removeVaultFromIndex(secretKey, vaultID string) error {
+	idx, err := a.loadVaultIndex(secretKey)
+	if err != nil {
+		return err
+	}
+	filtered := idx.VaultIDs[:0]
+	for _, id := range idx.VaultIDs {
+		if id != vaultID {
+			filtered = append(filtered, id)
+		}
+	}
+	idx.VaultIDs = filtered
+	return a.saveVaultIndex(secretKey, idx)
 }

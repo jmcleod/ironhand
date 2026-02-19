@@ -150,6 +150,24 @@ type ListAuditLogsResponse struct {
 	Entries []AuditEntryResponse `json:"entries"`
 }
 
+// ExportAuditEntryResponse extends AuditEntryResponse with the chain hash.
+type ExportAuditEntryResponse struct {
+	ID        string `json:"id"`
+	VaultID   string `json:"vault_id"`
+	ItemID    string `json:"item_id"`
+	Action    string `json:"action"`
+	MemberID  string `json:"member_id"`
+	CreatedAt string `json:"created_at"`
+	PrevHash  string `json:"prev_hash"`
+}
+
+// ExportAuditLogResponse is returned from GET /vaults/{vaultID}/audit/export.
+type ExportAuditLogResponse struct {
+	VaultID   string                     `json:"vault_id"`
+	Entries   []ExportAuditEntryResponse `json:"entries"`
+	Signature string                     `json:"signature"`
+}
+
 // ErrorResponse is returned for all error cases.
 type ErrorResponse struct {
 	Error string `json:"error"`

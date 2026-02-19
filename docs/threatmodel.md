@@ -1,224 +1,133 @@
 # IronHand Threat Model
 
-## Document Scope
+## Scope And Baseline
 
-This document models threats for the current IronHand architecture and implementation across:
+This is a refreshed threat model based on the current codebase state and docs review of:
 
 - `/Users/jmcleod/Development/Personal/ironhand/README.md`
 - `/Users/jmcleod/Development/Personal/ironhand/docs/design.md`
 - `/Users/jmcleod/Development/Personal/ironhand/docs/encryption.md`
-- Backend (`/Users/jmcleod/Development/Personal/ironhand/api`, `/Users/jmcleod/Development/Personal/ironhand/vault`, `/Users/jmcleod/Development/Personal/ironhand/pki`, `/Users/jmcleod/Development/Personal/ironhand/storage`)
-- Web UI (`/Users/jmcleod/Development/Personal/ironhand/web`)
+- Backend code under `/Users/jmcleod/Development/Personal/ironhand/api`, `/Users/jmcleod/Development/Personal/ironhand/vault`, `/Users/jmcleod/Development/Personal/ironhand/pki`, `/Users/jmcleod/Development/Personal/ironhand/storage`
+- Web UI code under `/Users/jmcleod/Development/Personal/ironhand/web`
 
-The focus is confidentiality, integrity, and availability for account credentials, vault data, PKI keys, and audit trails.
+## Revalidation Summary (P0/P1/P2)
 
-## Methodology
+### P0 Status
 
-Threats are identified using a STRIDE-style approach over the main trust boundaries:
+1. Encrypt audit entries + integrity protections: `Addressed`
+- Implemented in `/Users/jmcleod/Development/Personal/ironhand/api/audit_store.go` using `session.SealAuditRecord`/`OpenAuditRecord` with audit-specific AAD, plus hash-chain (`PrevHash`) and signed export (`HMACAudit`).
 
-- Browser <-> API (HTTPS + cookies)
-- API <-> storage backend (BBolt or PostgreSQL)
-- In-process memory handling of cryptographic keys
-- Multi-member vault sharing and epoch rotation
-- PKI operations over vault items
+1. Disable header-auth by default: `Addressed`
+- `X-Credentials`/`X-Passphrase` now gated by `headerAuthEnabled` in `/Users/jmcleod/Development/Personal/ironhand/api/middleware.go`, with server flag `--enable-header-auth` in `/Users/jmcleod/Development/Personal/ironhand/cmd/ironhand/cmd/server.go`.
 
-Severity labels in this document are qualitative:
+1. CSRF defenses for mutating endpoints: `Addressed (backend), Gap (WebUI integration)`
+- Backend double-submit CSRF exists in `/Users/jmcleod/Development/Personal/ironhand/api/csrf.go` and is wired on mutating routes.
+- WebUI currently does not send `X-CSRF-Token`; no CSRF token handling exists in `/Users/jmcleod/Development/Personal/ironhand/web/src/lib/api.ts`.
 
-- `Critical`: high impact and likely in realistic deployments
-- `High`: high impact with practical preconditions
-- `Medium`: meaningful risk with narrower conditions
-- `Low`: hygiene or defense-in-depth improvements
+1. PKI private key redaction + owner-only retrieval: `Addressed`
+- Redaction in standard item responses via `fieldsToAPIRedacted` in `/Users/jmcleod/Development/Personal/ironhand/api/handlers.go`.
+- Owner-only retrieval endpoint `GET /vaults/{vaultID}/items/{itemID}/private-key` implemented with `RequireAdmin`.
 
-## Security Objectives
+### P1 Status
 
-- Protect vault plaintext and private keys at rest and in transit.
-- Ensure revoked members cannot read newly protected data.
-- Prevent credential guessing and account takeover at practical attack rates.
-- Preserve integrity of encrypted records against swapping/replay/rollback.
-- Provide reliable, tamper-evident auditability of sensitive actions.
-- Minimize blast radius if Web UI/browser context is compromised.
+1. Replace global vault scan with account vault index: `Addressed`
+- Encrypted per-account vault index (`VAULT_INDEX`) implemented in `/Users/jmcleod/Development/Personal/ironhand/api/accounts.go` and used by `ListVaults` in `/Users/jmcleod/Development/Personal/ironhand/api/handlers.go`.
 
-## Assets
+1. Persistent/shared session store: `Not Addressed`
+- Sessions remain in-memory map (`sessionStore`) in `/Users/jmcleod/Development/Personal/ironhand/api/api.go`.
+- Idle timeout was added, but that does not provide persistence or cross-instance revocation.
 
-High-value assets:
+1. Security headers middleware: `Addressed`
+- Implemented in `/Users/jmcleod/Development/Personal/ironhand/api/security_headers.go` and mounted in server middleware chain.
 
-- Account secret keys and passphrases
-- Derived MUK/record keys/KEKs/DEKs
-- Vault item plaintext and attachments
-- PKI CA private keys and issued certificate private keys
-- Session tokens and server-side session credential blobs
-- Audit logs (security-relevant event evidence)
+1. Per-IP and global login throttling: `Addressed`
+- Implemented in `/Users/jmcleod/Development/Personal/ironhand/api/ratelimit.go` and enforced in login flow.
 
-## Trust Boundaries And Data Flows
+### P2 Status
 
-1. User registers or logs in via Web UI/API.
-1. API stores encrypted account records in a reserved storage vault (`__accounts`).
-1. API creates in-memory auth session containing exported credentials blob + random session passphrase.
-1. API sets `ironhand_session` HttpOnly cookie.
-1. Authenticated requests open vault sessions, decrypt item fields, and perform CRUD/PKI operations.
-1. Storage backends persist encrypted envelopes, plus plaintext JSON audit entries (`AUDIT` record type).
+1. Tamper-evident signed audit export: `Addressed`
+- `GET /vaults/{vaultID}/audit/export` implemented with signed response (`HMAC-SHA256`).
 
-## Attacker Profiles
+1. Retention policy controls: `Not Addressed`
+- No audit retention/pruning policy controls found.
 
-- Remote unauthenticated attacker on the network
-- Remote authenticated low-privilege user (reader/writer)
-- Malicious vault member attempting privilege escalation or post-revocation access
-- Browser-side attacker (XSS, malicious extension, local machine compromise)
-- Infrastructure attacker with storage snapshot/database access
-- Misconfigured reverse proxy or TLS termination layer
+1. WebAuthn/passkey MFA: `Partially Addressed`
+- WebAuthn ceremony endpoints implemented in `/Users/jmcleod/Development/Personal/ironhand/api/webauthn.go`.
+- Server bootstrap does not configure WebAuthn (`WithWebAuthn` not wired in default `server` command), so feature is not active by default.
 
-## Existing Strengths
+1. HSM/KMS-backed PKI key mode: `Partially Addressed`
+- `pki.KeyStore` abstraction exists in `/Users/jmcleod/Development/Personal/ironhand/pki/keystore.go` and PKI APIs accept a keystore.
+- Default server path does not wire a non-software keystore; production-grade HSM/KMS integration remains incomplete.
 
-- Strong cryptographic design: AES-256-GCM + contextual AAD binding, HKDF key hierarchy, Argon2id passphrase branch, two-secret-key MUK derivation.
-- Per-epoch KEK rotation for member add/revoke and stale session detection.
-- Member role enforcement in vault session authorization.
-- Account lookup IDs and rate-limit keys avoid storing raw secret keys.
-- Secret key displayed once at registration; no retrieval endpoint.
-- 2FA (TOTP) supported with setup TTL and verification window.
-- Input validation limits for IDs, field sizes, and attachment sizes.
+1. Anomaly detection/alerts: `Partially Addressed`
+- `metricsCollector` and alert callback plumbing exist in `/Users/jmcleod/Development/Personal/ironhand/api/metrics.go` and `/Users/jmcleod/Development/Personal/ironhand/api/api.go`.
+- Default server command does not enable alerting callback, so no runtime alerts by default.
 
-## Threat Analysis
+## Original Issues Rechecked
 
-### 1) Authentication And Session Management
+The original top risks from the prior model were mostly reduced:
 
-`High`: Session store is in-memory only and non-distributed.
+- Audit confidentiality/integrity: significantly improved.
+- Header-auth default exposure: improved.
+- PKI private key broad exposure: improved.
+- Vault enumeration via global scan: improved.
 
-- Impact: session invalidation/rate-limit state resets on restart; multi-instance consistency issues unless sticky routing is perfect.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/api.go` (`sessions map`, `rateLimiter` in-memory).
+Remaining high-impact unresolved/partial areas are session persistence/distributed revocation, complete WebAuthn operationalization, and retention/governance controls for audit data.
 
-`Medium`: Session lifetime is fixed (24h absolute), no idle timeout or renewal policy.
+## Newly Identified Risks
 
-- Impact: stolen session cookie remains useful until expiry.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/auth_handlers.go` (`sessionDuration = 24h`).
+### 1) WebUI does not send CSRF header (`High` operational risk)
 
-`Medium`: Cookie `Secure` depends on request/proxy headers.
+- Backend now enforces CSRF for mutating cookie-auth requests.
+- Web client request wrapper does not attach `X-CSRF-Token` from `ironhand_csrf` cookie.
+- Likely impact: mutating WebUI operations fail with `403` after login/register, or teams disable CSRF to restore UX (security regression).
+- Evidence: `/Users/jmcleod/Development/Personal/ironhand/web/src/lib/api.ts` (no CSRF token logic).
 
-- Impact: proxy misconfiguration can reduce transport assurance.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/middleware.go` (`requestIsSecure`).
+### 2) Certificate update path can overwrite redacted private key (`High` integrity/availability risk)
 
-`Low`: TOTP brute-force is indirectly protected by login limiter but no explicit per-code-attempt counter/lock in 2FA enable flow.
+- `GetItem` now returns `private_key: "[REDACTED]"`.
+- WebUI edit flow merges fetched fields and writes full item on update.
+- For certificate items this can persist the literal redacted marker, destroying usable private key material.
+- Evidence:
+  - `/Users/jmcleod/Development/Personal/ironhand/api/handlers.go` (`fieldsToAPIRedacted`)
+  - `/Users/jmcleod/Development/Personal/ironhand/web/src/contexts/VaultContext.tsx` (`updateItem` merges existing fields)
+  - `/Users/jmcleod/Development/Personal/ironhand/web/src/components/EditItemDialog.tsx` (sets/sends `private_key`).
 
-- Impact: limited additional online guessing window during setup/enable.
+### 3) WebAuthn login does not establish authenticated session (`Medium` design gap)
 
-### 2) Header-Based Credential Authentication
+- `FinishWebAuthnLogin` returns `webauthn_verified` but does not create session cookie/credentials context.
+- Impact: feature is not a complete login path and may create false assurance.
+- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/webauthn.go`.
 
-`High`: `AuthMiddleware` accepts `X-Credentials` + `X-Passphrase` headers when no session cookie exists.
+### 4) API/OpenAPI/docs drift (`Medium`)
 
-- Impact: credentials can be exposed in logs, observability pipelines, proxy middleware, or client-side traces; bypasses cookie-only hardening model.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/middleware.go`.
+- Security-relevant endpoints/headers/behavior changes are not reflected in public docs/spec.
+- Impact: client misimplementation and insecure usage patterns.
+- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/openapi.yaml`, `/Users/jmcleod/Development/Personal/ironhand/README.md`, `/Users/jmcleod/Development/Personal/ironhand/docs/design.md`.
 
-### 3) CSRF And Browser Session Risks
+### 5) Audit chain update is non-atomic (`Medium` integrity gap)
 
-`Medium`: Cookie auth uses `SameSite=Lax` but no explicit CSRF token/origin enforcement on state-changing endpoints.
+- Audit entry write and chain-tip write are separate operations; partial failure can desynchronize chain head.
+- Impact: false tamper alerts or ambiguity during forensics.
+- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/audit_store.go`.
 
-- Impact: reduced but not fully eliminated CSRF risk under edge browser behaviors and deployment quirks.
-- Evidence: session cookie config in `/Users/jmcleod/Development/Personal/ironhand/api/middleware.go`.
+### 6) IP limiter effectiveness depends on deployment topology (`Low/Medium`)
 
-`Medium`: Optional Web UI secret-key persistence in `localStorage` is vulnerable to XSS/extension theft.
-
-- Impact: account takeover if passphrase also captured or weak.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/web/src/pages/UnlockPage.tsx`.
-
-### 4) Audit Log Integrity And Confidentiality
-
-`High`: Per-vault audit entries are stored unencrypted as `plain-json` envelopes.
-
-- Impact: storage attacker can read/modify/delete audit evidence; conflicts with docs that claim encrypted audit entries.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/audit_store.go` vs `/Users/jmcleod/Development/Personal/ironhand/docs/design.md`.
-
-`Medium`: Audit trail is not tamper-evident (no chained hashes/signatures).
-
-- Impact: post-compromise forensics trust is weaker.
-
-### 5) Vault Enumeration And Metadata Exposure
-
-`Medium`: `ListVaults` calls `repo.ListVaults()` globally, then attempts open on each vault and skips inaccessible ones.
-
-- Impact: reveals existence patterns indirectly via timing/log behavior; poor scalability for large shared storage.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/handlers.go` (`ListVaults`).
-
-### 6) PKI-Specific Risks
-
-`High`: CA private key is retrievable by any role with read access to the certificate item fields if membership allows reading those items.
-
-- Impact: catastrophic compromise of CA trust if vault roles are mis-assigned.
-- Evidence: PKI stores `private_key` in certificate items (`/Users/jmcleod/Development/Personal/ironhand/pki/pki.go`) and item reads expose full fields.
-
-`Medium`: No hardware-backed key option (HSM/KMS) for CA key custody.
-
-- Impact: key compromise risk tied to application host security posture.
-
-### 7) Availability And Resource Exhaustion
-
-`Medium`: Login rate limiting is per-account only; no IP/device/global pressure controls.
-
-- Impact: distributed guessing/noise across many account IDs can still cause service load.
+- `extractClientIP` uses `RemoteAddr`; in reverse-proxy setups this may collapse all users to one IP unless trusted forwarding logic is added.
 - Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/ratelimit.go`.
 
-`Medium`: `ListVaults` and item summarization perform repeated opens/reads and can be expensive on large datasets.
+## Updated Priority Queue
 
-- Impact: authenticated DoS amplification.
+1. `High`: Fix WebUI CSRF header integration.
+1. `High`: Prevent certificate private key corruption in edit/update flows.
+1. `Medium`: Complete WebAuthn to create/refresh authenticated sessions, or clearly scope it as supplemental verification.
+1. `Medium`: Make audit append + tip update atomic (single batch transaction).
+1. `Medium`: Add persistent/shared session backend for multi-instance and restart-resilient revocation.
+1. `Medium`: Update OpenAPI + README + design docs to match security behavior.
+1. `Low/Medium`: Improve client IP extraction strategy for proxy deployments.
+1. `Low`: Add configurable audit retention controls.
 
-`Low`: Import/export endpoints allow large payload processing (50 MB), increasing CPU/memory pressure during Argon2id and JSON handling.
+## Verification Notes
 
-### 8) Deployment And Transport
-
-`Medium`: Default self-signed TLS certificate at startup if no cert/key provided.
-
-- Impact: insecure trust posture if operators do not replace certs in production.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/cmd/ironhand/cmd/server.go`.
-
-`Low`: Missing explicit hardened response headers (CSP, HSTS, X-Frame-Options, etc.) in server middleware.
-
-- Impact: weaker browser hardening and XSS blast-radius control.
-
-## Top Risks To Prioritize
-
-1. `High`: Plaintext/tamperable audit storage.
-1. `High`: Header-based credential auth in production path.
-1. `High`: PKI private-key exposure model tied to generic item read permissions.
-1. `Medium`: CSRF hardening gaps for cookie-auth state-changing endpoints.
-1. `Medium`: Global vault enumeration pattern in `ListVaults`.
-
-## Recommended Mitigation Roadmap
-
-### Immediate (P0)
-
-1. Encrypt audit entries at rest using vault/session cryptographic model; add integrity checks (at minimum AAD-bound envelopes, ideally hash-chaining/signatures).
-1. Disable `X-Credentials`/`X-Passphrase` auth by default; gate behind explicit admin config for non-browser clients.
-1. Add CSRF defenses for mutating endpoints: origin/referer validation plus CSRF token.
-1. Restrict PKI private key access: separate privileged endpoint, role gate (`owner` only), and default redaction from generic item reads.
-
-### Near-Term (P1)
-
-1. Replace `ListVaults` global scan with account-to-vault index records (per-account listing source of truth).
-1. Add persistent/shared session store option (PostgreSQL/Redis) with revocation support and optional idle timeout.
-1. Add security headers middleware for Web UI/API responses (CSP, HSTS in TLS deployments, frame and MIME protections).
-1. Add per-IP and global login throttling alongside per-account limiter.
-
-### Mid-Term (P2)
-
-1. Add tamper-evident signed audit export and retention policy controls.
-1. Add optional WebAuthn/passkey MFA for phishing-resistant second factor.
-1. Add HSM/KMS-backed PKI key mode for CA operations.
-1. Add anomaly detection metrics/alerts (failed login spikes, unusual item access patterns, bulk exports).
-
-## Test And Verification Gaps
-
-Add or extend tests for:
-
-- Header-auth disabled-by-default behavior and explicit enable flag.
-- CSRF enforcement (mutating endpoints rejected without valid origin/token).
-- Audit record encryption and tamper-detection failure paths.
-- PKI key-field redaction and owner-only key export flows.
-- Session revocation and expiry behavior across process restarts (with persistent session backend).
-- `ListVaults` scalability and authorization correctness with account-indexed listing.
-
-## Residual Risk Summary
-
-After P0/P1 controls, the largest residual risks are host compromise, XSS in the Web UI supply chain, and operational misconfiguration (TLS/proxy/storage hardening). These require deployment hardening, dependency hygiene, and monitoring, in addition to application-level controls.
-
-## Notes
-
-- This assessment is implementation-grounded and reflects current code behavior.
-- Where documentation and implementation differ, this document treats code behavior as authoritative and flags the mismatch for correction.
+- Full test suite currently passes: `go test ./...`.
+- Passing tests do not currently cover WebUI CSRF token handling and certificate redaction/update interaction end-to-end.

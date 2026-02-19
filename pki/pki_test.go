@@ -41,7 +41,7 @@ func TestInitCA(t *testing.T) {
 		Country:      []string{"US"},
 	}
 
-	err := pki.InitCA(ctx, session, subject, 10, false)
+	err := pki.InitCA(ctx, session, subject, 10, false, nil)
 	require.NoError(t, err)
 
 	// Verify CA info is available.
@@ -72,10 +72,10 @@ func TestInitCA_AlreadyInitialized(t *testing.T) {
 	session := newTestSession(t)
 
 	subject := pkix.Name{CommonName: "Test CA"}
-	err := pki.InitCA(ctx, session, subject, 10, false)
+	err := pki.InitCA(ctx, session, subject, 10, false, nil)
 	require.NoError(t, err)
 
-	err = pki.InitCA(ctx, session, subject, 10, false)
+	err = pki.InitCA(ctx, session, subject, 10, false, nil)
 	assert.ErrorIs(t, err, pki.ErrAlreadyCA)
 }
 
@@ -87,7 +87,7 @@ func TestIssueCertificate(t *testing.T) {
 	err := pki.InitCA(ctx, session, pkix.Name{
 		CommonName:   "Test CA",
 		Organization: []string{"TestOrg"},
-	}, 10, false)
+	}, 10, false, nil)
 	require.NoError(t, err)
 
 	// Issue a certificate.
@@ -99,7 +99,7 @@ func TestIssueCertificate(t *testing.T) {
 		ValidityDays: 365,
 		ExtKeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{"server.example.com", "*.example.com"},
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, itemID)
 
@@ -142,19 +142,19 @@ func TestIssueCertificate_IncrementSerial(t *testing.T) {
 	ctx := t.Context()
 	session := newTestSession(t)
 
-	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false)
+	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false, nil)
 	require.NoError(t, err)
 
 	id1, err := pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
 		Subject:      pkix.Name{CommonName: "cert-1"},
 		ValidityDays: 365,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	id2, err := pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
 		Subject:      pkix.Name{CommonName: "cert-2"},
 		ValidityDays: 365,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// Different item IDs.
@@ -176,13 +176,13 @@ func TestRevokeCertificate(t *testing.T) {
 	ctx := t.Context()
 	session := newTestSession(t)
 
-	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false)
+	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false, nil)
 	require.NoError(t, err)
 
 	itemID, err := pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
 		Subject:      pkix.Name{CommonName: "leaf"},
 		ValidityDays: 365,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// Revoke.
@@ -199,13 +199,13 @@ func TestRevokeCertificate_AlreadyRevoked(t *testing.T) {
 	ctx := t.Context()
 	session := newTestSession(t)
 
-	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false)
+	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false, nil)
 	require.NoError(t, err)
 
 	itemID, err := pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
 		Subject:      pkix.Name{CommonName: "leaf"},
 		ValidityDays: 365,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	err = pki.RevokeCertificate(ctx, session, itemID, 0)
@@ -219,7 +219,7 @@ func TestRenewCertificate(t *testing.T) {
 	ctx := t.Context()
 	session := newTestSession(t)
 
-	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false)
+	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false, nil)
 	require.NoError(t, err)
 
 	oldID, err := pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
@@ -227,11 +227,11 @@ func TestRenewCertificate(t *testing.T) {
 		ValidityDays: 365,
 		DNSNames:     []string{"web.example.com"},
 		ExtKeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	// Renew.
-	newID, err := pki.RenewCertificate(ctx, session, oldID, 730)
+	newID, err := pki.RenewCertificate(ctx, session, oldID, 730, nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, oldID, newID)
 
@@ -257,27 +257,27 @@ func TestGenerateCRL(t *testing.T) {
 	ctx := t.Context()
 	session := newTestSession(t)
 
-	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false)
+	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false, nil)
 	require.NoError(t, err)
 
 	// Issue two certs, revoke one.
 	id1, err := pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
 		Subject:      pkix.Name{CommonName: "cert-1"},
 		ValidityDays: 365,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	_, err = pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
 		Subject:      pkix.Name{CommonName: "cert-2"},
 		ValidityDays: 365,
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	err = pki.RevokeCertificate(ctx, session, id1, 1) // KeyCompromise
 	require.NoError(t, err)
 
 	// Generate CRL.
-	crlPEM, err := pki.GenerateCRL(ctx, session)
+	crlPEM, err := pki.GenerateCRL(ctx, session, nil)
 	require.NoError(t, err)
 	assert.Contains(t, string(crlPEM), "BEGIN X509 CRL")
 
@@ -302,7 +302,7 @@ func TestGetCACertificate(t *testing.T) {
 	assert.ErrorIs(t, err, pki.ErrNotCA)
 
 	// Init and get.
-	err = pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false)
+	err = pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false, nil)
 	require.NoError(t, err)
 
 	certPEM, err := pki.GetCACertificate(ctx, session)
@@ -325,7 +325,7 @@ func TestGetCAInfo(t *testing.T) {
 	assert.ErrorIs(t, err, pki.ErrNotCA)
 
 	// Init.
-	err = pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false)
+	err = pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false, nil)
 	require.NoError(t, err)
 
 	// Issue 2 certs.
@@ -333,7 +333,7 @@ func TestGetCAInfo(t *testing.T) {
 		_, err := pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
 			Subject:      pkix.Name{CommonName: "cert"},
 			ValidityDays: 365,
-		})
+		}, nil)
 		require.NoError(t, err)
 	}
 
@@ -352,7 +352,7 @@ func TestParseCertificatePEM(t *testing.T) {
 		CommonName:   "Parse Test CA",
 		Organization: []string{"ParseOrg"},
 		Country:      []string{"DE"},
-	}, 5, false)
+	}, 5, false, nil)
 	require.NoError(t, err)
 
 	certPEM, _ := pki.GetCACertificate(ctx, session)
@@ -377,7 +377,7 @@ func TestSignCSR(t *testing.T) {
 	ctx := context.Background()
 	session := newTestSession(t)
 
-	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "CSR Test CA"}, 10, false)
+	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "CSR Test CA"}, 10, false, nil)
 	require.NoError(t, err)
 
 	// Generate a CSR externally.
@@ -397,7 +397,7 @@ func TestSignCSR(t *testing.T) {
 	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
 
 	// Sign the CSR.
-	itemID, err := pki.SignCSR(ctx, session, csrPEM, 365, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+	itemID, err := pki.SignCSR(ctx, session, csrPEM, 365, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, itemID)
 
@@ -427,4 +427,102 @@ func TestSignCSR(t *testing.T) {
 
 	// The cert's public key should match the CSR key (not a new key).
 	assert.Equal(t, csrKey.PublicKey, *leafCert.PublicKey.(*ecdsa.PublicKey))
+}
+
+// TestKeyStoreInterfaceContract verifies that the SoftwareKeyStore
+// correctly implements the KeyStore interface contract.
+func TestKeyStoreInterfaceContract(t *testing.T) {
+	ks := pki.NewSoftwareKeyStore()
+
+	// Generate a key.
+	keyID, err := ks.GenerateKey()
+	require.NoError(t, err)
+	assert.NotEmpty(t, keyID)
+
+	// Get signer.
+	signer, err := ks.Signer(keyID)
+	require.NoError(t, err)
+	assert.NotNil(t, signer)
+	assert.NotNil(t, signer.Public())
+
+	// Export PEM.
+	pemData, err := ks.ExportPEM(keyID)
+	require.NoError(t, err)
+	assert.Contains(t, pemData, "BEGIN EC PRIVATE KEY")
+
+	// Import PEM.
+	importedID, err := ks.ImportPEM(pemData)
+	require.NoError(t, err)
+	assert.NotEqual(t, keyID, importedID)
+
+	// Imported key should produce the same public key.
+	importedSigner, err := ks.Signer(importedID)
+	require.NoError(t, err)
+	origPub := signer.Public().(*ecdsa.PublicKey)
+	importedPub := importedSigner.Public().(*ecdsa.PublicKey)
+	assert.True(t, origPub.Equal(importedPub))
+
+	// Delete.
+	err = ks.Delete(keyID)
+	require.NoError(t, err)
+
+	// After delete, signer should fail.
+	_, err = ks.Signer(keyID)
+	assert.ErrorIs(t, err, pki.ErrKeyNotFound)
+}
+
+// TestKeyStoreImportPKCS8 verifies that PKCS8-encoded keys can be imported.
+func TestKeyStoreImportPKCS8(t *testing.T) {
+	ks := pki.NewSoftwareKeyStore()
+
+	// Generate a key externally and marshal as PKCS8.
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	pemData := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+
+	keyID, err := ks.ImportPEM(pemData)
+	require.NoError(t, err)
+
+	signer, err := ks.Signer(keyID)
+	require.NoError(t, err)
+	assert.True(t, key.PublicKey.Equal(signer.Public()))
+}
+
+// TestKeyStoreImportInvalidPEM verifies error handling for invalid PEM.
+func TestKeyStoreImportInvalidPEM(t *testing.T) {
+	ks := pki.NewSoftwareKeyStore()
+
+	_, err := ks.ImportPEM("not valid pem")
+	assert.ErrorIs(t, err, pki.ErrInvalidPEM)
+}
+
+// TestInitCAWithExplicitKeyStore verifies that an explicit SoftwareKeyStore
+// works end-to-end with InitCA.
+func TestInitCAWithExplicitKeyStore(t *testing.T) {
+	ctx := t.Context()
+	session := newTestSession(t)
+
+	ks := pki.NewSoftwareKeyStore()
+	err := pki.InitCA(ctx, session, pkix.Name{CommonName: "KS Test CA"}, 5, false, ks)
+	require.NoError(t, err)
+
+	info, err := pki.GetCAInfo(ctx, session)
+	require.NoError(t, err)
+	assert.True(t, info.IsCA)
+	assert.Contains(t, info.Subject, "CN=KS Test CA")
+
+	// Issue a cert through the same keystore.
+	itemID, err := pki.IssueCertificate(ctx, session, pki.IssueCertRequest{
+		Subject:      pkix.Name{CommonName: "ks-leaf"},
+		ValidityDays: 365,
+	}, ks)
+	require.NoError(t, err)
+
+	fields, err := session.Get(ctx, itemID)
+	require.NoError(t, err)
+	assert.Contains(t, string(fields["certificate"]), "BEGIN CERTIFICATE")
+	assert.Contains(t, string(fields["private_key"]), "BEGIN EC PRIVATE KEY")
 }

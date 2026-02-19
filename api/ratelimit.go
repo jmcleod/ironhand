@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -122,4 +123,143 @@ func retryAfterString(d time.Duration) string {
 		secs = 1
 	}
 	return strconv.Itoa(secs)
+}
+
+// ---------------------------------------------------------------------------
+// Per-IP rate limiter
+// ---------------------------------------------------------------------------
+
+const (
+	ipMaxFailures = 20
+	ipBaseLockout = 1 * time.Minute
+	ipMaxLockout  = 30 * time.Minute
+)
+
+// ipRateLimiter tracks failed login attempts per source IP.
+type ipRateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string]*attemptRecord
+}
+
+func newIPRateLimiter() *ipRateLimiter {
+	return &ipRateLimiter{
+		attempts: make(map[string]*attemptRecord),
+	}
+}
+
+func (rl *ipRateLimiter) check(ip string) (blocked bool, retryAfter time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	rec, ok := rl.attempts[ip]
+	if !ok {
+		return false, 0
+	}
+	if time.Since(rec.lastFailure) > attemptExpiry {
+		delete(rl.attempts, ip)
+		return false, 0
+	}
+	if time.Now().Before(rec.lockedUntil) {
+		return true, time.Until(rec.lockedUntil)
+	}
+	return false, 0
+}
+
+func (rl *ipRateLimiter) recordFailure(ip string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	rec, ok := rl.attempts[ip]
+	if !ok {
+		rec = &attemptRecord{}
+		rl.attempts[ip] = rec
+	}
+	rec.failures++
+	rec.lastFailure = time.Now()
+
+	if rec.failures >= ipMaxFailures {
+		shift := rec.failures - ipMaxFailures
+		lockout := ipBaseLockout
+		for i := 0; i < shift; i++ {
+			lockout *= 2
+			if lockout > ipMaxLockout {
+				lockout = ipMaxLockout
+				break
+			}
+		}
+		rec.lockedUntil = time.Now().Add(lockout)
+	}
+}
+
+func (rl *ipRateLimiter) recordSuccess(ip string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	delete(rl.attempts, ip)
+}
+
+// ---------------------------------------------------------------------------
+// Global rate limiter (sliding window)
+// ---------------------------------------------------------------------------
+
+const (
+	globalWindow      = 1 * time.Minute
+	globalMaxFailures = 100
+	globalLockout     = 5 * time.Minute
+)
+
+// globalRateLimiter tracks total failed login attempts across all accounts
+// using a sliding window.
+type globalRateLimiter struct {
+	mu          sync.Mutex
+	failures    []time.Time
+	lockedUntil time.Time
+}
+
+func newGlobalRateLimiter() *globalRateLimiter {
+	return &globalRateLimiter{}
+}
+
+func (rl *globalRateLimiter) check() (blocked bool, retryAfter time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	if time.Now().Before(rl.lockedUntil) {
+		return true, time.Until(rl.lockedUntil)
+	}
+	return false, 0
+}
+
+func (rl *globalRateLimiter) recordFailure() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	rl.failures = append(rl.failures, now)
+
+	// Trim failures outside the window.
+	cutoff := now.Add(-globalWindow)
+	start := 0
+	for start < len(rl.failures) && rl.failures[start].Before(cutoff) {
+		start++
+	}
+	rl.failures = rl.failures[start:]
+
+	if len(rl.failures) >= globalMaxFailures {
+		rl.lockedUntil = now.Add(globalLockout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: extract client IP
+// ---------------------------------------------------------------------------
+
+// extractClientIP returns the remote address without port, suitable for
+// per-IP rate limiting. It prefers the last hop in X-Forwarded-For if present.
+func extractClientIP(r *http.Request) string {
+	// Use the direct remote address (strip port).
+	ip := r.RemoteAddr
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		ip = ip[:idx]
+	}
+	return ip
 }

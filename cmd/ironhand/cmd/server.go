@@ -25,12 +25,13 @@ import (
 )
 
 var (
-	port           int
-	dataDir        string
-	tlsCert        string
-	tlsKey         string
-	storageBackend string
-	postgresDSN    string
+	port             int
+	dataDir          string
+	tlsCert          string
+	tlsKey           string
+	storageBackend   string
+	postgresDSN      string
+	enableHeaderAuth bool
 )
 
 var serverCmd = &cobra.Command{
@@ -88,11 +89,12 @@ var serverCmd = &cobra.Command{
 		}
 		defer closeFn()
 
-		a := api.New(repo, epochCache)
+		a := api.New(repo, epochCache, api.WithHeaderAuth(enableHeaderAuth))
 
 		r := chi.NewRouter()
 		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
+		r.Use(api.SecurityHeaders)
 
 		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("OK"))
@@ -177,4 +179,5 @@ func init() {
 	serverCmd.Flags().StringVar(&tlsKey, "tls-key", "", "Path to TLS key file")
 	serverCmd.Flags().StringVar(&storageBackend, "storage", "bbolt", "Storage backend: bbolt or postgres")
 	serverCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", "", "PostgreSQL connection string (required when --storage=postgres)")
+	serverCmd.Flags().BoolVar(&enableHeaderAuth, "enable-header-auth", false, "Allow X-Credentials/X-Passphrase header-based authentication (disabled by default)")
 }

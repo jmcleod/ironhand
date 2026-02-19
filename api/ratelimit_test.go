@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -115,4 +116,136 @@ func TestRateLimiter_MaxLockoutCap(t *testing.T) {
 
 	_, retryAfter := rl.check("acct-1")
 	assert.LessOrEqual(t, retryAfter, maxLockout+time.Second, "lockout should not exceed maxLockout")
+}
+
+// ---------------------------------------------------------------------------
+// Per-IP rate limiter tests
+// ---------------------------------------------------------------------------
+
+func TestIPRateLimiter_AllowsBeforeThreshold(t *testing.T) {
+	rl := newIPRateLimiter()
+
+	for i := 0; i < ipMaxFailures-1; i++ {
+		rl.recordFailure("192.168.1.1")
+		blocked, _ := rl.check("192.168.1.1")
+		assert.False(t, blocked, "should not block before ipMaxFailures")
+	}
+}
+
+func TestIPRateLimiter_BlocksAfterThreshold(t *testing.T) {
+	rl := newIPRateLimiter()
+
+	for i := 0; i < ipMaxFailures; i++ {
+		rl.recordFailure("192.168.1.1")
+	}
+
+	blocked, retryAfter := rl.check("192.168.1.1")
+	require.True(t, blocked, "should block after ipMaxFailures")
+	assert.Greater(t, retryAfter, time.Duration(0))
+}
+
+func TestIPRateLimiter_IsolatesIPs(t *testing.T) {
+	rl := newIPRateLimiter()
+
+	for i := 0; i < ipMaxFailures; i++ {
+		rl.recordFailure("192.168.1.1")
+	}
+	blocked, _ := rl.check("192.168.1.1")
+	require.True(t, blocked)
+
+	// A different IP should be unaffected.
+	blocked2, _ := rl.check("10.0.0.1")
+	assert.False(t, blocked2, "different IP should not be blocked")
+}
+
+func TestIPRateLimiter_SuccessClears(t *testing.T) {
+	rl := newIPRateLimiter()
+
+	for i := 0; i < ipMaxFailures; i++ {
+		rl.recordFailure("192.168.1.1")
+	}
+	blocked, _ := rl.check("192.168.1.1")
+	require.True(t, blocked)
+
+	rl.recordSuccess("192.168.1.1")
+	blocked2, _ := rl.check("192.168.1.1")
+	assert.False(t, blocked2, "should not be blocked after success")
+}
+
+func TestIPRateLimiter_MaxLockoutCap(t *testing.T) {
+	rl := newIPRateLimiter()
+
+	for i := 0; i < ipMaxFailures+20; i++ {
+		rl.recordFailure("192.168.1.1")
+	}
+
+	_, retryAfter := rl.check("192.168.1.1")
+	assert.LessOrEqual(t, retryAfter, ipMaxLockout+time.Second)
+}
+
+// ---------------------------------------------------------------------------
+// Global rate limiter tests
+// ---------------------------------------------------------------------------
+
+func TestGlobalRateLimiter_AllowsBeforeThreshold(t *testing.T) {
+	rl := newGlobalRateLimiter()
+
+	for i := 0; i < globalMaxFailures-1; i++ {
+		rl.recordFailure()
+		blocked, _ := rl.check()
+		assert.False(t, blocked, "should not block before globalMaxFailures")
+	}
+}
+
+func TestGlobalRateLimiter_BlocksAfterThreshold(t *testing.T) {
+	rl := newGlobalRateLimiter()
+
+	for i := 0; i < globalMaxFailures; i++ {
+		rl.recordFailure()
+	}
+
+	blocked, retryAfter := rl.check()
+	require.True(t, blocked, "should block after globalMaxFailures in window")
+	assert.Greater(t, retryAfter, time.Duration(0))
+	// Lockout should be approximately globalLockout.
+	assert.LessOrEqual(t, retryAfter, globalLockout+time.Second)
+}
+
+func TestGlobalRateLimiter_SlidingWindowExpiry(t *testing.T) {
+	rl := newGlobalRateLimiter()
+
+	// Inject old failures outside the sliding window.
+	rl.mu.Lock()
+	for i := 0; i < globalMaxFailures; i++ {
+		rl.failures = append(rl.failures, time.Now().Add(-2*globalWindow))
+	}
+	rl.mu.Unlock()
+
+	// One new failure should NOT trigger lockout — old ones are outside the window.
+	rl.recordFailure()
+	blocked, _ := rl.check()
+	assert.False(t, blocked, "expired failures outside window should not count")
+}
+
+// ---------------------------------------------------------------------------
+// extractClientIP tests
+// ---------------------------------------------------------------------------
+
+func TestExtractClientIP(t *testing.T) {
+	tests := []struct {
+		remoteAddr string
+		want       string
+	}{
+		{"192.168.1.1:12345", "192.168.1.1"},
+		{"10.0.0.1:80", "10.0.0.1"},
+		{"127.0.0.1:0", "127.0.0.1"},
+		{"[::1]:8080", "[::1]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.remoteAddr, func(t *testing.T) {
+			r := &http.Request{RemoteAddr: tt.remoteAddr}
+			got := extractClientIP(r)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

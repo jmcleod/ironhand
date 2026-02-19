@@ -33,11 +33,13 @@ const (
 	AuditCertRenewed         AuditEvent = "cert_renewed"
 	AuditCRLGenerated        AuditEvent = "crl_generated"
 	AuditCSRSigned           AuditEvent = "csr_signed"
+	AuditPrivateKeyAccessed  AuditEvent = "private_key_accessed"
 )
 
 // auditLogger wraps slog.Logger for structured security audit logging.
 type auditLogger struct {
-	logger *slog.Logger
+	logger  *slog.Logger
+	metrics *metricsCollector
 }
 
 func newAuditLogger(logger *slog.Logger) *auditLogger {
@@ -61,6 +63,9 @@ func (al *auditLogger) log(event AuditEvent, r *http.Request, attrs ...slog.Attr
 		args[i] = a
 	}
 	al.logger.LogAttrs(r.Context(), slog.LevelInfo, "audit", baseAttrs...)
+	if al.metrics != nil {
+		al.metrics.recordEvent(event)
+	}
 }
 
 // logEvent is a convenience for events with an account ID.

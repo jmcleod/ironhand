@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,6 +74,27 @@ func fieldsToAPI(fields vault.Fields) map[string]string {
 	return apiFields
 }
 
+// sensitiveFields are field names that should be redacted in normal item
+// responses. They are only accessible via dedicated endpoints that enforce
+// additional access control (e.g. owner-only private key retrieval).
+var sensitiveFields = map[string]bool{
+	pki.FieldPrivateKey: true,
+}
+
+func fieldsToAPIRedacted(fields vault.Fields) map[string]string {
+	apiFields := make(map[string]string, len(fields))
+	for k, v := range fields {
+		if sensitiveFields[k] {
+			apiFields[k] = "[REDACTED]"
+		} else if vault.IsAttachmentField(k) {
+			apiFields[k] = base64.StdEncoding.EncodeToString(v)
+		} else {
+			apiFields[k] = string(v)
+		}
+	}
+	return apiFields
+}
+
 // CreateVault handles POST /vaults.
 // Creates a new vault for the authenticated account and returns the generated vault ID.
 func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +127,11 @@ func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Update the account's vault index.
+	if err := a.addVaultToIndex(creds.SecretKey().String(), vaultID); err != nil {
+		slog.Warn("failed to update vault index on create", "error", err)
+	}
+
 	a.audit.logEvent(AuditVaultCreated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID))
 	writeJSON(w, http.StatusCreated, CreateVaultResponse{
@@ -126,6 +153,12 @@ func (a *API) OpenVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer session.Close()
+
+	// Lazily ensure this vault is in the account's index (e.g. added as
+	// member by someone else).
+	if err := a.addVaultToIndex(creds.SecretKey().String(), vaultID); err != nil {
+		slog.Warn("failed to update vault index on open", "error", err)
+	}
 
 	writeJSON(w, http.StatusOK, OpenVaultResponse{
 		VaultID:  vaultID,
@@ -217,7 +250,7 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemCreated)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemCreated)
 
 	a.audit.logEvent(AuditItemCreated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -247,12 +280,55 @@ func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemAccessed)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	writeJSON(w, http.StatusOK, GetItemResponse{
 		ItemID: itemID,
-		Fields: fieldsToAPI(fields),
+		Fields: fieldsToAPIRedacted(fields),
 	})
+}
+
+// GetItemPrivateKey handles GET /vaults/{vaultID}/items/{itemID}/private-key.
+// Returns the raw PEM-encoded private key for a certificate item. Requires
+// owner (admin) access because private keys are redacted from normal GetItem
+// responses.
+func (a *API) GetItemPrivateKey(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	itemID := chi.URLParam(r, "itemID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		mapError(w, err)
+		return
+	}
+
+	fields, err := session.Get(r.Context(), itemID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	keyPEM, ok := fields[pki.FieldPrivateKey]
+	if !ok || len(keyPEM) == 0 {
+		writeError(w, http.StatusNotFound, "item does not contain a private key")
+		return
+	}
+
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionPrivateKeyAccessed)
+	a.audit.logEvent(AuditPrivateKeyAccessed, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("item_id", itemID))
+
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.WriteHeader(http.StatusOK)
+	w.Write(keyPEM)
 }
 
 // UpdateItem handles PUT /vaults/{vaultID}/items/{itemID}.
@@ -287,7 +363,7 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemUpdated)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemUpdated)
 
 	a.audit.logEvent(AuditItemUpdated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -316,7 +392,7 @@ func (a *API) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemDeleted)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemDeleted)
 
 	a.audit.logEvent(AuditItemDeleted, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -325,24 +401,26 @@ func (a *API) DeleteItem(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListVaults handles GET /vaults.
+// Uses the per-account vault index instead of iterating all vaults in
+// the repository, avoiding O(N) probe of every vault and preventing
+// vault-existence leakage.
 func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 	creds := credentialsFromContext(r.Context())
-	vaultIDs, err := a.repo.ListVaults()
-	if err != nil {
-		mapError(w, err)
-		return
-	}
-	sort.Strings(vaultIDs)
+	secretKey := creds.SecretKey().String()
 
-	result := make([]VaultSummary, 0, len(vaultIDs))
-	for _, vaultID := range vaultIDs {
-		if strings.HasPrefix(vaultID, "__") {
-			continue
-		}
+	idx, err := a.loadVaultIndex(secretKey)
+	if err != nil {
+		slog.Warn("list vaults: failed to load vault index", "error", err)
+		// Fall through with empty index — user sees no vaults.
+	}
+	sort.Strings(idx.VaultIDs)
+
+	result := make([]VaultSummary, 0, len(idx.VaultIDs))
+	for _, vaultID := range idx.VaultIDs {
 		session, err := a.openSession(r.Context(), vaultID, creds)
 		if err != nil {
-			// Skip inaccessible vaults, but keep observability for operators.
-			slog.Debug("list vaults: skipping vault", "vault_id", vaultID, "error", err)
+			// The vault may have been deleted or access revoked — skip it.
+			slog.Debug("list vaults: skipping indexed vault", "vault_id", vaultID, "error", err)
 			continue
 		}
 
@@ -401,6 +479,11 @@ func (a *API) DeleteVault(w http.ResponseWriter, r *http.Request) {
 	if err := a.repo.DeleteVault(vaultID); err != nil {
 		mapError(w, err)
 		return
+	}
+
+	// Remove from account's vault index.
+	if err := a.removeVaultFromIndex(creds.SecretKey().String(), vaultID); err != nil {
+		slog.Warn("failed to update vault index on delete", "error", err)
 	}
 
 	a.audit.logEvent(AuditVaultDeleted, r, creds.SecretKey().ID(),
@@ -514,7 +597,7 @@ func (a *API) GetItemHistory(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemAccessed)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	history := make([]HistoryEntryResponse, len(entries))
 	for i, e := range entries {
@@ -561,7 +644,7 @@ func (a *API) GetHistoryVersion(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionItemAccessed)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	writeJSON(w, http.StatusOK, GetHistoryVersionResponse{
 		ItemID:  itemID,
@@ -581,9 +664,9 @@ func (a *API) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	session.Close()
+	defer session.Close()
 
-	entries, err := a.listAuditEntries(vaultID, itemID)
+	entries, err := a.listAuditEntries(session, vaultID, itemID)
 	if err != nil {
 		mapError(w, err)
 		return
@@ -600,6 +683,66 @@ func (a *API) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, ListAuditLogsResponse{Entries: resp})
+}
+
+// ExportAuditLog handles GET /vaults/{vaultID}/audit/export.
+// Admin-only. Returns the full audit chain with a tamper-evident HMAC-SHA256
+// signature over the serialized entries, computed with the vault's record key.
+func (a *API) ExportAuditLog(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		mapError(w, err)
+		return
+	}
+
+	entries, err := a.listAuditEntries(session, vaultID, "")
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	// Build response entries in chronological order (oldest first).
+	// listAuditEntries returns newest-first, so reverse.
+	exportEntries := make([]ExportAuditEntryResponse, len(entries))
+	for i := range entries {
+		e := entries[len(entries)-1-i]
+		exportEntries[i] = ExportAuditEntryResponse{
+			ID:        e.ID,
+			VaultID:   e.VaultID,
+			ItemID:    e.ItemID,
+			Action:    string(e.Action),
+			MemberID:  e.MemberID,
+			CreatedAt: e.CreatedAt,
+			PrevHash:  e.PrevHash,
+		}
+	}
+
+	// Compute HMAC-SHA256 over the serialized entries.
+	entriesJSON, err := json.Marshal(exportEntries)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to serialize audit entries")
+		return
+	}
+	sig, err := session.HMACAudit(entriesJSON)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to sign audit export")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, ExportAuditLogResponse{
+		VaultID:   vaultID,
+		Entries:   exportEntries,
+		Signature: hex.EncodeToString(sig),
+	})
 }
 
 // ExportVault handles POST /vaults/{vaultID}/export.
@@ -704,7 +847,7 @@ func (a *API) ExportVault(w http.ResponseWriter, r *http.Request) {
 	out = append(out, salt...)
 	out = append(out, ciphertext...)
 
-	_ = a.appendAuditEntry(vaultID, "", session.MemberID, auditActionVaultExported)
+	_ = a.appendAuditEntry(session, vaultID, "", session.MemberID, auditActionVaultExported)
 	a.audit.logEvent(AuditVaultExported, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.Int("item_count", len(exportItems)))
@@ -804,11 +947,11 @@ func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("import: failed to put item", "error", err)
 			continue
 		}
-		_ = a.appendAuditEntry(vaultID, newItemID, session.MemberID, auditActionItemCreated)
+		_ = a.appendAuditEntry(session, vaultID, newItemID, session.MemberID, auditActionItemCreated)
 		importedCount++
 	}
 
-	_ = a.appendAuditEntry(vaultID, "", session.MemberID, auditActionVaultImported)
+	_ = a.appendAuditEntry(session, vaultID, "", session.MemberID, auditActionVaultImported)
 	a.audit.logEvent(AuditVaultImported, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.Int("imported_count", importedCount))
@@ -903,7 +1046,7 @@ func (a *API) InitCA(w http.ResponseWriter, r *http.Request) {
 		subject.Locality = []string{req.Locality}
 	}
 
-	if err := pki.InitCA(r.Context(), session, subject, req.ValidityYears, req.IsIntermediate); err != nil {
+	if err := pki.InitCA(r.Context(), session, subject, req.ValidityYears, req.IsIntermediate, a.keyStore); err != nil {
 		if errors.Is(err, pki.ErrAlreadyCA) {
 			writeError(w, http.StatusConflict, "vault is already initialized as a CA")
 			return
@@ -912,7 +1055,7 @@ func (a *API) InitCA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = a.appendAuditEntry(vaultID, "", session.MemberID, auditActionCAInitialized)
+	_ = a.appendAuditEntry(session, vaultID, "", session.MemberID, auditActionCAInitialized)
 	a.audit.logEvent(AuditCAInitialized, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID))
 
@@ -1044,7 +1187,7 @@ func (a *API) IssueCert(w http.ResponseWriter, r *http.Request) {
 		EmailAddresses: req.EmailAddresses,
 	}
 
-	itemID, err := pki.IssueCertificate(r.Context(), session, issueReq)
+	itemID, err := pki.IssueCertificate(r.Context(), session, issueReq, a.keyStore)
 	if err != nil {
 		if errors.Is(err, pki.ErrNotCA) {
 			writeError(w, http.StatusBadRequest, "vault is not initialized as a CA")
@@ -1057,7 +1200,7 @@ func (a *API) IssueCert(w http.ResponseWriter, r *http.Request) {
 	// Read back the issued cert fields for the response.
 	fields, _ := session.Get(r.Context(), itemID)
 
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionCertIssued)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionCertIssued)
 	a.audit.logEvent(AuditCertIssued, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))
@@ -1112,7 +1255,7 @@ func (a *API) RevokeCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionCertRevoked)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionCertRevoked)
 	a.audit.logEvent(AuditCertRevoked, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))
@@ -1147,7 +1290,7 @@ func (a *API) RenewCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newItemID, err := pki.RenewCertificate(r.Context(), session, itemID, req.ValidityDays)
+	newItemID, err := pki.RenewCertificate(r.Context(), session, itemID, req.ValidityDays, a.keyStore)
 	if err != nil {
 		switch {
 		case errors.Is(err, pki.ErrNotCA):
@@ -1165,7 +1308,7 @@ func (a *API) RenewCert(w http.ResponseWriter, r *http.Request) {
 	// Read serial from new cert.
 	newFields, _ := session.Get(r.Context(), newItemID)
 
-	_ = a.appendAuditEntry(vaultID, newItemID, session.MemberID, auditActionCertRenewed)
+	_ = a.appendAuditEntry(session, vaultID, newItemID, session.MemberID, auditActionCertRenewed)
 	a.audit.logEvent(AuditCertRenewed, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("old_item_id", itemID),
@@ -1190,7 +1333,7 @@ func (a *API) GetCRL(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	crlPEM, err := pki.GenerateCRL(r.Context(), session)
+	crlPEM, err := pki.GenerateCRL(r.Context(), session, a.keyStore)
 	if err != nil {
 		if errors.Is(err, pki.ErrNotCA) {
 			writeError(w, http.StatusNotFound, "vault is not initialized as a CA")
@@ -1200,7 +1343,7 @@ func (a *API) GetCRL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = a.appendAuditEntry(vaultID, "", session.MemberID, auditActionCRLGenerated)
+	_ = a.appendAuditEntry(session, vaultID, "", session.MemberID, auditActionCRLGenerated)
 	a.audit.logEvent(AuditCRLGenerated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID))
 
@@ -1242,7 +1385,7 @@ func (a *API) SignCSR(w http.ResponseWriter, r *http.Request) {
 
 	extKeyUsages := parseExtKeyUsages(req.ExtKeyUsages)
 
-	itemID, err := pki.SignCSR(r.Context(), session, req.CSR, req.ValidityDays, extKeyUsages)
+	itemID, err := pki.SignCSR(r.Context(), session, req.CSR, req.ValidityDays, extKeyUsages, a.keyStore)
 	if err != nil {
 		if errors.Is(err, pki.ErrNotCA) {
 			writeError(w, http.StatusBadRequest, "vault is not initialized as a CA")
@@ -1255,7 +1398,7 @@ func (a *API) SignCSR(w http.ResponseWriter, r *http.Request) {
 	// Read the issued cert PEM.
 	fields, _ := session.Get(r.Context(), itemID)
 
-	_ = a.appendAuditEntry(vaultID, itemID, session.MemberID, auditActionCSRSigned)
+	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionCSRSigned)
 	a.audit.logEvent(AuditCSRSigned, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))

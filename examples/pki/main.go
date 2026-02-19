@@ -41,7 +41,7 @@ func main() {
 		Organization: []string{"IronHand"},
 		Country:      []string{"US"},
 	}
-	if err := pki.InitCA(ctx, session, caSubject, 10, false); err != nil {
+	if err := pki.InitCA(ctx, session, caSubject, 10, false, nil); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("    Root CA initialized.")
@@ -76,7 +76,7 @@ func main() {
 		ExtKeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{"api.example.com", "*.api.example.com"},
 		IPAddresses:  []net.IP{net.ParseIP("10.0.0.1")},
-	})
+	}, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func main() {
 		KeyUsages:      x509.KeyUsageDigitalSignature,
 		ExtKeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageEmailProtection},
 		EmailAddresses: []string{"alice@example.com"},
-	})
+	}, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func main() {
 
 	// 9. Renew the server certificate
 	fmt.Println("\n[9] Renewing server certificate...")
-	newServerItemID, err := pki.RenewCertificate(ctx, session, serverItemID, 365)
+	newServerItemID, err := pki.RenewCertificate(ctx, session, serverItemID, 365, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func main() {
 
 	// 10. Generate a CRL
 	fmt.Println("\n[10] Generating Certificate Revocation List...")
-	crlPEM, err := pki.GenerateCRL(ctx, session)
+	crlPEM, err := pki.GenerateCRL(ctx, session, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

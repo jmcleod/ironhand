@@ -76,9 +76,11 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		SessionPassphrase: sessionPassphrase,
 		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
 		ExpiresAt:         expiresAt,
+		LastAccessedAt:    time.Now(),
 	}
 	a.sessions.mu.Unlock()
 	writeSessionCookie(w, r, token, expiresAt)
+	writeCSRFCookie(w, r)
 
 	a.audit.logEvent(AuditRegister, r, record.SecretKeyID)
 	writeJSON(w, http.StatusCreated, RegisterResponse{SecretKey: secretKey})
@@ -103,8 +105,20 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	// Derive the account lookup ID for rate-limit tracking.
 	// This is a SHA-256 hash — safe for logs and maps.
 	accountID, _ := accountLookupID(req.SecretKey)
+	clientIP := extractClientIP(r)
 
-	// Check rate limit before any expensive work.
+	// Check rate limits before any expensive work: global → IP → per-account.
+	if blocked, retryAfter := a.globalLimiter.check(); blocked {
+		a.audit.logFailure(AuditLoginRateLimited, r, "global rate limited")
+		writeRateLimited(w, retryAfter)
+		return
+	}
+	if blocked, retryAfter := a.ipLimiter.check(clientIP); blocked {
+		a.audit.logFailure(AuditLoginRateLimited, r, "ip rate limited",
+			slog.String("client_ip", clientIP))
+		writeRateLimited(w, retryAfter)
+		return
+	}
 	if accountID != "" {
 		if blocked, retryAfter := a.rateLimiter.check(accountID); blocked {
 			a.audit.logFailure(AuditLoginRateLimited, r, "rate limited",
@@ -114,17 +128,24 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	record, err := a.loadAccountRecord(req.SecretKey)
-	if err != nil {
+	// recordLoginFailure records a failure across all three rate limiters.
+	recordLoginFailure := func() {
+		a.globalLimiter.recordFailure()
+		a.ipLimiter.recordFailure(clientIP)
 		if accountID != "" {
 			a.rateLimiter.recordFailure(accountID)
 		}
+	}
+
+	record, err := a.loadAccountRecord(req.SecretKey)
+	if err != nil {
+		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "account not found")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 	if record.TOTPEnabled && !verifyTOTPCode(record.TOTPSecret, req.TOTPCode, time.Now()) {
-		a.rateLimiter.recordFailure(accountID)
+		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "invalid totp code",
 			slog.String("account_id", record.SecretKeyID))
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
@@ -133,7 +154,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 
 	blob, err := base64.StdEncoding.DecodeString(record.CredentialsBlob)
 	if err != nil {
-		a.rateLimiter.recordFailure(accountID)
+		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "corrupt credentials blob",
 			slog.String("account_id", record.SecretKeyID))
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
@@ -142,7 +163,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	loginPassphrase := combineLoginPassphrase(req.Passphrase, req.SecretKey)
 	creds, err := vault.ImportCredentials(blob, loginPassphrase)
 	if err != nil {
-		a.rateLimiter.recordFailure(accountID)
+		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "invalid passphrase",
 			slog.String("account_id", record.SecretKeyID))
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
@@ -159,6 +180,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 
 	// Login succeeded — clear rate-limit state.
 	a.rateLimiter.recordSuccess(accountID)
+	a.ipLimiter.recordSuccess(clientIP)
 
 	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
@@ -168,9 +190,11 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		SessionPassphrase: sessionPassphrase,
 		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
 		ExpiresAt:         expiresAt,
+		LastAccessedAt:    time.Now(),
 	}
 	a.sessions.mu.Unlock()
 	writeSessionCookie(w, r, token, expiresAt)
+	writeCSRFCookie(w, r)
 
 	a.audit.logEvent(AuditLoginSuccess, r, record.SecretKeyID)
 	writeJSON(w, http.StatusOK, struct{}{})
@@ -304,6 +328,7 @@ func (a *API) Logout(w http.ResponseWriter, r *http.Request) {
 		a.sessions.mu.Unlock()
 	}
 	clearSessionCookie(w, r)
+	clearCSRFCookie(w, r)
 	a.audit.logEvent(AuditLogout, r, secretKeyID)
 	writeJSON(w, http.StatusOK, struct{}{})
 }

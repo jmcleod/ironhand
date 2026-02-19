@@ -6,8 +6,8 @@ package pki
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -287,6 +287,33 @@ func loadCAKey(ctx context.Context, session *vault.Session) (*ecdsa.PrivateKey, 
 	return x509.ParseECPrivateKey(block.Bytes)
 }
 
+// loadCASigner returns a crypto.Signer for the CA key. When a KeyStore is
+// provided, it imports the stored PEM and returns the store's signer. When
+// ks is nil (software-only legacy path), it falls back to loadCAKey.
+func loadCASigner(ctx context.Context, session *vault.Session, ks KeyStore) (crypto.Signer, error) {
+	if ks == nil {
+		return loadCAKey(ctx, session)
+	}
+	fields, err := session.Get(ctx, caKeyItemID)
+	if err != nil {
+		return nil, fmt.Errorf("loading CA private key: %w", err)
+	}
+	keyPEM := string(fields["private_key"])
+	keyID, err := ks.ImportPEM(keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("importing CA key into keystore: %w", err)
+	}
+	return ks.Signer(keyID)
+}
+
+// defaultKeyStore returns ks if non-nil, or a fresh SoftwareKeyStore.
+func defaultKeyStore(ks KeyStore) KeyStore {
+	if ks != nil {
+		return ks
+	}
+	return NewSoftwareKeyStore()
+}
+
 func loadRevocations(ctx context.Context, session *vault.Session) ([]RevocationEntry, error) {
 	fields, err := session.Get(ctx, caRevocationsItemID)
 	if err != nil {
@@ -323,11 +350,13 @@ func encodeKeyPEM(key *ecdsa.PrivateKey) (string, error) {
 // CA Operations
 // ---------------------------------------------------------------------------
 
-// InitCA initialises a vault as a Certificate Authority. It generates an
-// ECDSA P-256 keypair, creates a self-signed root CA certificate (or a CSR
-// for intermediate CAs — not yet implemented), and stores CA cert + key +
-// state in reserved items.
-func InitCA(ctx context.Context, session *vault.Session, subject pkix.Name, validityYears int, isIntermediate bool) error {
+// InitCA initialises a vault as a Certificate Authority. It generates a
+// keypair via the provided KeyStore (or a default SoftwareKeyStore when ks
+// is nil), creates a self-signed root CA certificate, and stores CA cert +
+// key + state in reserved items.
+func InitCA(ctx context.Context, session *vault.Session, subject pkix.Name, validityYears int, isIntermediate bool, ks KeyStore) error {
+	ks = defaultKeyStore(ks)
+
 	// Ensure not already a CA.
 	if _, err := loadCAState(ctx, session); err == nil {
 		return ErrAlreadyCA
@@ -335,10 +364,14 @@ func InitCA(ctx context.Context, session *vault.Session, subject pkix.Name, vali
 		return err
 	}
 
-	// Generate ECDSA P-256 keypair.
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Generate keypair via the key store.
+	keyID, err := ks.GenerateKey()
 	if err != nil {
 		return fmt.Errorf("generating CA key: %w", err)
+	}
+	signer, err := ks.Signer(keyID)
+	if err != nil {
+		return fmt.Errorf("getting CA signer: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -356,15 +389,22 @@ func InitCA(ctx context.Context, session *vault.Session, subject pkix.Name, vali
 	}
 
 	// Self-sign.
-	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
+	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
 	if err != nil {
 		return fmt.Errorf("creating CA certificate: %w", err)
 	}
 
 	certPEM := encodeCertPEM(derBytes)
-	keyPEM, err := encodeKeyPEM(priv)
-	if err != nil {
-		return fmt.Errorf("encoding CA private key: %w", err)
+
+	// Export key PEM for vault storage. HSM-backed stores may return
+	// ErrKeyNotExportable; in that case we store a sentinel so the vault
+	// knows the key is externally managed.
+	keyPEM, err := ks.ExportPEM(keyID)
+	if err != nil && !errors.Is(err, ErrKeyNotExportable) {
+		return fmt.Errorf("exporting CA private key: %w", err)
+	}
+	if errors.Is(err, ErrKeyNotExportable) {
+		keyPEM = "HSM-MANAGED"
 	}
 
 	state := &CAState{
@@ -407,10 +447,12 @@ func InitCA(ctx context.Context, session *vault.Session, subject pkix.Name, vali
 	return nil
 }
 
-// IssueCertificate generates a new ECDSA P-256 keypair, creates a certificate
-// signed by the vault's CA, stores it as a regular vault item, and returns the
-// item ID.
-func IssueCertificate(ctx context.Context, session *vault.Session, req IssueCertRequest) (string, error) {
+// IssueCertificate generates a new keypair via the provided KeyStore (or a
+// default SoftwareKeyStore when ks is nil), creates a certificate signed by
+// the vault's CA, stores it as a regular vault item, and returns the item ID.
+func IssueCertificate(ctx context.Context, session *vault.Session, req IssueCertRequest, ks KeyStore) (string, error) {
+	ks = defaultKeyStore(ks)
+
 	state, err := loadCAState(ctx, session)
 	if err != nil {
 		return "", err
@@ -419,15 +461,19 @@ func IssueCertificate(ctx context.Context, session *vault.Session, req IssueCert
 	if err != nil {
 		return "", err
 	}
-	caKey, err := loadCAKey(ctx, session)
+	caSigner, err := loadCASigner(ctx, session, ks)
 	if err != nil {
 		return "", err
 	}
 
-	// Generate leaf keypair.
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Generate leaf keypair via the key store.
+	leafKeyID, err := ks.GenerateKey()
 	if err != nil {
 		return "", fmt.Errorf("generating leaf key: %w", err)
+	}
+	leafSigner, err := ks.Signer(leafKeyID)
+	if err != nil {
+		return "", fmt.Errorf("getting leaf signer: %w", err)
 	}
 
 	serial := big.NewInt(state.NextSerial)
@@ -450,15 +496,20 @@ func IssueCertificate(ctx context.Context, session *vault.Session, req IssueCert
 		template.KeyUsage = x509.KeyUsageDigitalSignature
 	}
 
-	derBytes, err := x509.CreateCertificate(rand.Reader, template, caCert, &leafKey.PublicKey, caKey)
+	derBytes, err := x509.CreateCertificate(rand.Reader, template, caCert, leafSigner.Public(), caSigner)
 	if err != nil {
 		return "", fmt.Errorf("signing leaf certificate: %w", err)
 	}
 
 	leafCertPEM := encodeCertPEM(derBytes)
-	leafKeyPEM, err := encodeKeyPEM(leafKey)
-	if err != nil {
-		return "", fmt.Errorf("encoding leaf private key: %w", err)
+
+	// Export leaf private key. HSM-backed stores may not allow export.
+	leafKeyPEM, err := ks.ExportPEM(leafKeyID)
+	if err != nil && !errors.Is(err, ErrKeyNotExportable) {
+		return "", fmt.Errorf("exporting leaf private key: %w", err)
+	}
+	if errors.Is(err, ErrKeyNotExportable) {
+		leafKeyPEM = "HSM-MANAGED"
 	}
 
 	// Parse the generated cert for field extraction.
@@ -543,8 +594,9 @@ func RevokeCertificate(ctx context.Context, session *vault.Session, itemID strin
 
 // RenewCertificate re-issues a certificate with the same parameters but a
 // new serial number and validity period. The old certificate is revoked with
-// reason Superseded (4). Returns the new item ID.
-func RenewCertificate(ctx context.Context, session *vault.Session, itemID string, validityDays int) (string, error) {
+// reason Superseded (4). Returns the new item ID. The KeyStore parameter
+// may be nil to use the default SoftwareKeyStore.
+func RenewCertificate(ctx context.Context, session *vault.Session, itemID string, validityDays int, ks KeyStore) (string, error) {
 	fields, err := session.Get(ctx, itemID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -584,7 +636,7 @@ func RenewCertificate(ctx context.Context, session *vault.Session, itemID string
 		IPAddresses:    oldCert.IPAddresses,
 		EmailAddresses: oldCert.EmailAddresses,
 	}
-	newItemID, err := IssueCertificate(ctx, session, req)
+	newItemID, err := IssueCertificate(ctx, session, req, ks)
 	if err != nil {
 		return "", err
 	}
@@ -604,8 +656,11 @@ func RenewCertificate(ctx context.Context, session *vault.Session, itemID string
 }
 
 // GenerateCRL creates a Certificate Revocation List from the CA's revocation
-// entries. The CRL is signed with the CA key and returned as PEM-encoded bytes.
-func GenerateCRL(ctx context.Context, session *vault.Session) ([]byte, error) {
+// entries. The CRL is signed with the CA key (via the provided KeyStore, or a
+// default SoftwareKeyStore when ks is nil) and returned as PEM-encoded bytes.
+func GenerateCRL(ctx context.Context, session *vault.Session, ks KeyStore) ([]byte, error) {
+	ks = defaultKeyStore(ks)
+
 	state, err := loadCAState(ctx, session)
 	if err != nil {
 		return nil, err
@@ -614,7 +669,7 @@ func GenerateCRL(ctx context.Context, session *vault.Session) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	caKey, err := loadCAKey(ctx, session)
+	caSigner, err := loadCASigner(ctx, session, ks)
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +705,7 @@ func GenerateCRL(ctx context.Context, session *vault.Session) ([]byte, error) {
 		RevokedCertificateEntries: revokedCerts,
 	}
 
-	crlDER, err := x509.CreateRevocationList(rand.Reader, template, caCert, caKey)
+	crlDER, err := x509.CreateRevocationList(rand.Reader, template, caCert, caSigner)
 	if err != nil {
 		return nil, fmt.Errorf("creating CRL: %w", err)
 	}
@@ -715,9 +770,12 @@ func GetCAInfo(ctx context.Context, session *vault.Session) (*CAInfo, error) {
 }
 
 // SignCSR signs an externally-generated Certificate Signing Request with the
-// CA's key, stores the issued certificate as a vault item (without a private
+// CA's key (via the provided KeyStore, or a default SoftwareKeyStore when ks
+// is nil), stores the issued certificate as a vault item (without a private
 // key, since the requester keeps their own), and returns the item ID.
-func SignCSR(ctx context.Context, session *vault.Session, csrPEM string, validityDays int, extKeyUsages []x509.ExtKeyUsage) (string, error) {
+func SignCSR(ctx context.Context, session *vault.Session, csrPEM string, validityDays int, extKeyUsages []x509.ExtKeyUsage, ks KeyStore) (string, error) {
+	ks = defaultKeyStore(ks)
+
 	state, err := loadCAState(ctx, session)
 	if err != nil {
 		return "", err
@@ -726,7 +784,7 @@ func SignCSR(ctx context.Context, session *vault.Session, csrPEM string, validit
 	if err != nil {
 		return "", err
 	}
-	caKey, err := loadCAKey(ctx, session)
+	caSigner, err := loadCASigner(ctx, session, ks)
 	if err != nil {
 		return "", err
 	}
@@ -762,7 +820,7 @@ func SignCSR(ctx context.Context, session *vault.Session, csrPEM string, validit
 		EmailAddresses:        csr.EmailAddresses,
 	}
 
-	derBytes, err := x509.CreateCertificate(rand.Reader, template, caCert, csr.PublicKey, caKey)
+	derBytes, err := x509.CreateCertificate(rand.Reader, template, caCert, csr.PublicKey, caSigner)
 	if err != nil {
 		return "", fmt.Errorf("signing CSR: %w", err)
 	}

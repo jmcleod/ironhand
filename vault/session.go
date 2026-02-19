@@ -2,6 +2,8 @@ package vault
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
@@ -11,6 +13,7 @@ import (
 	"github.com/awnumar/memguard"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
 	"github.com/jmcleod/ironhand/internal/util"
+	"github.com/jmcleod/ironhand/storage"
 )
 
 // Session holds the encrypted key material for an active vault session.
@@ -499,6 +502,50 @@ func (s *Session) RequireAdmin(ctx context.Context) error {
 	defer recBuf.Destroy()
 	_, err = s.authorize(ctx, accessAdmin, recBuf.Bytes())
 	return err
+}
+
+// SealAuditRecord encrypts an audit entry using the vault's record key.
+// The caller provides AAD to bind the ciphertext to its context (e.g.
+// vault ID and entry ID).
+func (s *Session) SealAuditRecord(plaintext, aad []byte) (*storage.Envelope, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	return storage.SealRecord(recBuf.Bytes(), plaintext, aad)
+}
+
+// OpenAuditRecord decrypts an audit entry envelope using the vault's record key.
+func (s *Session) OpenAuditRecord(env *storage.Envelope, aad []byte) ([]byte, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	return storage.OpenRecord(recBuf.Bytes(), env, aad)
+}
+
+// HMACAudit computes HMAC-SHA256 of the given data using the vault's record
+// key. This is used to produce tamper-evident signatures over audit exports.
+func (s *Session) HMACAudit(data []byte) ([]byte, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	mac := hmac.New(sha256.New, recBuf.Bytes())
+	mac.Write(data)
+	return mac.Sum(nil), nil
 }
 
 func (s *Session) authorize(ctx context.Context, required requiredAccess, recordKey []byte) (*vaultState, error) {
