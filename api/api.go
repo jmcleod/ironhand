@@ -35,6 +35,8 @@ type API struct {
 	webauthnCeremonies map[string]webauthnCeremonyState
 	webauthnCeremonyMu sync.Mutex
 	auditMu            vaultMutex // serialises audit appends per vault
+	auditMaxAge        time.Duration
+	auditMaxEntries    int
 }
 
 // DefaultIdleTimeout is the default session idle timeout (30 minutes).
@@ -102,6 +104,16 @@ func WithKeyStore(ks pki.KeyStore) Option {
 func WithSessionStore(s SessionStore) Option {
 	return func(a *API) {
 		a.sessions = s
+	}
+}
+
+// WithAuditRetention configures automatic per-vault audit retention.
+// maxAge <= 0 disables time-based pruning.
+// maxEntries <= 0 disables count-based pruning.
+func WithAuditRetention(maxAge time.Duration, maxEntries int) Option {
+	return func(a *API) {
+		a.auditMaxAge = maxAge
+		a.auditMaxEntries = maxEntries
 	}
 }
 

@@ -31,9 +31,14 @@ import (
 
 func setupServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	return setupServerWithOptions(t)
+}
+
+func setupServerWithOptions(t *testing.T, opts ...api.Option) *httptest.Server {
+	t.Helper()
 	repo := memory.NewRepository()
 	epochCache := vault.NewMemoryEpochCache()
-	a := api.New(repo, epochCache)
+	a := api.New(repo, epochCache, opts...)
 	r := chi.NewRouter()
 	r.Mount("/api/v1", a.Router())
 	return httptest.NewServer(r)
@@ -1620,6 +1625,62 @@ func TestAuditExportChainIntegrity(t *testing.T) {
 				"entry %d PrevHash should chain from entry %d", i, i-1)
 		}
 	}
+}
+
+func TestAuditRetentionMaxEntries(t *testing.T) {
+	srv := setupServerWithOptions(t, api.WithAuditRetention(0, 3))
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	// Create a vault.
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "Retained"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+	itemID := "item-1"
+
+	// Generate 4 audit events for this item: created, accessed, updated, deleted.
+	resp = doJSON(t, client, http.MethodPost, base+"/items/"+itemID, api.PutItemRequest{
+		Fields: map[string]string{"username": "alice"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodGet, base+"/items/"+itemID, nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodPut, base+"/items/"+itemID, api.UpdateItemRequest{
+		Fields: map[string]string{"username": "bob"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp = doJSON(t, client, http.MethodDelete, base+"/items/"+itemID, nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Retention should keep only 3 newest entries.
+	listResp := doJSON(t, client, http.MethodGet, base+"/audit", nil)
+	defer listResp.Body.Close()
+	require.Equal(t, http.StatusOK, listResp.StatusCode)
+	var list api.ListAuditLogsResponse
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&list))
+	require.Len(t, list.Entries, 3)
+
+	// Exported chain should be re-anchored to genesis after pruning.
+	exportResp := doJSON(t, client, http.MethodGet, base+"/audit/export", nil)
+	defer exportResp.Body.Close()
+	require.Equal(t, http.StatusOK, exportResp.StatusCode)
+	var export api.ExportAuditLogResponse
+	require.NoError(t, json.NewDecoder(exportResp.Body).Decode(&export))
+	require.Len(t, export.Entries, 3)
+	require.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", export.Entries[0].PrevHash)
 }
 
 // auditChainHashTest mirrors the server-side auditChainHash for test verification.

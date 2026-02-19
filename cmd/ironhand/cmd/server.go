@@ -27,23 +27,25 @@ import (
 )
 
 var (
-	port             int
-	dataDir          string
-	tlsCert          string
-	tlsKey           string
-	storageBackend   string
-	postgresDSN      string
-	enableHeaderAuth bool
-	sessionStorage   string
-	webauthnRPID     string
-	webauthnRPOrigin string
-	webauthnRPName   string
-	sessionKey       string
-	sessionKeyFile   string
-	pkiKeystore      string
-	pkcs11Module     string
-	pkcs11Token      string
-	pkcs11PIN        string
+	port               int
+	dataDir            string
+	tlsCert            string
+	tlsKey             string
+	storageBackend     string
+	postgresDSN        string
+	enableHeaderAuth   bool
+	sessionStorage     string
+	webauthnRPID       string
+	webauthnRPOrigin   string
+	webauthnRPName     string
+	sessionKey         string
+	sessionKeyFile     string
+	pkiKeystore        string
+	pkcs11Module       string
+	pkcs11Token        string
+	pkcs11PIN          string
+	auditRetentionDays int
+	auditMaxEntries    int
 )
 
 var serverCmd = &cobra.Command{
@@ -126,6 +128,9 @@ var serverCmd = &cobra.Command{
 		apiOpts := []api.Option{
 			api.WithHeaderAuth(enableHeaderAuth),
 			api.WithWebAuthn(wa),
+		}
+		if auditRetentionDays > 0 || auditMaxEntries > 0 {
+			apiOpts = append(apiOpts, api.WithAuditRetention(time.Duration(auditRetentionDays)*24*time.Hour, auditMaxEntries))
 		}
 		if keyStore != nil {
 			apiOpts = append(apiOpts, api.WithKeyStore(keyStore))
@@ -255,6 +260,8 @@ func init() {
 	serverCmd.Flags().StringVar(&pkcs11Module, "pkcs11-module", "", "Path to PKCS#11 shared library (e.g., /usr/lib/softhsm/libsofthsm2.so)")
 	serverCmd.Flags().StringVar(&pkcs11Token, "pkcs11-token-label", "", "PKCS#11 token label")
 	serverCmd.Flags().StringVar(&pkcs11PIN, "pkcs11-pin", "", "PKCS#11 user PIN (also via IRONHAND_PKCS11_PIN env var)")
+	serverCmd.Flags().IntVar(&auditRetentionDays, "audit-retention-days", 0, "Automatically prune per-vault audit entries older than this many days (0 disables)")
+	serverCmd.Flags().IntVar(&auditMaxEntries, "audit-max-entries", 0, "Automatically keep only the newest N per-vault audit entries (0 disables)")
 }
 
 // resolveSessionWrappingKey resolves the session wrapping key from the

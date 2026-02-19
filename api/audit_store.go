@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -136,12 +137,22 @@ func (a *API) appendAuditEntry(session *vault.Session, vaultID, itemID, memberID
 	// between the two writes cannot leave the chain in an inconsistent
 	// state (orphaned entry without tip update, or updated tip without
 	// the entry it references).
-	return a.repo.Batch(vaultID, func(tx storage.BatchTx) error {
+	if err := a.repo.Batch(vaultID, func(tx storage.BatchTx) error {
 		if err := tx.Put(auditRecordType, entry.ID, entryEnv); err != nil {
 			return err
 		}
 		return tx.Put(auditTipType, auditTipRecordID, tipEnv)
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Apply configured retention policy while still holding the per-vault lock.
+	if a.auditMaxAge > 0 || a.auditMaxEntries > 0 {
+		if err := a.enforceAuditRetentionLocked(session, vaultID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *API) listAuditEntries(session *vault.Session, vaultID, itemID string) ([]auditEntry, error) {
@@ -181,4 +192,92 @@ func (a *API) listAuditEntries(session *vault.Session, vaultID, itemID string) (
 		return entries[i].CreatedAt > entries[j].CreatedAt
 	})
 	return entries, nil
+}
+
+// enforceAuditRetentionLocked applies configured retention policy and rewrites
+// the retained audit chain from a fresh genesis anchor.
+//
+// The caller must hold a.auditMu lock for vaultID.
+func (a *API) enforceAuditRetentionLocked(session *vault.Session, vaultID string) error {
+	entries, err := a.listAuditEntries(session, vaultID, "")
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// listAuditEntries returns newest-first. Convert to chronological order.
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].CreatedAt < entries[j].CreatedAt
+	})
+
+	retained := entries
+
+	// Time-based retention.
+	if a.auditMaxAge > 0 {
+		cutoff := time.Now().Add(-a.auditMaxAge)
+		filtered := make([]auditEntry, 0, len(retained))
+		for _, e := range retained {
+			ts, parseErr := time.Parse(time.RFC3339Nano, e.CreatedAt)
+			if parseErr != nil {
+				ts, parseErr = time.Parse(time.RFC3339, e.CreatedAt)
+			}
+			// Keep unparseable legacy entries rather than risk data loss.
+			if parseErr != nil || !ts.Before(cutoff) {
+				filtered = append(filtered, e)
+			}
+		}
+		retained = filtered
+	}
+
+	// Count-based retention.
+	if a.auditMaxEntries > 0 && len(retained) > a.auditMaxEntries {
+		retained = retained[len(retained)-a.auditMaxEntries:]
+	}
+
+	// No pruning needed.
+	if len(retained) == len(entries) {
+		return nil
+	}
+
+	// Rewrite audit records and tip atomically to preserve a contiguous chain.
+	return a.repo.Batch(vaultID, func(tx storage.BatchTx) error {
+		for _, e := range entries {
+			if err := tx.Delete(auditRecordType, e.ID); err != nil && !errors.Is(err, storage.ErrNotFound) {
+				return err
+			}
+		}
+		if err := tx.Delete(auditTipType, auditTipRecordID); err != nil && !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
+
+		prevHash := auditGenesisHash
+		for _, e := range retained {
+			e.PrevHash = prevHash
+			data, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			env, err := session.SealAuditRecord(data, auditAAD(vaultID, e.ID))
+			if err != nil {
+				return err
+			}
+			if err := tx.Put(auditRecordType, e.ID, env); err != nil {
+				return err
+			}
+			prevHash = auditChainHash(e.ID, e.PrevHash, e.CreatedAt)
+		}
+
+		// If no entries remain, leave tip absent.
+		if len(retained) == 0 {
+			return nil
+		}
+
+		tipEnv, err := session.SealAuditRecord([]byte(prevHash), auditAAD(vaultID, auditTipRecordID))
+		if err != nil {
+			return err
+		}
+		return tx.Put(auditTipType, auditTipRecordID, tipEnv)
+	})
 }

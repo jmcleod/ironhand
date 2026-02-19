@@ -209,6 +209,15 @@ ironhand server --session-storage persistent --session-key-file session.key
 
 The server will refuse to start if `--session-storage=persistent` is selected without a wrapping key. The session passphrase is derived from a split-secret scheme using both a server-side session ID and a client-held cookie, ensuring that neither a session store compromise nor a stolen cookie alone can reconstruct vault credentials.
 
+### Audit Retention
+
+Per-vault audit retention can be enforced automatically with:
+
+- `--audit-retention-days N` — drop audit entries older than `N` days
+- `--audit-max-entries N` — keep only the newest `N` entries per vault
+
+Both settings are optional and disabled by default (`0`). When pruning occurs, retained entries are re-anchored to a fresh genesis hash so the exported audit chain remains verifiable.
+
 ### Header-Based Authentication
 
 The `X-Credentials` / `X-Passphrase` header authentication method is **disabled by default**. Enable it only for non-browser API clients via `--enable-header-auth`.

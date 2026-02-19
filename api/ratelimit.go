@@ -1,7 +1,9 @@
 package api
 
 import (
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -253,13 +255,79 @@ func (rl *globalRateLimiter) recordFailure() {
 // Helper: extract client IP
 // ---------------------------------------------------------------------------
 
-// extractClientIP returns the remote address without port, suitable for
-// per-IP rate limiting. It prefers the last hop in X-Forwarded-For if present.
+// extractClientIP returns the best-effort client IP address for rate limiting.
+//
+// Priority:
+// 1. First valid entry in X-Forwarded-For (original client when behind proxies)
+// 2. First valid "for=" value in Forwarded
+// 3. X-Real-IP
+// 4. RemoteAddr (host[:port], including IPv6)
+//
+// NOTE: Proxy headers are trustworthy only when set by trusted infrastructure.
+// Deployments should ensure direct client traffic cannot spoof them.
 func extractClientIP(r *http.Request) string {
-	// Use the direct remote address (strip port).
-	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		for _, part := range strings.Split(xff, ",") {
+			if ip, ok := parseIPCandidate(part); ok {
+				return ip
+			}
+		}
 	}
-	return ip
+
+	if fwd := strings.TrimSpace(r.Header.Get("Forwarded")); fwd != "" {
+		for _, elem := range strings.Split(fwd, ",") {
+			for _, param := range strings.Split(elem, ";") {
+				param = strings.TrimSpace(param)
+				if !strings.HasPrefix(strings.ToLower(param), "for=") {
+					continue
+				}
+				raw := strings.TrimSpace(param[4:])
+				if ip, ok := parseIPCandidate(raw); ok {
+					return ip
+				}
+			}
+		}
+	}
+
+	if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
+		if ip, ok := parseIPCandidate(xrip); ok {
+			return ip
+		}
+	}
+
+	if ip, ok := parseIPCandidate(r.RemoteAddr); ok {
+		return ip
+	}
+
+	return ""
+}
+
+func parseIPCandidate(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	s = strings.Trim(s, "\"")
+	if s == "" {
+		return "", false
+	}
+
+	// RFC 7239 quoted IPv6 may appear as [::1]:1234.
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		s = host
+	}
+
+	// Remove IPv6 brackets if present.
+	s = strings.TrimPrefix(s, "[")
+	s = strings.TrimSuffix(s, "]")
+	// Drop zone if any (e.g. fe80::1%eth0).
+	if i := strings.IndexByte(s, '%'); i >= 0 {
+		s = s[:i]
+	}
+
+	if addr, err := netip.ParseAddr(s); err == nil {
+		return addr.String(), true
+	}
+	// As a fallback, allow net.ParseIP normalization.
+	if ip := net.ParseIP(s); ip != nil {
+		return ip.String(), true
+	}
+	return "", false
 }

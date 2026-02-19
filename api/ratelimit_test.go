@@ -233,17 +233,66 @@ func TestGlobalRateLimiter_SlidingWindowExpiry(t *testing.T) {
 
 func TestExtractClientIP(t *testing.T) {
 	tests := []struct {
+		name       string
 		remoteAddr string
+		headers    map[string]string
 		want       string
 	}{
-		{"192.168.1.1:12345", "192.168.1.1"},
-		{"10.0.0.1:80", "10.0.0.1"},
-		{"127.0.0.1:0", "127.0.0.1"},
-		{"[::1]:8080", "[::1]"},
+		{
+			name:       "remote ipv4",
+			remoteAddr: "192.168.1.1:12345",
+			want:       "192.168.1.1",
+		},
+		{
+			name:       "remote ipv6",
+			remoteAddr: "[::1]:8080",
+			want:       "::1",
+		},
+		{
+			name:       "xff first valid wins",
+			remoteAddr: "10.0.0.1:80",
+			headers: map[string]string{
+				"X-Forwarded-For": "198.51.100.25, 203.0.113.9",
+			},
+			want: "198.51.100.25",
+		},
+		{
+			name:       "xff skips invalid entries",
+			remoteAddr: "10.0.0.1:80",
+			headers: map[string]string{
+				"X-Forwarded-For": "unknown, not-an-ip, 203.0.113.7",
+			},
+			want: "203.0.113.7",
+		},
+		{
+			name:       "forwarded fallback",
+			remoteAddr: "10.0.0.1:80",
+			headers: map[string]string{
+				"Forwarded": `for=198.51.100.1;proto=https;by=203.0.113.43`,
+			},
+			want: "198.51.100.1",
+		},
+		{
+			name:       "x-real-ip fallback",
+			remoteAddr: "10.0.0.1:80",
+			headers: map[string]string{
+				"X-Real-IP": "203.0.113.11",
+			},
+			want: "203.0.113.11",
+		},
+		{
+			name:       "empty when nothing parseable",
+			remoteAddr: "not-a-hostport",
+			want:       "",
+		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.remoteAddr, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			r := &http.Request{RemoteAddr: tt.remoteAddr}
+			r.Header = make(http.Header)
+			for k, v := range tt.headers {
+				r.Header.Set(k, v)
+			}
 			got := extractClientIP(r)
 			assert.Equal(t, tt.want, got)
 		})
