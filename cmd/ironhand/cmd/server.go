@@ -33,6 +33,7 @@ var (
 	storageBackend   string
 	postgresDSN      string
 	enableHeaderAuth bool
+	sessionStorage   string
 	webauthnRPID     string
 	webauthnRPOrigin string
 	webauthnRPName   string
@@ -107,10 +108,27 @@ var serverCmd = &cobra.Command{
 			return fmt.Errorf("failed to configure webauthn: %w", err)
 		}
 
-		a := api.New(repo, epochCache,
+		// Configure session storage.
+		apiOpts := []api.Option{
 			api.WithHeaderAuth(enableHeaderAuth),
 			api.WithWebAuthn(wa),
-		)
+		}
+		switch sessionStorage {
+		case "memory":
+			// Default — MemorySessionStore is created automatically by api.New().
+		case "persistent":
+			sessStore, err := api.NewPersistentSessionStore(repo, api.DefaultIdleTimeout)
+			if err != nil {
+				return fmt.Errorf("failed to initialize persistent session store: %w", err)
+			}
+			defer sessStore.Close()
+			apiOpts = append(apiOpts, api.WithSessionStore(sessStore))
+			fmt.Println("Using persistent session storage")
+		default:
+			return fmt.Errorf("unknown session-storage: %q (supported: memory, persistent)", sessionStorage)
+		}
+
+		a := api.New(repo, epochCache, apiOpts...)
 
 		r := chi.NewRouter()
 		r.Use(middleware.Logger)
@@ -201,6 +219,7 @@ func init() {
 	serverCmd.Flags().StringVar(&storageBackend, "storage", "bbolt", "Storage backend: bbolt or postgres")
 	serverCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", "", "PostgreSQL connection string (required when --storage=postgres)")
 	serverCmd.Flags().BoolVar(&enableHeaderAuth, "enable-header-auth", false, "Allow X-Credentials/X-Passphrase header-based authentication (disabled by default)")
+	serverCmd.Flags().StringVar(&sessionStorage, "session-storage", "memory", "Session storage: memory (default, lost on restart) or persistent (stored in backing storage)")
 	serverCmd.Flags().StringVar(&webauthnRPID, "webauthn-rp-id", "localhost", "WebAuthn Relying Party ID (domain)")
 	serverCmd.Flags().StringVar(&webauthnRPOrigin, "webauthn-rp-origin", "", "WebAuthn Relying Party origin (default: https://localhost:<port>)")
 	serverCmd.Flags().StringVar(&webauthnRPName, "webauthn-rp-name", "IronHand", "WebAuthn Relying Party display name")

@@ -22,7 +22,7 @@ import (
 type API struct {
 	repo               storage.Repository
 	epochCache         vault.EpochCache
-	sessions           *sessionStore
+	sessions           SessionStore
 	rateLimiter        *loginRateLimiter
 	ipLimiter          *ipRateLimiter
 	globalLimiter      *globalRateLimiter
@@ -36,12 +36,8 @@ type API struct {
 	webauthnCeremonyMu sync.Mutex
 }
 
-const defaultIdleTimeout = 30 * time.Minute
-
-type sessionStore struct {
-	mu   sync.RWMutex
-	data map[string]authSession
-}
+// DefaultIdleTimeout is the default session idle timeout (30 minutes).
+const DefaultIdleTimeout = 30 * time.Minute
 
 //go:embed openapi.yaml
 var openapiSpec []byte
@@ -100,21 +96,30 @@ func WithKeyStore(ks pki.KeyStore) Option {
 	}
 }
 
+// WithSessionStore sets a custom SessionStore implementation. When not set,
+// an in-memory session store is used (sessions are lost on restart).
+func WithSessionStore(s SessionStore) Option {
+	return func(a *API) {
+		a.sessions = s
+	}
+}
+
 // New creates a new API instance.
 func New(repo storage.Repository, epochCache vault.EpochCache, opts ...Option) *API {
 	a := &API{
-		repo:       repo,
-		epochCache: epochCache,
-		sessions: &sessionStore{
-			data: make(map[string]authSession),
-		},
+		repo:          repo,
+		epochCache:    epochCache,
 		rateLimiter:   newLoginRateLimiter(),
 		ipLimiter:     newIPRateLimiter(),
 		globalLimiter: newGlobalRateLimiter(),
-		idleTimeout:   defaultIdleTimeout,
+		idleTimeout:   DefaultIdleTimeout,
 	}
 	for _, opt := range opts {
 		opt(a)
+	}
+	// Default to in-memory sessions if no store was provided.
+	if a.sessions == nil {
+		a.sessions = NewMemorySessionStore(a.idleTimeout)
 	}
 	if a.audit == nil {
 		a.audit = newAuditLogger(slog.New(slog.NewJSONHandler(os.Stderr, nil)))

@@ -101,9 +101,7 @@ func (a *API) BeginWebAuthnRegistration(w http.ResponseWriter, r *http.Request) 
 	}
 	session.WebAuthnSessionData = string(sessionJSON)
 	session.WebAuthnSessionExpiry = time.Now().Add(webauthnCeremonyTTL)
-	a.sessions.mu.Lock()
-	a.sessions.data[token] = session
-	a.sessions.mu.Unlock()
+	a.sessions.Put(token, session)
 
 	writeJSON(w, http.StatusOK, options)
 }
@@ -161,9 +159,7 @@ func (a *API) FinishWebAuthnRegistration(w http.ResponseWriter, r *http.Request)
 	// Clear ceremony state.
 	session.WebAuthnSessionData = ""
 	session.WebAuthnSessionExpiry = time.Time{}
-	a.sessions.mu.Lock()
-	a.sessions.data[token] = session
-	a.sessions.mu.Unlock()
+	a.sessions.Put(token, session)
 
 	a.audit.logEvent(AuditWebAuthnRegistered, r, record.SecretKeyID)
 	writeJSON(w, http.StatusOK, struct {
@@ -352,15 +348,13 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
-	a.sessions.mu.Lock()
-	a.sessions.data[token] = authSession{
+	a.sessions.Put(token, authSession{
 		SecretKeyID:       record.SecretKeyID,
 		SessionPassphrase: sessionPassphrase,
 		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
 		ExpiresAt:         expiresAt,
 		LastAccessedAt:    time.Now(),
-	}
-	a.sessions.mu.Unlock()
+	})
 	writeSessionCookie(w, r, token, expiresAt)
 	writeCSRFCookie(w, r)
 

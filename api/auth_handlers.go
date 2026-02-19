@@ -70,15 +70,13 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
-	a.sessions.mu.Lock()
-	a.sessions.data[token] = authSession{
+	a.sessions.Put(token, authSession{
 		SecretKeyID:       record.SecretKeyID,
 		SessionPassphrase: sessionPassphrase,
 		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
 		ExpiresAt:         expiresAt,
 		LastAccessedAt:    time.Now(),
-	}
-	a.sessions.mu.Unlock()
+	})
 	writeSessionCookie(w, r, token, expiresAt)
 	writeCSRFCookie(w, r)
 
@@ -184,15 +182,13 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
-	a.sessions.mu.Lock()
-	a.sessions.data[token] = authSession{
+	a.sessions.Put(token, authSession{
 		SecretKeyID:       record.SecretKeyID,
 		SessionPassphrase: sessionPassphrase,
 		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
 		ExpiresAt:         expiresAt,
 		LastAccessedAt:    time.Now(),
-	}
-	a.sessions.mu.Unlock()
+	})
 	writeSessionCookie(w, r, token, expiresAt)
 	writeCSRFCookie(w, r)
 
@@ -237,9 +233,7 @@ func (a *API) SetupTwoFactor(w http.ResponseWriter, r *http.Request) {
 
 	session.PendingTOTPSecret = secret
 	session.PendingTOTPExpiry = time.Now().Add(totpSetupTTL)
-	a.sessions.mu.Lock()
-	a.sessions.data[token] = session
-	a.sessions.mu.Unlock()
+	a.sessions.Put(token, session)
 
 	a.audit.logEvent(AuditTwoFactorSetup, r, session.SecretKeyID)
 	writeJSON(w, http.StatusOK, SetupTwoFactorResponse{
@@ -292,9 +286,7 @@ func (a *API) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 
 	session.PendingTOTPSecret = ""
 	session.PendingTOTPExpiry = time.Time{}
-	a.sessions.mu.Lock()
-	a.sessions.data[token] = session
-	a.sessions.mu.Unlock()
+	a.sessions.Put(token, session)
 
 	a.audit.logEvent(AuditTwoFactorEnabled, r, session.SecretKeyID)
 	writeJSON(w, http.StatusOK, TwoFactorStatusResponse{Enabled: true})
@@ -306,10 +298,8 @@ func (a *API) sessionFromRequest(r *http.Request) (string, authSession, bool) {
 		return "", authSession{}, false
 	}
 	token := cookie.Value
-	a.sessions.mu.RLock()
-	session, ok := a.sessions.data[token]
-	a.sessions.mu.RUnlock()
-	if !ok || time.Now().After(session.ExpiresAt) {
+	session, ok := a.sessions.Get(token)
+	if !ok {
 		return "", authSession{}, false
 	}
 	return token, session, true
@@ -320,12 +310,10 @@ func (a *API) Logout(w http.ResponseWriter, r *http.Request) {
 	var secretKeyID string
 	cookie, err := r.Cookie(sessionCookieName)
 	if err == nil && cookie.Value != "" {
-		a.sessions.mu.Lock()
-		if session, ok := a.sessions.data[cookie.Value]; ok {
+		if session, ok := a.sessions.Get(cookie.Value); ok {
 			secretKeyID = session.SecretKeyID
 		}
-		delete(a.sessions.data, cookie.Value)
-		a.sessions.mu.Unlock()
+		a.sessions.Delete(cookie.Value)
 	}
 	clearSessionCookie(w, r)
 	clearCSRFCookie(w, r)

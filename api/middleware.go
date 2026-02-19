@@ -16,18 +16,6 @@ const credentialsKey contextKey = iota
 
 const sessionCookieName = "ironhand_session"
 
-type authSession struct {
-	SecretKeyID           string
-	SessionPassphrase     string
-	CredentialsBlob       string
-	ExpiresAt             time.Time
-	LastAccessedAt        time.Time
-	PendingTOTPSecret     string
-	PendingTOTPExpiry     time.Time
-	WebAuthnSessionData   string
-	WebAuthnSessionExpiry time.Time
-}
-
 // AuthMiddleware authenticates either a session cookie or explicit credentials
 // and stores imported credentials on the request context.
 func (a *API) AuthMiddleware(next http.Handler) http.Handler {
@@ -81,18 +69,8 @@ func (a *API) credentialsFromSessionCookie(r *http.Request) (*vault.Credentials,
 	}
 	token := cookie.Value
 
-	a.sessions.mu.RLock()
-	session, ok := a.sessions.data[token]
-	a.sessions.mu.RUnlock()
-	if !ok || time.Now().After(session.ExpiresAt) {
-		return nil, false
-	}
-
-	// Check idle timeout.
-	if a.idleTimeout > 0 && time.Since(session.LastAccessedAt) > a.idleTimeout {
-		a.sessions.mu.Lock()
-		delete(a.sessions.data, token)
-		a.sessions.mu.Unlock()
+	session, ok := a.sessions.Get(token)
+	if !ok {
 		return nil, false
 	}
 
@@ -107,9 +85,7 @@ func (a *API) credentialsFromSessionCookie(r *http.Request) (*vault.Credentials,
 
 	// Update last accessed timestamp.
 	session.LastAccessedAt = time.Now()
-	a.sessions.mu.Lock()
-	a.sessions.data[token] = session
-	a.sessions.mu.Unlock()
+	a.sessions.Put(token, session)
 
 	return creds, true
 }
