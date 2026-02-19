@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +18,7 @@ type contextKey int
 const credentialsKey contextKey = iota
 
 const sessionCookieName = "ironhand_session"
+const sessionSecretCookieName = "ironhand_session_key"
 
 // AuthMiddleware authenticates either a session cookie or explicit credentials
 // and stores imported credentials on the request context.
@@ -69,6 +73,11 @@ func (a *API) credentialsFromSessionCookie(r *http.Request) (*vault.Credentials,
 	}
 	token := cookie.Value
 
+	secretCookie, err := r.Cookie(sessionSecretCookieName)
+	if err != nil || secretCookie.Value == "" {
+		return nil, false
+	}
+
 	session, ok := a.sessions.Get(token)
 	if !ok {
 		return nil, false
@@ -78,7 +87,9 @@ func (a *API) credentialsFromSessionCookie(r *http.Request) (*vault.Credentials,
 	if err != nil {
 		return nil, false
 	}
-	creds, err := vault.ImportCredentials(blob, session.SessionPassphrase)
+
+	passphrase := deriveSessionPassphrase(token, secretCookie.Value)
+	creds, err := vault.ImportCredentials(blob, passphrase)
 	if err != nil {
 		return nil, false
 	}
@@ -103,6 +114,19 @@ func writeSessionCookie(w http.ResponseWriter, r *http.Request, token string, ex
 	})
 }
 
+func writeSessionSecretCookie(w http.ResponseWriter, r *http.Request, secret string, expiresAt time.Time) {
+	secure := requestIsSecure(r)
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionSecretCookieName,
+		Value:    secret,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  expiresAt,
+	})
+}
+
 func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	secure := requestIsSecure(r)
 	http.SetCookie(w, &http.Cookie{
@@ -115,10 +139,31 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionSecretCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
 }
 
 func combineLoginPassphrase(passphrase, secretKey string) string {
 	return passphrase + ":" + secretKey
+}
+
+// deriveSessionPassphrase derives a session passphrase from the session ID
+// (stored in the ironhand_session cookie) and the session secret (stored in
+// the ironhand_session_key cookie) using HMAC-SHA256. This ensures that
+// neither the server-side session store nor the client cookie alone is
+// sufficient to reconstruct the credentials passphrase.
+func deriveSessionPassphrase(sessionID, sessionSecret string) string {
+	mac := hmac.New(sha256.New, []byte(sessionSecret))
+	mac.Write([]byte("ironhand:session_passphrase:v1:" + sessionID))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func requestIsSecure(r *http.Request) bool {

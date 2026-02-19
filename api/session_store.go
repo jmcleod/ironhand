@@ -15,9 +15,14 @@ type SessionStore interface {
 }
 
 // AuthSession holds the server-side state for an authenticated session.
+//
+// The session passphrase is intentionally NOT stored here. It is derived
+// at request time from the session token and a client-held secret cookie
+// using HMAC-SHA256 (see deriveSessionPassphrase in middleware.go). This
+// ensures that a session store compromise alone cannot reconstruct
+// credentials — the attacker also needs the per-session client cookie.
 type AuthSession struct {
 	SecretKeyID           string    `json:"secret_key_id"`
-	SessionPassphrase     string    `json:"session_passphrase"`
 	CredentialsBlob       string    `json:"credentials_blob"`
 	ExpiresAt             time.Time `json:"expires_at"`
 	LastAccessedAt        time.Time `json:"last_accessed_at"`

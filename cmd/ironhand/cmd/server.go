@@ -37,6 +37,8 @@ var (
 	webauthnRPID     string
 	webauthnRPOrigin string
 	webauthnRPName   string
+	sessionKey       string
+	sessionKeyFile   string
 )
 
 var serverCmd = &cobra.Command{
@@ -117,7 +119,15 @@ var serverCmd = &cobra.Command{
 		case "memory":
 			// Default — MemorySessionStore is created automatically by api.New().
 		case "persistent":
-			sessStore, err := api.NewPersistentSessionStore(repo, api.DefaultIdleTimeout)
+			wrappingKey, wkErr := resolveSessionWrappingKey()
+			if wkErr != nil {
+				return fmt.Errorf("session wrapping key: %w", wkErr)
+			}
+			if wrappingKey == nil {
+				return fmt.Errorf("--session-storage=persistent requires a wrapping key; provide one via --session-key, IRONHAND_SESSION_KEY, or --session-key-file")
+			}
+			sessStore, err := api.NewPersistentSessionStore(repo, api.DefaultIdleTimeout, wrappingKey)
+			util.WipeBytes(wrappingKey) // store has copied the key internally
 			if err != nil {
 				return fmt.Errorf("failed to initialize persistent session store: %w", err)
 			}
@@ -223,4 +233,42 @@ func init() {
 	serverCmd.Flags().StringVar(&webauthnRPID, "webauthn-rp-id", "localhost", "WebAuthn Relying Party ID (domain)")
 	serverCmd.Flags().StringVar(&webauthnRPOrigin, "webauthn-rp-origin", "", "WebAuthn Relying Party origin (default: https://localhost:<port>)")
 	serverCmd.Flags().StringVar(&webauthnRPName, "webauthn-rp-name", "IronHand", "WebAuthn Relying Party display name")
+	serverCmd.Flags().StringVar(&sessionKey, "session-key", "", "Hex-encoded 32-byte wrapping key for persistent session storage")
+	serverCmd.Flags().StringVar(&sessionKeyFile, "session-key-file", "", "Path to file containing raw 32-byte wrapping key for persistent session storage")
+}
+
+// resolveSessionWrappingKey resolves the session wrapping key from the
+// available sources in priority order: --session-key flag, IRONHAND_SESSION_KEY
+// environment variable, --session-key-file flag. Returns (nil, nil) if no
+// source is configured.
+func resolveSessionWrappingKey() ([]byte, error) {
+	// 1. --session-key flag or IRONHAND_SESSION_KEY env var (hex-encoded).
+	raw := sessionKey
+	if raw == "" {
+		raw = os.Getenv("IRONHAND_SESSION_KEY")
+	}
+	if raw != "" {
+		key, err := util.HexDecode(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid session wrapping key (hex decode failed): %w", err)
+		}
+		if len(key) != 32 {
+			return nil, fmt.Errorf("session wrapping key must be exactly 32 bytes, got %d", len(key))
+		}
+		return key, nil
+	}
+
+	// 2. --session-key-file flag (raw 32 bytes).
+	if sessionKeyFile != "" {
+		key, err := os.ReadFile(sessionKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading session key file: %w", err)
+		}
+		if len(key) != 32 {
+			return nil, fmt.Errorf("session key file must contain exactly 32 bytes, got %d", len(key))
+		}
+		return key, nil
+	}
+
+	return nil, nil
 }

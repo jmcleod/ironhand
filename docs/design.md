@@ -332,6 +332,8 @@ ironhand server [flags]
 | `--tls-key` | | Path to TLS key |
 | `--enable-header-auth` | `false` | Allow X-Credentials/X-Passphrase header-based authentication |
 | `--session-storage` | `memory` | Session storage: `memory` or `persistent` |
+| `--session-key` | | Hex-encoded 32-byte wrapping key for persistent session storage |
+| `--session-key-file` | | Path to file containing raw 32-byte wrapping key |
 | `--webauthn-rp-id` | `localhost` | WebAuthn Relying Party ID (domain) |
 | `--webauthn-rp-origin` | | WebAuthn Relying Party origin (default: `https://localhost:<port>`) |
 | `--webauthn-rp-name` | `IronHand` | WebAuthn Relying Party display name |
@@ -447,13 +449,12 @@ type API struct {
 
 Sessions are managed via a `SessionStore` interface with two implementations:
 
-- **`MemorySessionStore`** (default) — in-memory with `sync.RWMutex`; sessions lost on restart
-- **`PersistentSessionStore`** — backed by the storage layer with AES-256-GCM encryption; sessions survive restarts
+- **`MemorySessionStore`** (default) — in-memory with `sync.RWMutex`; sessions lost on restart. Suitable for development and testing.
+- **`PersistentSessionStore`** — backed by the storage layer with AES-256-GCM encryption; sessions survive restarts. Requires an externally-provided 32-byte wrapping key (see [Session Key Wrapping](#session-key-wrapping)).
 
 ```go
 type AuthSession struct {
     SecretKeyID           string
-    SessionPassphrase     string
     CredentialsBlob       string
     ExpiresAt             time.Time
     LastAccessedAt        time.Time
@@ -464,9 +465,46 @@ type AuthSession struct {
 }
 ```
 
+The session passphrase is intentionally **not** stored in the session record. It is derived at request time from the session token and a client-held secret cookie using HMAC-SHA256 (see [Session Passphrase Derivation](#session-passphrase-derivation)). This ensures that a session store compromise alone cannot reconstruct credentials.
+
 Sessions have a 24-hour absolute expiry and a 30-minute idle timeout. The idle timeout is reset on each request.
 
-The `AuthMiddleware` checks for a session cookie (`ironhand_session`) first. Header-based authentication via `X-Credentials` and `X-Passphrase` is **disabled by default** and must be explicitly enabled with `--enable-header-auth`.
+#### Session Key Wrapping
+
+The persistent session store encrypts all session records with a 32-byte AES-256-GCM session encryption key. This key is itself wrapped (sealed) with an externally-provided wrapping key before being stored in the repository, ensuring that a repository compromise alone cannot recover session data.
+
+The wrapping key is provided via one of (in priority order):
+
+| Source | Format |
+|---|---|
+| `--session-key` flag | Hex-encoded 32 bytes (64 hex characters) |
+| `IRONHAND_SESSION_KEY` env var | Hex-encoded 32 bytes |
+| `--session-key-file` flag | Raw 32 bytes on disk |
+
+If `--session-storage=persistent` is selected without a wrapping key, the server refuses to start.
+
+**Legacy migration:** If the server encounters a session encryption key stored in the legacy `raw` scheme (pre-wrapping), it automatically migrates the key to the wrapped `aes256gcm` scheme on first access. If the wrapping key changes, a new session encryption key is generated and all previous sessions become unreadable (correct security behaviour — stale sessions expire naturally).
+
+#### Session Passphrase Derivation
+
+Session credential blobs are encrypted with a passphrase that is derived from two independent sources using HMAC-SHA256:
+
+1. **Session ID** — stored in the `ironhand_session` cookie (`SameSite=Lax`)
+2. **Session secret** — stored in the `ironhand_session_key` cookie (`SameSite=Strict`)
+
+```
+passphrase = HMAC-SHA256(key=sessionSecret, data="ironhand:session_passphrase:v1:" || sessionID)
+```
+
+This split ensures that:
+
+- A server-side session store compromise (which holds the encrypted credentials blob and the session ID) cannot reconstruct the passphrase without the client cookie.
+- A stolen client cookie alone is useless without the server-side credentials blob.
+- The `SameSite=Strict` attribute on the secret cookie provides additional CSRF protection for the credential derivation path.
+
+#### Authentication Flow
+
+The `AuthMiddleware` checks for a session cookie (`ironhand_session`) and the companion secret cookie (`ironhand_session_key`) first. If both are present, the session passphrase is derived and the credentials blob is decrypted. Header-based authentication via `X-Credentials` and `X-Passphrase` is **disabled by default** and must be explicitly enabled with `--enable-header-auth`.
 
 All mutating requests (POST/PUT/DELETE) with cookie-based auth require a `X-CSRF-Token` header matching the `ironhand_csrf` cookie (double-submit cookie pattern). The CSRF token is set on login/register and cleared on logout.
 
@@ -620,6 +658,25 @@ Vault and Session operations are stateless beyond the Repository interface, so c
 ironhand server --port 8443 --data-dir ./data
 ```
 
+### Single Instance with Persistent Sessions
+
+```sh
+# Generate a wrapping key (once)
+openssl rand -hex 32 > session.key
+
+# Start with persistent sessions
+ironhand server --port 8443 --data-dir ./data \
+    --session-storage persistent \
+    --session-key-file session.key
+```
+
+Or via environment variable:
+
+```sh
+export IRONHAND_SESSION_KEY=$(openssl rand -hex 32)
+ironhand server --session-storage persistent
+```
+
 ### Multi-Instance (PostgreSQL)
 
 ```sh
@@ -651,6 +708,8 @@ This starts PostgreSQL 17 and the IronHand server with the PostgreSQL backend co
 | TLS key | `--tls-key` | | (self-signed) |
 | Header auth | `--enable-header-auth` | | `false` |
 | Session storage | `--session-storage` | | `memory` |
+| Session wrapping key | `--session-key` | `IRONHAND_SESSION_KEY` | |
+| Session key file | `--session-key-file` | | |
 | WebAuthn RP ID | `--webauthn-rp-id` | | `localhost` |
 | WebAuthn RP origin | `--webauthn-rp-origin` | | `https://localhost:<port>` |
 | WebAuthn RP name | `--webauthn-rp-name` | | `IronHand` |

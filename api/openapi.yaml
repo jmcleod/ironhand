@@ -13,7 +13,13 @@ components:
       type: apiKey
       in: cookie
       name: ironhand_session
-      description: HTTP-only session cookie returned by /auth/register or /auth/login.
+      description: >
+        HTTP-only session cookie returned by /auth/register or /auth/login.
+        A companion `ironhand_session_key` cookie (SameSite=Strict) is also set
+        and required for credential derivation. The session passphrase is derived
+        at request time via HMAC-SHA256 from the session ID and the session secret
+        cookie, ensuring that neither the server-side session store nor the client
+        cookie alone can reconstruct vault credentials.
 
   parameters:
     CSRFToken:
@@ -544,7 +550,9 @@ paths:
               $ref: '#/components/schemas/RegisterRequest'
       responses:
         '201':
-          description: Account created
+          description: >
+            Account created. Sets `ironhand_session` (SameSite=Lax) and
+            `ironhand_session_key` (SameSite=Strict) cookies.
           content:
             application/json:
               schema:
@@ -568,7 +576,9 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: Logged in
+          description: >
+            Logged in. Sets `ironhand_session` (SameSite=Lax) and
+            `ironhand_session_key` (SameSite=Strict) cookies.
         '401':
           description: Invalid credentials
         '429':
@@ -746,7 +756,9 @@ paths:
         response. On success, creates a full session (sets session and CSRF cookies).
       responses:
         '200':
-          description: Login successful (session cookie set)
+          description: >
+            Login successful. Sets `ironhand_session` (SameSite=Lax) and
+            `ironhand_session_key` (SameSite=Strict) cookies.
         '400':
           description: Ceremony expired or invalid response
         '401':

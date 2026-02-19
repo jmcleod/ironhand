@@ -4,8 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmcleod/ironhand/internal/util"
+	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/storage/memory"
 )
+
+// testWrappingKey is a fixed 32-byte key used in tests.
+var testWrappingKey = []byte("test-wrapping-key-32-bytes-long!") // exactly 32 bytes
 
 // sessionStoreTests runs the common suite against any SessionStore implementation.
 func sessionStoreTests(t *testing.T, store SessionStore) {
@@ -13,11 +18,10 @@ func sessionStoreTests(t *testing.T, store SessionStore) {
 
 	t.Run("PutAndGet", func(t *testing.T) {
 		s := AuthSession{
-			SecretKeyID:       "sk-1",
-			SessionPassphrase: "pass",
-			CredentialsBlob:   "blob",
-			ExpiresAt:         time.Now().Add(time.Hour),
-			LastAccessedAt:    time.Now(),
+			SecretKeyID:     "sk-1",
+			CredentialsBlob: "blob",
+			ExpiresAt:       time.Now().Add(time.Hour),
+			LastAccessedAt:  time.Now(),
 		}
 		store.Put("tok-1", s)
 		got, ok := store.Get("tok-1")
@@ -27,8 +31,8 @@ func sessionStoreTests(t *testing.T, store SessionStore) {
 		if got.SecretKeyID != "sk-1" {
 			t.Fatalf("got SecretKeyID %q, want %q", got.SecretKeyID, "sk-1")
 		}
-		if got.SessionPassphrase != "pass" {
-			t.Fatalf("got SessionPassphrase %q, want %q", got.SessionPassphrase, "pass")
+		if got.CredentialsBlob != "blob" {
+			t.Fatalf("got CredentialsBlob %q, want %q", got.CredentialsBlob, "blob")
 		}
 	})
 
@@ -165,7 +169,7 @@ func TestMemorySessionStore(t *testing.T) {
 
 func TestPersistentSessionStore(t *testing.T) {
 	repo := memory.NewRepository()
-	store, err := NewPersistentSessionStore(repo, 30*time.Minute)
+	store, err := NewPersistentSessionStore(repo, 30*time.Minute, testWrappingKey)
 	if err != nil {
 		t.Fatalf("NewPersistentSessionStore: %v", err)
 	}
@@ -175,7 +179,7 @@ func TestPersistentSessionStore(t *testing.T) {
 
 	t.Run("IdleTimeout", func(t *testing.T) {
 		repo2 := memory.NewRepository()
-		s, err := NewPersistentSessionStore(repo2, 100*time.Millisecond)
+		s, err := NewPersistentSessionStore(repo2, 100*time.Millisecond, testWrappingKey)
 		if err != nil {
 			t.Fatalf("NewPersistentSessionStore: %v", err)
 		}
@@ -194,22 +198,21 @@ func TestPersistentSessionStore(t *testing.T) {
 
 	t.Run("SurvivesReopen", func(t *testing.T) {
 		// Verify that sessions persist when a new store is created
-		// against the same underlying repository.
+		// against the same underlying repository with the same wrapping key.
 		repo3 := memory.NewRepository()
-		s1, err := NewPersistentSessionStore(repo3, 30*time.Minute)
+		s1, err := NewPersistentSessionStore(repo3, 30*time.Minute, testWrappingKey)
 		if err != nil {
 			t.Fatalf("NewPersistentSessionStore: %v", err)
 		}
 		s1.Put("tok-persist", AuthSession{
-			SecretKeyID:       "sk-persist",
-			SessionPassphrase: "p",
-			CredentialsBlob:   "b",
-			ExpiresAt:         time.Now().Add(time.Hour),
-			LastAccessedAt:    time.Now(),
+			SecretKeyID:     "sk-persist",
+			CredentialsBlob: "b",
+			ExpiresAt:       time.Now().Add(time.Hour),
+			LastAccessedAt:  time.Now(),
 		})
 		s1.Close()
 
-		s2, err := NewPersistentSessionStore(repo3, 30*time.Minute)
+		s2, err := NewPersistentSessionStore(repo3, 30*time.Minute, testWrappingKey)
 		if err != nil {
 			t.Fatalf("NewPersistentSessionStore (reopen): %v", err)
 		}
@@ -227,7 +230,7 @@ func TestPersistentSessionStore(t *testing.T) {
 	t.Run("KeyReused", func(t *testing.T) {
 		// The encryption key should be loaded (not regenerated) on reopen.
 		repo4 := memory.NewRepository()
-		s1, err := NewPersistentSessionStore(repo4, 30*time.Minute)
+		s1, err := NewPersistentSessionStore(repo4, 30*time.Minute, testWrappingKey)
 		if err != nil {
 			t.Fatalf("NewPersistentSessionStore: %v", err)
 		}
@@ -235,7 +238,7 @@ func TestPersistentSessionStore(t *testing.T) {
 		copy(key1, s1.key)
 		s1.Close()
 
-		s2, err := NewPersistentSessionStore(repo4, 30*time.Minute)
+		s2, err := NewPersistentSessionStore(repo4, 30*time.Minute, testWrappingKey)
 		if err != nil {
 			t.Fatalf("NewPersistentSessionStore (reopen): %v", err)
 		}
@@ -255,7 +258,7 @@ func TestPersistentSessionStore(t *testing.T) {
 
 	t.Run("SweepExpired", func(t *testing.T) {
 		repo5 := memory.NewRepository()
-		s, err := NewPersistentSessionStore(repo5, 30*time.Minute)
+		s, err := NewPersistentSessionStore(repo5, 30*time.Minute, testWrappingKey)
 		if err != nil {
 			t.Fatalf("NewPersistentSessionStore: %v", err)
 		}
@@ -275,6 +278,79 @@ func TestPersistentSessionStore(t *testing.T) {
 		_, err = repo5.Get(sessionVaultID, sessionRecordType, "tok-sweep")
 		if err == nil {
 			t.Fatal("expected expired session to be removed by sweep")
+		}
+	})
+
+	t.Run("WrongWrappingKeyRegeneratesKey", func(t *testing.T) {
+		repo6 := memory.NewRepository()
+		s1, err := NewPersistentSessionStore(repo6, 30*time.Minute, testWrappingKey)
+		if err != nil {
+			t.Fatalf("NewPersistentSessionStore: %v", err)
+		}
+		s1.Put("tok-old", AuthSession{
+			SecretKeyID:     "sk-old",
+			CredentialsBlob: "b",
+			ExpiresAt:       time.Now().Add(time.Hour),
+			LastAccessedAt:  time.Now(),
+		})
+		s1.Close()
+
+		// Reopen with a different wrapping key.
+		wrongKey := []byte("wrong-wrapping-key-32-bytes-ok!!") // 32 bytes
+		s2, err := NewPersistentSessionStore(repo6, 30*time.Minute, wrongKey)
+		if err != nil {
+			t.Fatalf("NewPersistentSessionStore with wrong key: %v", err)
+		}
+		defer s2.Close()
+
+		// Old session should be unreadable (different encryption key).
+		_, ok := s2.Get("tok-old")
+		if ok {
+			t.Fatal("expected old session to be unreadable with new wrapping key")
+		}
+	})
+
+	t.Run("MigratesRawScheme", func(t *testing.T) {
+		repo7 := memory.NewRepository()
+
+		// Simulate legacy raw key storage.
+		legacyKey, err := util.RandomBytes(32)
+		if err != nil {
+			t.Fatalf("RandomBytes: %v", err)
+		}
+		env := &storage.Envelope{
+			Ver:        1,
+			Scheme:     "raw",
+			Ciphertext: make([]byte, 32),
+		}
+		copy(env.Ciphertext, legacyKey)
+		if err := repo7.Put(sessionVaultID, sessionKeyType, sessionKeyID, env); err != nil {
+			t.Fatalf("Put legacy key: %v", err)
+		}
+
+		s, err := NewPersistentSessionStore(repo7, 30*time.Minute, testWrappingKey)
+		if err != nil {
+			t.Fatalf("NewPersistentSessionStore migration: %v", err)
+		}
+		defer s.Close()
+
+		// Verify key was migrated: envelope should now be aes256gcm.
+		migrated, err := repo7.Get(sessionVaultID, sessionKeyType, sessionKeyID)
+		if err != nil {
+			t.Fatalf("Get migrated key: %v", err)
+		}
+		if migrated.Scheme != "aes256gcm" {
+			t.Fatalf("expected migrated scheme aes256gcm, got %s", migrated.Scheme)
+		}
+
+		// Verify the encryption key was preserved (same as legacy key).
+		if len(s.key) != 32 {
+			t.Fatal("expected 32-byte key after migration")
+		}
+		for i := range legacyKey {
+			if legacyKey[i] != s.key[i] {
+				t.Fatal("expected same encryption key after migration")
+			}
 		}
 	})
 }

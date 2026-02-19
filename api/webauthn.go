@@ -335,7 +335,9 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	defer creds.Destroy()
 
-	sessionPassphrase := uuid.New()
+	token := uuid.New()
+	sessionSecret := uuid.New()
+	sessionPassphrase := deriveSessionPassphrase(token, sessionSecret)
 	sessionBlob, err := vault.ExportCredentials(creds, sessionPassphrase)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to initialize session")
@@ -346,16 +348,15 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	a.rateLimiter.recordSuccess(accountID)
 	a.ipLimiter.recordSuccess(clientIP)
 
-	token := uuid.New()
 	expiresAt := time.Now().Add(sessionDuration)
 	a.sessions.Put(token, AuthSession{
-		SecretKeyID:       record.SecretKeyID,
-		SessionPassphrase: sessionPassphrase,
-		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
-		ExpiresAt:         expiresAt,
-		LastAccessedAt:    time.Now(),
+		SecretKeyID:     record.SecretKeyID,
+		CredentialsBlob: base64.StdEncoding.EncodeToString(sessionBlob),
+		ExpiresAt:       expiresAt,
+		LastAccessedAt:  time.Now(),
 	})
 	writeSessionCookie(w, r, token, expiresAt)
+	writeSessionSecretCookie(w, r, sessionSecret, expiresAt)
 	writeCSRFCookie(w, r)
 
 	a.audit.logEvent(AuditWebAuthnLoginSuccess, r, record.SecretKeyID)

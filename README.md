@@ -161,6 +161,7 @@ IronHand protects against:
 - **Clickjacking** — X-Frame-Options: DENY and CSP frame-ancestors 'none'
 - **Credential leakage** — header-based auth disabled by default; private keys redacted in API responses
 - **Session fixation** — CSRF token rotated on login; idle timeout invalidates stale sessions
+- **Session store compromise** — persistent session encryption key wrapped with external key; session passphrase split across server and client cookie via HMAC-SHA256
 
 IronHand does **not** protect against:
 
@@ -187,6 +188,26 @@ Rate limits apply to both password-based and WebAuthn login flows.
 ### Session Management
 
 Sessions have a 24-hour absolute expiry and a 30-minute idle timeout (configurable via `--idle-timeout`). Session storage defaults to in-memory but can be switched to persistent encrypted storage via `--session-storage persistent`.
+
+**Persistent session storage** requires an externally-provided 32-byte wrapping key to protect the session encryption key at rest. The wrapping key can be provided via:
+
+| Source | Format |
+|---|---|
+| `--session-key` flag | Hex-encoded 32 bytes (64 hex characters) |
+| `IRONHAND_SESSION_KEY` env var | Hex-encoded 32 bytes |
+| `--session-key-file` flag | Raw 32 bytes on disk |
+
+Example:
+
+```sh
+# Generate a wrapping key
+openssl rand -hex 32 > session.key
+
+# Start with persistent sessions
+ironhand server --session-storage persistent --session-key-file session.key
+```
+
+The server will refuse to start if `--session-storage=persistent` is selected without a wrapping key. The session passphrase is derived from a split-secret scheme using both a server-side session ID and a client-held cookie, ensuring that neither a session store compromise nor a stolen cookie alone can reconstruct vault credentials.
 
 ### Header-Based Authentication
 
