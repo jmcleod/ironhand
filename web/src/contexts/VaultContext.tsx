@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 import {
   addMember as apiAddMember,
   createVault as apiCreateVault,
@@ -17,6 +18,11 @@ import {
   enableTwoFactor as apiEnableTwoFactor,
   updateItem as apiUpdateItem,
   getCAInfo as apiGetCAInfo,
+  webauthnStatus as apiWebAuthnStatus,
+  beginWebAuthnRegistration as apiBeginWebAuthnRegistration,
+  finishWebAuthnRegistration as apiFinishWebAuthnRegistration,
+  beginWebAuthnLogin as apiBeginWebAuthnLogin,
+  finishWebAuthnLogin as apiFinishWebAuthnLogin,
 } from '@/lib/api';
 import { generateId } from '@/lib/crypto';
 import { FIELD_CREATED, FIELD_NAME, FIELD_TYPE, FIELD_UPDATED, ItemType, Vault, VaultItem } from '@/types/vault';
@@ -24,6 +30,8 @@ import { FIELD_CREATED, FIELD_NAME, FIELD_TYPE, FIELD_UPDATED, ItemType, Vault, 
 interface AccountState {
   vaults: Vault[];
   twoFactorEnabled: boolean;
+  webauthnEnabled: boolean;
+  webauthnCredentialCount: number;
 }
 
 interface VaultContextType {
@@ -33,6 +41,8 @@ interface VaultContextType {
   enroll: (passphrase: string) => Promise<{ secretKey: string }>;
   completeEnrollment: () => void;
   unlock: (secretKey: string, passphrase: string, totpCode?: string) => Promise<boolean>;
+  unlockWithPasskey: (secretKey: string, passphrase: string) => Promise<boolean>;
+  registerPasskey: () => Promise<void>;
   setupTwoFactor: () => Promise<{ secret: string; otpauthURL: string; expiresAt: string }>;
   enableTwoFactor: (code: string) => Promise<boolean>;
   lock: () => Promise<void>;
@@ -52,6 +62,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [vaults, setVaults] = useState<Vault[]>([]);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
+  const [webauthnEnabled, setWebauthnEnabled] = useState(false);
+  const [webauthnCredentialCount, setWebauthnCredentialCount] = useState(0);
   const [justRegistered, setJustRegistered] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -85,9 +97,14 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         isCA: caInfo?.is_ca ?? false,
       });
     }
-    const status = await apiTwoFactorStatus().catch(() => ({ enabled: false }));
+    const [tfStatus, waStatus] = await Promise.all([
+      apiTwoFactorStatus().catch(() => ({ enabled: false })),
+      apiWebAuthnStatus().catch(() => ({ enabled: false, credential_count: 0 })),
+    ]);
     setVaults(nextVaults);
-    setTwoFactorEnabled(status.enabled);
+    setTwoFactorEnabled(tfStatus.enabled);
+    setWebauthnEnabled(waStatus.enabled);
+    setWebauthnCredentialCount(waStatus.credential_count);
   }, []);
 
   const enroll = useCallback(async (passphrase: string) => {
@@ -95,12 +112,18 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setIsUnlocked(true);
     setJustRegistered(true);
     setVaults([]);
+    // Fetch WebAuthn status so the enrollment screen knows passkeys are available.
+    const waStatus = await apiWebAuthnStatus().catch(() => ({ enabled: false, credential_count: 0 }));
+    setWebauthnEnabled(waStatus.enabled);
+    setWebauthnCredentialCount(waStatus.credential_count);
     return { secretKey: result.secret_key };
   }, []);
 
   const completeEnrollment = useCallback(() => {
     setJustRegistered(false);
-  }, []);
+    // Trigger a full refresh so the dashboard has current data.
+    refresh().catch(() => {});
+  }, [refresh]);
 
   const unlock = useCallback(
     async (secretKey: string, passphrase: string, totpCode?: string) => {
@@ -116,6 +139,35 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     },
     [refresh],
   );
+
+  const unlockWithPasskey = useCallback(
+    async (secretKey: string, passphrase: string) => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const options = (await apiBeginWebAuthnLogin(secretKey, passphrase)) as any;
+        const assertion = await startAuthentication({ optionsJSON: options.publicKey ?? options });
+        await apiFinishWebAuthnLogin(assertion);
+        setIsUnlocked(true);
+        setJustRegistered(false);
+        await refresh();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [refresh],
+  );
+
+  const registerPasskey = useCallback(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const options = (await apiBeginWebAuthnRegistration()) as any;
+    const attestation = await startRegistration({ optionsJSON: options.publicKey ?? options });
+    await apiFinishWebAuthnRegistration(attestation);
+    // Refresh to update credential count.
+    const waStatus = await apiWebAuthnStatus().catch(() => ({ enabled: false, credential_count: 0 }));
+    setWebauthnEnabled(waStatus.enabled);
+    setWebauthnCredentialCount(waStatus.credential_count);
+  }, []);
 
   const setupTwoFactor = useCallback(async () => {
     const out = await apiSetupTwoFactor();
@@ -137,6 +189,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setIsUnlocked(false);
     setVaults([]);
     setTwoFactorEnabled(false);
+    setWebauthnEnabled(false);
+    setWebauthnCredentialCount(0);
     setJustRegistered(false);
   }, []);
 
@@ -217,8 +271,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   );
 
   const account = useMemo<AccountState | null>(
-    () => ({ vaults, twoFactorEnabled }),
-    [twoFactorEnabled, vaults],
+    () => ({ vaults, twoFactorEnabled, webauthnEnabled, webauthnCredentialCount }),
+    [twoFactorEnabled, vaults, webauthnEnabled, webauthnCredentialCount],
   );
   const isEnrolled = justRegistered;
 
@@ -229,6 +283,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         setIsUnlocked(false);
         setVaults([]);
         setTwoFactorEnabled(false);
+        setWebauthnEnabled(false);
+        setWebauthnCredentialCount(0);
       });
   }, [refresh]);
 
@@ -241,6 +297,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         enroll,
         completeEnrollment,
         unlock,
+        unlockWithPasskey,
+        registerPasskey,
         setupTwoFactor,
         enableTwoFactor,
         lock,

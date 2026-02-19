@@ -1,12 +1,17 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
+
+	"github.com/jmcleod/ironhand/internal/uuid"
+	"github.com/jmcleod/ironhand/vault"
 )
 
 const (
@@ -31,6 +36,29 @@ func newWebAuthnUser(record *accountRecord) *webauthnUser {
 		name:        record.SecretKeyID,
 		credentials: record.WebAuthnCredentials,
 	}
+}
+
+// WebAuthnStatus handles GET /auth/webauthn/status.
+// Returns whether WebAuthn is configured and how many credentials are registered.
+func (a *API) WebAuthnStatus(w http.ResponseWriter, r *http.Request) {
+	enabled := a.webauthn != nil
+	credCount := 0
+
+	creds := credentialsFromContext(r.Context())
+	if creds != nil && enabled {
+		record, err := a.loadAccountRecord(creds.SecretKey().String())
+		if err == nil {
+			credCount = len(record.WebAuthnCredentials)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, struct {
+		Enabled         bool `json:"enabled"`
+		CredentialCount int  `json:"credential_count"`
+	}{
+		Enabled:         enabled,
+		CredentialCount: credCount,
+	})
 }
 
 // BeginWebAuthnRegistration handles POST /auth/webauthn/register/begin.
@@ -137,6 +165,7 @@ func (a *API) FinishWebAuthnRegistration(w http.ResponseWriter, r *http.Request)
 	a.sessions.data[token] = session
 	a.sessions.mu.Unlock()
 
+	a.audit.logEvent(AuditWebAuthnRegistered, r, record.SecretKeyID)
 	writeJSON(w, http.StatusOK, struct {
 		CredentialID string `json:"credential_id"`
 	}{
@@ -145,8 +174,9 @@ func (a *API) FinishWebAuthnRegistration(w http.ResponseWriter, r *http.Request)
 }
 
 // BeginWebAuthnLogin handles POST /auth/webauthn/login/begin.
-// Starts the WebAuthn login ceremony. Requires secret_key in the body to
-// identify the account, but does NOT require an active session.
+// Starts the WebAuthn login ceremony. Requires secret_key and passphrase in
+// the body — the passphrase is needed for vault decryption after successful
+// WebAuthn verification.
 func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	if a.webauthn == nil {
 		writeError(w, http.StatusNotFound, "webauthn not configured")
@@ -154,7 +184,8 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		SecretKey string `json:"secret_key"`
+		SecretKey  string `json:"secret_key"`
+		Passphrase string `json:"passphrase"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -163,6 +194,33 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	if req.SecretKey == "" {
 		writeError(w, http.StatusBadRequest, "secret_key is required")
 		return
+	}
+	if req.Passphrase == "" {
+		writeError(w, http.StatusBadRequest, "passphrase is required")
+		return
+	}
+
+	// Rate-limit checks — same pattern as Login handler.
+	accountID, _ := accountLookupID(req.SecretKey)
+	clientIP := extractClientIP(r)
+	if blocked, retryAfter := a.globalLimiter.check(); blocked {
+		a.audit.logFailure(AuditLoginRateLimited, r, "global rate limited")
+		writeRateLimited(w, retryAfter)
+		return
+	}
+	if blocked, retryAfter := a.ipLimiter.check(clientIP); blocked {
+		a.audit.logFailure(AuditLoginRateLimited, r, "ip rate limited",
+			slog.String("client_ip", clientIP))
+		writeRateLimited(w, retryAfter)
+		return
+	}
+	if accountID != "" {
+		if blocked, retryAfter := a.rateLimiter.check(accountID); blocked {
+			a.audit.logFailure(AuditLoginRateLimited, r, "rate limited",
+				slog.String("account_id", accountID))
+			writeRateLimited(w, retryAfter)
+			return
+		}
 	}
 
 	record, err := a.loadAccountRecord(req.SecretKey)
@@ -188,6 +246,7 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	a.webauthnCeremonyMu.Lock()
 	a.webauthnCeremonies[sessionData.Challenge] = webauthnCeremonyState{
 		SecretKey:   req.SecretKey,
+		Passphrase:  req.Passphrase,
 		SessionData: string(sessionJSON),
 		ExpiresAt:   time.Now().Add(webauthnCeremonyTTL),
 	}
@@ -197,7 +256,7 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // FinishWebAuthnLogin handles POST /auth/webauthn/login/finish.
-// Completes the WebAuthn login ceremony.
+// Completes the WebAuthn login ceremony and creates a full session.
 func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	if a.webauthn == nil {
 		writeError(w, http.StatusNotFound, "webauthn not configured")
@@ -225,6 +284,17 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rate-limit recording helpers.
+	accountID, _ := accountLookupID(state.SecretKey)
+	clientIP := extractClientIP(r)
+	recordLoginFailure := func() {
+		a.globalLimiter.recordFailure()
+		a.ipLimiter.recordFailure(clientIP)
+		if accountID != "" {
+			a.rateLimiter.recordFailure(accountID)
+		}
+	}
+
 	var sessionData webauthn.SessionData
 	if err := json.Unmarshal([]byte(state.SessionData), &sessionData); err != nil {
 		writeError(w, http.StatusInternalServerError, "corrupt ceremony state")
@@ -233,6 +303,7 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 
 	record, err := a.loadAccountRecord(state.SecretKey)
 	if err != nil {
+		recordLoginFailure()
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -240,19 +311,67 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 
 	_, err = a.webauthn.ValidateLogin(user, sessionData, parsedResponse)
 	if err != nil {
+		recordLoginFailure()
+		a.audit.logFailure(AuditLoginFailure, r, "webauthn validation failed",
+			slog.String("account_id", record.SecretKeyID))
 		writeError(w, http.StatusUnauthorized, "webauthn login failed: "+err.Error())
 		return
 	}
 
-	a.audit.logEvent(AuditLoginSuccess, r, record.SecretKeyID)
-	writeJSON(w, http.StatusOK, struct {
-		Status string `json:"status"`
-	}{Status: "webauthn_verified"})
+	// WebAuthn verified — now decrypt the credentials blob to create a
+	// session, exactly like the password-based Login handler.
+	blob, err := base64.StdEncoding.DecodeString(record.CredentialsBlob)
+	if err != nil {
+		recordLoginFailure()
+		a.audit.logFailure(AuditLoginFailure, r, "corrupt credentials blob",
+			slog.String("account_id", record.SecretKeyID))
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	loginPassphrase := combineLoginPassphrase(state.Passphrase, state.SecretKey)
+	creds, err := vault.ImportCredentials(blob, loginPassphrase)
+	if err != nil {
+		recordLoginFailure()
+		a.audit.logFailure(AuditLoginFailure, r, "invalid passphrase (webauthn)",
+			slog.String("account_id", record.SecretKeyID))
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	defer creds.Destroy()
+
+	sessionPassphrase := uuid.New()
+	sessionBlob, err := vault.ExportCredentials(creds, sessionPassphrase)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize session")
+		return
+	}
+
+	// Login succeeded — clear rate-limit state.
+	a.rateLimiter.recordSuccess(accountID)
+	a.ipLimiter.recordSuccess(clientIP)
+
+	token := uuid.New()
+	expiresAt := time.Now().Add(sessionDuration)
+	a.sessions.mu.Lock()
+	a.sessions.data[token] = authSession{
+		SecretKeyID:       record.SecretKeyID,
+		SessionPassphrase: sessionPassphrase,
+		CredentialsBlob:   base64.StdEncoding.EncodeToString(sessionBlob),
+		ExpiresAt:         expiresAt,
+		LastAccessedAt:    time.Now(),
+	}
+	a.sessions.mu.Unlock()
+	writeSessionCookie(w, r, token, expiresAt)
+	writeCSRFCookie(w, r)
+
+	a.audit.logEvent(AuditWebAuthnLoginSuccess, r, record.SecretKeyID)
+	writeJSON(w, http.StatusOK, struct{}{})
 }
 
 // webauthnCeremonyState holds state for an in-progress WebAuthn login ceremony.
 type webauthnCeremonyState struct {
 	SecretKey   string
+	Passphrase  string
 	SessionData string
 	ExpiresAt   time.Time
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useVault } from '@/contexts/VaultContext';
-import { Check, CheckCircle2, Copy, KeyRound, ShieldAlert } from 'lucide-react';
+import { Check, CheckCircle2, Copy, Fingerprint, KeyRound, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -12,7 +12,7 @@ interface EnrollPageProps {
 }
 
 export default function EnrollPage({ onSwitchToLogin }: EnrollPageProps) {
-  const { enroll, completeEnrollment } = useVault();
+  const { enroll, completeEnrollment, registerPasskey, account } = useVault();
   const { toast } = useToast();
   const [passphrase, setPassphrase] = useState('');
   const [confirmPassphrase, setConfirmPassphrase] = useState('');
@@ -20,6 +20,8 @@ export default function EnrollPage({ onSwitchToLogin }: EnrollPageProps) {
   const [secretKey, setSecretKey] = useState('');
   const [copied, setCopied] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
+  const [passkeyRegistered, setPasskeyRegistered] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
 
   const handleRegister = async () => {
     if (!passphrase || passphrase.length < 10) {
@@ -39,6 +41,20 @@ export default function EnrollPage({ onSwitchToLogin }: EnrollPageProps) {
       toast({ title: 'Registration failed', description: msg, variant: 'destructive' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRegisterPasskey = async () => {
+    setPasskeyLoading(true);
+    try {
+      await registerPasskey();
+      setPasskeyRegistered(true);
+      toast({ title: 'Passkey Registered', description: 'You can now use your passkey to sign in.' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Passkey registration failed';
+      toast({ title: 'Passkey Registration Failed', description: msg, variant: 'destructive' });
+    } finally {
+      setPasskeyLoading(false);
     }
   };
 
@@ -90,6 +106,30 @@ export default function EnrollPage({ onSwitchToLogin }: EnrollPageProps) {
                 I have securely saved my secret key.
               </label>
             </div>
+
+            {/* Optional passkey registration — only show when WebAuthn is configured */}
+            {account?.webauthnEnabled && (
+              <div className="mb-4">
+                {passkeyRegistered ? (
+                  <div className="flex items-center justify-center gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-600 dark:text-green-400">
+                    <Fingerprint className="h-4 w-4" />
+                    <span>Passkey registered</span>
+                    <Check className="h-4 w-4" />
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleRegisterPasskey}
+                    disabled={passkeyLoading || !acknowledged}
+                  >
+                    <Fingerprint className="h-4 w-4 mr-2" />
+                    {passkeyLoading ? 'Registering passkey...' : 'Register a Passkey (optional)'}
+                  </Button>
+                )}
+              </div>
+            )}
+
             <Button className="w-full" disabled={!acknowledged} onClick={completeEnrollment}>
               Continue to Dashboard
             </Button>

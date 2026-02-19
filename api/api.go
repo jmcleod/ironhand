@@ -152,7 +152,8 @@ func (a *API) Router() chi.Router {
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/2fa/setup", a.SetupTwoFactor)
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/2fa/enable", a.EnableTwoFactor)
 
-	// WebAuthn routes (registration requires auth; login does not).
+	// WebAuthn routes (registration + status require auth; login does not).
+	r.With(a.AuthMiddleware).Get("/auth/webauthn/status", a.WebAuthnStatus)
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/webauthn/register/begin", a.BeginWebAuthnRegistration)
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/webauthn/register/finish", a.FinishWebAuthnRegistration)
 	r.Post("/auth/webauthn/login/begin", a.BeginWebAuthnLogin)

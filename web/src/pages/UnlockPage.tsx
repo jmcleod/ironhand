@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useVault } from '@/contexts/VaultContext';
-import { Shield } from 'lucide-react';
+import { Fingerprint, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -14,13 +14,22 @@ interface UnlockPageProps {
 const SAVED_SECRET_KEY_KEY = 'ironhand_saved_secret_key';
 
 export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
-  const { unlock } = useVault();
+  const { unlock, unlockWithPasskey } = useVault();
   const { toast } = useToast();
   const [secretKey, setSecretKey] = useState(() => localStorage.getItem(SAVED_SECRET_KEY_KEY) ?? '');
   const [passphrase, setPassphrase] = useState('');
   const [totpCode, setTotpCode] = useState('');
   const [rememberKey, setRememberKey] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
+
+  const handleRememberKey = () => {
+    if (rememberKey) {
+      localStorage.setItem(SAVED_SECRET_KEY_KEY, secretKey.trim());
+    } else {
+      localStorage.removeItem(SAVED_SECRET_KEY_KEY);
+    }
+  };
 
   const handleUnlock = async () => {
     setLoading(true);
@@ -34,12 +43,25 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
       });
       return;
     }
-    if (rememberKey) {
-      localStorage.setItem(SAVED_SECRET_KEY_KEY, secretKey.trim());
-    } else {
-      localStorage.removeItem(SAVED_SECRET_KEY_KEY);
-    }
+    handleRememberKey();
   };
+
+  const handlePasskeyLogin = async () => {
+    setPasskeyLoading(true);
+    const success = await unlockWithPasskey(secretKey.trim(), passphrase);
+    setPasskeyLoading(false);
+    if (!success) {
+      toast({
+        title: 'Passkey Login Failed',
+        description: 'WebAuthn verification failed or no passkeys registered.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    handleRememberKey();
+  };
+
+  const anyLoading = loading || passkeyLoading;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -78,9 +100,29 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
                 Remember secret key on this device
               </label>
             </div>
-            <Button className="w-full" onClick={handleUnlock} disabled={loading || !secretKey || !passphrase}>
+            <Button className="w-full" onClick={handleUnlock} disabled={anyLoading || !secretKey || !passphrase}>
               {loading ? 'Logging in...' : 'Login'}
             </Button>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-border" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-card px-2 text-muted-foreground">or</span>
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={handlePasskeyLogin}
+              disabled={anyLoading || !secretKey || !passphrase}
+            >
+              <Fingerprint className="h-4 w-4 mr-2" />
+              {passkeyLoading ? 'Verifying passkey...' : 'Sign in with Passkey'}
+            </Button>
+
             <Button variant="ghost" className="w-full" onClick={onSwitchToRegister}>
               Need an account? Register
             </Button>

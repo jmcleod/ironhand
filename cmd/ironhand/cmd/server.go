@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/spf13/cobra"
 
 	"github.com/jmcleod/ironhand/api"
@@ -32,6 +33,9 @@ var (
 	storageBackend   string
 	postgresDSN      string
 	enableHeaderAuth bool
+	webauthnRPID     string
+	webauthnRPOrigin string
+	webauthnRPName   string
 )
 
 var serverCmd = &cobra.Command{
@@ -89,7 +93,24 @@ var serverCmd = &cobra.Command{
 		}
 		defer closeFn()
 
-		a := api.New(repo, epochCache, api.WithHeaderAuth(enableHeaderAuth))
+		// Configure WebAuthn/passkey support.
+		rpOrigin := webauthnRPOrigin
+		if rpOrigin == "" {
+			rpOrigin = fmt.Sprintf("https://localhost:%d", port)
+		}
+		wa, err := webauthn.New(&webauthn.Config{
+			RPDisplayName: webauthnRPName,
+			RPID:          webauthnRPID,
+			RPOrigins:     []string{rpOrigin},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to configure webauthn: %w", err)
+		}
+
+		a := api.New(repo, epochCache,
+			api.WithHeaderAuth(enableHeaderAuth),
+			api.WithWebAuthn(wa),
+		)
 
 		r := chi.NewRouter()
 		r.Use(middleware.Logger)
@@ -180,4 +201,7 @@ func init() {
 	serverCmd.Flags().StringVar(&storageBackend, "storage", "bbolt", "Storage backend: bbolt or postgres")
 	serverCmd.Flags().StringVar(&postgresDSN, "postgres-dsn", "", "PostgreSQL connection string (required when --storage=postgres)")
 	serverCmd.Flags().BoolVar(&enableHeaderAuth, "enable-header-auth", false, "Allow X-Credentials/X-Passphrase header-based authentication (disabled by default)")
+	serverCmd.Flags().StringVar(&webauthnRPID, "webauthn-rp-id", "localhost", "WebAuthn Relying Party ID (domain)")
+	serverCmd.Flags().StringVar(&webauthnRPOrigin, "webauthn-rp-origin", "", "WebAuthn Relying Party origin (default: https://localhost:<port>)")
+	serverCmd.Flags().StringVar(&webauthnRPName, "webauthn-rp-name", "IronHand", "WebAuthn Relying Party display name")
 }

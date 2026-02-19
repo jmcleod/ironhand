@@ -20,10 +20,25 @@ async function readError(resp: Response): Promise<never> {
   throw { status: resp.status, message } as ApiError;
 }
 
+function getCsrfToken(): string | null {
+  const match = document.cookie.match(/(?:^|;\s*)ironhand_csrf=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function request(path: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  // Attach CSRF token for mutating requests (POST/PUT/DELETE).
+  const method = (init.method ?? 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    const token = getCsrfToken();
+    if (token) {
+      headers.set('X-CSRF-Token', token);
+    }
+  }
   const resp = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
     ...init,
+    headers,
   });
   if (!resp.ok) {
     return readError(resp);
@@ -189,10 +204,13 @@ export async function listAuditLogs(vaultID: string, itemID?: string): Promise<A
 }
 
 export async function exportVault(vaultID: string, passphrase: string): Promise<Blob> {
+  const csrfHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+  const csrf = getCsrfToken();
+  if (csrf) csrfHeaders['X-CSRF-Token'] = csrf;
   const resp = await fetch(`${API_BASE}/vaults/${encodeURIComponent(vaultID)}/export`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: csrfHeaders,
     body: JSON.stringify({ passphrase }),
   });
   if (!resp.ok) {
@@ -210,9 +228,14 @@ export async function importVault(
   formData.append('file', file);
   formData.append('passphrase', passphrase);
 
+  const importHeaders: Record<string, string> = {};
+  const csrf = getCsrfToken();
+  if (csrf) importHeaders['X-CSRF-Token'] = csrf;
+
   const resp = await fetch(`${API_BASE}/vaults/${encodeURIComponent(vaultID)}/import`, {
     method: 'POST',
     credentials: 'include',
+    headers: importHeaders,
     body: formData,
   });
   if (!resp.ok) {
@@ -322,4 +345,47 @@ export async function renewCert(
 export async function getCRL(vaultID: string): Promise<string> {
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/pki/crl.pem`);
   return resp.text();
+}
+
+// ---------------------------------------------------------------------------
+// WebAuthn / Passkey
+// ---------------------------------------------------------------------------
+
+export async function webauthnStatus(): Promise<{ enabled: boolean; credential_count: number }> {
+  const resp = await request('/auth/webauthn/status');
+  return (await resp.json()) as { enabled: boolean; credential_count: number };
+}
+
+export async function beginWebAuthnRegistration(): Promise<unknown> {
+  const resp = await request('/auth/webauthn/register/begin', { method: 'POST' });
+  return resp.json();
+}
+
+export async function finishWebAuthnRegistration(credential: unknown): Promise<{ credential_id: string }> {
+  const resp = await request('/auth/webauthn/register/finish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(credential),
+  });
+  return (await resp.json()) as { credential_id: string };
+}
+
+export async function beginWebAuthnLogin(
+  secretKey: string,
+  passphrase: string,
+): Promise<unknown> {
+  const resp = await request('/auth/webauthn/login/begin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secret_key: secretKey, passphrase }),
+  });
+  return resp.json();
+}
+
+export async function finishWebAuthnLogin(credential: unknown): Promise<void> {
+  await request('/auth/webauthn/login/finish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(credential),
+  });
 }

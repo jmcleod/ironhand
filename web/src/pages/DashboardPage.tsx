@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useVault } from '@/contexts/VaultContext';
-import { Plus, Lock, ShieldCheck, Wand2, Vault as VaultIcon, Search, X, KeyRound, StickyNote, CreditCard, Box } from 'lucide-react';
+import { Plus, Lock, ShieldCheck, Wand2, Vault as VaultIcon, Search, X, KeyRound, StickyNote, CreditCard, Box, Fingerprint } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import VaultCard from '@/components/VaultCard';
@@ -10,6 +10,7 @@ import CreateVaultDialog from '@/components/CreateVaultDialog';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
 import PasswordGeneratorDialog from '@/components/PasswordGeneratorDialog';
 import TwoFactorDialog from '@/components/TwoFactorDialog';
+import PasskeyDialog from '@/components/PasskeyDialog';
 import { searchItems, groupResultsByVault } from '@/lib/search';
 import { ItemType } from '@/types/vault';
 import logo from '@/assets/logo.png';
@@ -28,6 +29,7 @@ export default function DashboardPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
   const [showTwoFactor, setShowTwoFactor] = useState(false);
+  const [showPasskey, setShowPasskey] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all');
@@ -81,6 +83,9 @@ export default function DashboardPage() {
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setShowTwoFactor(true)} title="Two-Factor Authentication">
               <ShieldCheck className={`h-4 w-4 ${account.twoFactorEnabled ? 'text-green-500' : ''}`} />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowPasskey(true)} title="Passkey Management">
+              <Fingerprint className={`h-4 w-4 ${(account.webauthnCredentialCount ?? 0) > 0 ? 'text-green-500' : ''}`} />
             </Button>
             <Button variant="outline" size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="h-4 w-4 mr-1" />
@@ -195,6 +200,7 @@ export default function DashboardPage() {
       <CreateVaultDialog open={showCreate} onOpenChange={setShowCreate} />
       <PasswordGeneratorDialog open={showGenerator} onOpenChange={setShowGenerator} />
       <TwoFactorDialog open={showTwoFactor} onOpenChange={setShowTwoFactor} />
+      <PasskeyDialog open={showPasskey} onOpenChange={setShowPasskey} />
     </div>
   );
 }
