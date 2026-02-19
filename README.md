@@ -11,7 +11,7 @@ A secure, encrypted vault library for Go with member-based access control, epoch
 - **Rollback detection** — persistent epoch cache detects storage rollback attacks
 - **Credential export/import** — single encrypted blob for portable vault access
 - **Pluggable storage** — in-memory (testing), BBolt (default), or PostgreSQL backends
-- **Built-in Certificate Authority** — turn any vault into a CA, issue/revoke/renew X.509 certificates, generate CRLs, and sign CSRs
+- **Built-in Certificate Authority** — turn any vault into a CA, issue/revoke/renew X.509 certificates, generate CRLs, and sign CSRs; optional PKCS#11 HSM backend for hardware-protected CA keys
 - **WebAuthn/Passkey MFA** — phishing-resistant second factor using browser passkeys (replaces TOTP as the recommended MFA method)
 - **CSRF protection** — double-submit cookie pattern on all mutating endpoints
 - **Security headers** — CSP, HSTS, X-Frame-Options, and Permissions-Policy on every response
@@ -245,6 +245,94 @@ CA state is stored in reserved items within the vault (prefixed with `__ca_`). T
 | `__ca_cert` | PEM-encoded CA certificate |
 | `__ca_key` | PEM-encoded CA private key (encrypted by vault field-level encryption) |
 | `__ca_revocations` | JSON array of revocation entries (serial, timestamp, reason, item ID) |
+
+### HSM-Backed PKI Keys (PKCS#11)
+
+By default, PKI private keys are generated in software and stored encrypted in the vault. For production deployments requiring hardware-level key protection, IronHand supports PKCS#11 hardware security modules. When enabled, private keys are generated and held inside the HSM — the vault stores only a `PKCS11:<label>` reference string, and key material never leaves the hardware.
+
+PKCS#11 support requires CGo and the `pkcs11` build tag:
+
+```sh
+go build -tags pkcs11 -o ironhand ./cmd/ironhand/
+```
+
+#### Configuration
+
+| Flag | Environment Variable | Description |
+|---|---|---|
+| `--pki-keystore` | | Key store backend: `software` (default) or `pkcs11` |
+| `--pkcs11-module` | `IRONHAND_PKCS11_MODULE` | Path to PKCS#11 shared library (`.so` / `.dylib`) |
+| `--pkcs11-token-label` | `IRONHAND_PKCS11_TOKEN_LABEL` | HSM token label |
+| `--pkcs11-pin` | `IRONHAND_PKCS11_PIN` | User PIN for the token |
+
+Example:
+
+```sh
+ironhand server --pki-keystore pkcs11 \
+    --pkcs11-module /usr/lib/softhsm/libsofthsm2.so \
+    --pkcs11-token-label ironhand \
+    --pkcs11-pin 1234
+```
+
+#### SoftHSM2 (Development/Testing)
+
+[SoftHSM2](https://www.opendnssec.org/softhsm/) is a software PKCS#11 implementation suitable for development and testing. It provides the same PKCS#11 interface as a hardware HSM without requiring physical hardware.
+
+**Install:**
+
+```sh
+# macOS (Homebrew)
+brew install softhsm
+
+# Ubuntu / Debian
+sudo apt-get install -y softhsm2
+```
+
+**Initialize a token:**
+
+```sh
+softhsm2-util --init-token --free --label "ironhand" --pin 1234 --so-pin 0000
+```
+
+**Module paths:**
+
+| Platform | Path |
+|---|---|
+| macOS (Homebrew, Apple Silicon) | `/opt/homebrew/lib/softhsm/libsofthsm2.so` |
+| macOS (Homebrew, Intel) | `/usr/local/lib/softhsm/libsofthsm2.so` |
+| Ubuntu / Debian | `/usr/lib/softhsm/libsofthsm2.so` |
+
+**Start the server with SoftHSM2:**
+
+```sh
+go build -tags pkcs11 -o ironhand ./cmd/ironhand/
+
+./ironhand server --pki-keystore pkcs11 \
+    --pkcs11-module /opt/homebrew/lib/softhsm/libsofthsm2.so \
+    --pkcs11-token-label ironhand \
+    --pkcs11-pin 1234
+```
+
+**Running PKCS#11 tests:**
+
+```sh
+softhsm2-util --init-token --free --label "ironhand-test" --pin 1234 --so-pin 0000
+
+SOFTHSM2_MODULE=/opt/homebrew/lib/softhsm/libsofthsm2.so \
+SOFTHSM2_TOKEN_LABEL=ironhand-test \
+SOFTHSM2_PIN=1234 \
+go test -tags pkcs11 ./pki/ -v -run TestPKCS11
+```
+
+#### How Reference Strings Work
+
+When `--pki-keystore=pkcs11` is set, the PKI subsystem stores a reference to the HSM key instead of the actual key material:
+
+1. **Key generation** — `GenerateKey()` creates an ECDSA P-256 key pair inside the HSM with a label like `ironhand-<uuid>`.
+2. **Storage** — `ExportPEM()` returns `PKCS11:ironhand-<uuid>` (not PEM data). This reference string is stored in the vault's encrypted `private_key` field.
+3. **Retrieval** — `ImportPEM()` detects the `PKCS11:` prefix, looks up the key by label in the HSM, and returns a `crypto.Signer` backed by the hardware.
+
+The vault encryption, access control, and audit trail work identically regardless of whether the key store is software or hardware-backed.
 
 ### Certificate Item Fields
 

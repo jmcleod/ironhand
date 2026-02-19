@@ -3,6 +3,7 @@ module github.com/jmcleod/ironhand
 go 1.26
 
 require (
+	github.com/ThalesGroup/crypto11 v1.6.0
 	github.com/awnumar/memguard v0.23.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-openapi/runtime v0.29.2
@@ -45,9 +46,12 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/miekg/pkcs11 v1.1.1 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/thales-e-security/pool v0.0.2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.mongodb.org/mongo-driver v1.17.6 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect

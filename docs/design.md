@@ -334,6 +334,10 @@ ironhand server [flags]
 | `--session-storage` | `memory` | Session storage: `memory` or `persistent` |
 | `--session-key` | | Hex-encoded 32-byte wrapping key for persistent session storage |
 | `--session-key-file` | | Path to file containing raw 32-byte wrapping key |
+| `--pki-keystore` | `software` | PKI key store backend: `software` or `pkcs11` |
+| `--pkcs11-module` | | Path to PKCS#11 shared library |
+| `--pkcs11-token-label` | | PKCS#11 token label |
+| `--pkcs11-pin` | | PKCS#11 user PIN |
 | `--webauthn-rp-id` | `localhost` | WebAuthn Relying Party ID (domain) |
 | `--webauthn-rp-origin` | | WebAuthn Relying Party origin (default: `https://localhost:<port>`) |
 | `--webauthn-rp-name` | `IronHand` | WebAuthn Relying Party display name |
@@ -544,7 +548,7 @@ CA state is stored in reserved items prefixed with `__ca_`:
 |---|---|
 | `__ca_state` | CA metadata: subject, validity, next serial number, CRL number, intermediate flag |
 | `__ca_cert` | PEM-encoded CA certificate |
-| `__ca_key` | PEM-encoded CA private key (encrypted by vault field-level encryption) |
+| `__ca_key` | CA private key: PEM-encoded (software) or `PKCS11:<label>` reference (HSM) |
 | `__ca_revocations` | JSON array of revocation entries |
 
 These items are hidden from the regular item listing API and blocked from direct CRUD operations via `isReservedItemID()`.
@@ -560,6 +564,35 @@ These items are hidden from the regular item listing API and blocked from direct
 | `GenerateCRL` | Produce a PEM-encoded CRL containing all revoked certificates |
 | `SignCSR` | Accept a PEM-encoded CSR and issue a signed certificate using the requester's public key |
 
+### KeyStore Architecture
+
+The PKI subsystem abstracts private-key operations through the `pki.KeyStore` interface:
+
+| Method | Description |
+|---|---|
+| `GenerateKey()` | Create a new signing key, return an opaque key ID |
+| `Signer(keyID)` | Return a `crypto.Signer` for the given key |
+| `ExportPEM(keyID)` | Export key material (or a reference string for HSM keys) |
+| `ImportPEM(pemData)` | Import a key from PEM data or a reference string |
+| `Delete(keyID)` | Remove a key from the store |
+
+Two implementations are provided:
+
+| Implementation | Key Storage | Export Behavior | Build Tag |
+|---|---|---|---|
+| `SoftwareKeyStore` | In-memory ECDSA P-256 | Returns PEM-encoded private key | (default) |
+| `PKCS11KeyStore` | PKCS#11 HSM | Returns `PKCS11:<label>` reference string | `pkcs11` |
+
+The PKCS#11 keystore uses a **reference-string strategy**: `ExportPEM` returns a `PKCS11:<label>` string (not actual PEM data), which is stored in the vault's `private_key` field. When `ImportPEM` receives this string, it detects the prefix and looks up the key in the HSM by label. This approach requires no changes to the PKI core logic — the vault transparently stores and retrieves the reference while the actual private key material never leaves the HSM.
+
+The PKCS#11 implementation requires CGo and the `pkcs11` build tag:
+
+```sh
+go build -tags pkcs11 ./cmd/ironhand/
+```
+
+Default builds (without the tag) remain pure Go. The stub implementation returns clear errors directing users to rebuild with the tag.
+
 ### Certificate Item Fields
 
 Each issued certificate is stored as a vault item with these well-known fields:
@@ -571,7 +604,7 @@ Each issued certificate is stored as a vault item with these well-known fields:
 | `serial_number` | Hex-encoded serial number |
 | `not_before` / `not_after` | Validity period (RFC 3339) |
 | `certificate` | PEM-encoded X.509 certificate |
-| `private_key` | PEM-encoded ECDSA private key |
+| `private_key` | PEM-encoded ECDSA private key (software) or `PKCS11:<label>` reference (HSM) |
 | `chain` | PEM bundle of intermediate certificates (optional) |
 | `fingerprint_sha256` | Hex SHA-256 fingerprint |
 | `key_algorithm` | Key algorithm (e.g., `ECDSA P-256`) |
@@ -696,6 +729,31 @@ docker compose up
 
 This starts PostgreSQL 17 and the IronHand server with the PostgreSQL backend configured automatically.
 
+### HSM-Backed PKI (PKCS#11)
+
+```sh
+# Build with PKCS#11 support (requires CGo)
+go build -tags pkcs11 -o ironhand ./cmd/ironhand/
+
+# Start with HSM-backed PKI keys
+ironhand server --port 8443 --data-dir ./data \
+    --pki-keystore pkcs11 \
+    --pkcs11-module /usr/lib/softhsm/libsofthsm2.so \
+    --pkcs11-token-label ironhand \
+    --pkcs11-pin 1234
+```
+
+Or via environment variables:
+
+```sh
+export IRONHAND_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so
+export IRONHAND_PKCS11_TOKEN_LABEL=ironhand
+export IRONHAND_PKCS11_PIN=1234
+ironhand server --pki-keystore pkcs11
+```
+
+When `--pki-keystore=pkcs11` is set, all CA and certificate private keys are generated and held inside the HSM. The vault stores a `PKCS11:<label>` reference string instead of actual key material. See the [README](../README.md) for SoftHSM2 setup instructions.
+
 ### Configuration Summary
 
 | Setting | Flag | Environment Variable | Default |
@@ -713,3 +771,7 @@ This starts PostgreSQL 17 and the IronHand server with the PostgreSQL backend co
 | WebAuthn RP ID | `--webauthn-rp-id` | | `localhost` |
 | WebAuthn RP origin | `--webauthn-rp-origin` | | `https://localhost:<port>` |
 | WebAuthn RP name | `--webauthn-rp-name` | | `IronHand` |
+| PKI key store | `--pki-keystore` | | `software` |
+| PKCS#11 module | `--pkcs11-module` | `IRONHAND_PKCS11_MODULE` | |
+| PKCS#11 token label | `--pkcs11-token-label` | `IRONHAND_PKCS11_TOKEN_LABEL` | |
+| PKCS#11 PIN | `--pkcs11-pin` | `IRONHAND_PKCS11_PIN` | |

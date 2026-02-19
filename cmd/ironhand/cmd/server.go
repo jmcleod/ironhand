@@ -18,6 +18,7 @@ import (
 
 	"github.com/jmcleod/ironhand/api"
 	"github.com/jmcleod/ironhand/internal/util"
+	"github.com/jmcleod/ironhand/pki"
 	"github.com/jmcleod/ironhand/storage"
 	bboltstorage "github.com/jmcleod/ironhand/storage/bbolt"
 	pgstorage "github.com/jmcleod/ironhand/storage/postgres"
@@ -39,6 +40,10 @@ var (
 	webauthnRPName   string
 	sessionKey       string
 	sessionKeyFile   string
+	pkiKeystore      string
+	pkcs11Module     string
+	pkcs11Token      string
+	pkcs11PIN        string
 )
 
 var serverCmd = &cobra.Command{
@@ -110,10 +115,21 @@ var serverCmd = &cobra.Command{
 			return fmt.Errorf("failed to configure webauthn: %w", err)
 		}
 
+		// Configure PKI key store.
+		keyStore, closeKS, err := resolvePKIKeyStore()
+		if err != nil {
+			return fmt.Errorf("PKI key store: %w", err)
+		}
+		defer closeKS()
+
 		// Configure session storage.
 		apiOpts := []api.Option{
 			api.WithHeaderAuth(enableHeaderAuth),
 			api.WithWebAuthn(wa),
+		}
+		if keyStore != nil {
+			apiOpts = append(apiOpts, api.WithKeyStore(keyStore))
+			fmt.Printf("Using PKCS#11 key store (module: %s, token: %s)\n", pkcs11Module, pkcs11Token)
 		}
 		switch sessionStorage {
 		case "memory":
@@ -235,6 +251,10 @@ func init() {
 	serverCmd.Flags().StringVar(&webauthnRPName, "webauthn-rp-name", "IronHand", "WebAuthn Relying Party display name")
 	serverCmd.Flags().StringVar(&sessionKey, "session-key", "", "Hex-encoded 32-byte wrapping key for persistent session storage")
 	serverCmd.Flags().StringVar(&sessionKeyFile, "session-key-file", "", "Path to file containing raw 32-byte wrapping key for persistent session storage")
+	serverCmd.Flags().StringVar(&pkiKeystore, "pki-keystore", "software", "PKI key store backend: software (default) or pkcs11")
+	serverCmd.Flags().StringVar(&pkcs11Module, "pkcs11-module", "", "Path to PKCS#11 shared library (e.g., /usr/lib/softhsm/libsofthsm2.so)")
+	serverCmd.Flags().StringVar(&pkcs11Token, "pkcs11-token-label", "", "PKCS#11 token label")
+	serverCmd.Flags().StringVar(&pkcs11PIN, "pkcs11-pin", "", "PKCS#11 user PIN (also via IRONHAND_PKCS11_PIN env var)")
 }
 
 // resolveSessionWrappingKey resolves the session wrapping key from the
@@ -271,4 +291,56 @@ func resolveSessionWrappingKey() ([]byte, error) {
 	}
 
 	return nil, nil
+}
+
+// resolvePKIKeyStore creates the configured PKI key store. Returns
+// (nil, noop, nil) for the default software store. The caller must
+// call the returned close function when done.
+func resolvePKIKeyStore() (pki.KeyStore, func(), error) {
+	noop := func() {}
+
+	switch pkiKeystore {
+	case "software", "":
+		return nil, noop, nil
+
+	case "pkcs11":
+		module := pkcs11Module
+		if module == "" {
+			module = os.Getenv("IRONHAND_PKCS11_MODULE")
+		}
+		if module == "" {
+			return nil, nil, fmt.Errorf("--pkcs11-module or IRONHAND_PKCS11_MODULE required when --pki-keystore=pkcs11")
+		}
+
+		token := pkcs11Token
+		if token == "" {
+			token = os.Getenv("IRONHAND_PKCS11_TOKEN_LABEL")
+		}
+		if token == "" {
+			return nil, nil, fmt.Errorf("--pkcs11-token-label or IRONHAND_PKCS11_TOKEN_LABEL required when --pki-keystore=pkcs11")
+		}
+
+		pin := pkcs11PIN
+		if pin == "" {
+			pin = os.Getenv("IRONHAND_PKCS11_PIN")
+		}
+		if pin == "" {
+			return nil, nil, fmt.Errorf("--pkcs11-pin or IRONHAND_PKCS11_PIN required when --pki-keystore=pkcs11")
+		}
+
+		cfg := pki.PKCS11Config{
+			ModulePath: module,
+			TokenLabel: token,
+			PIN:        pin,
+		}
+
+		ks, err := pki.NewPKCS11KeyStore(cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to initialize PKCS#11 key store: %w", err)
+		}
+		return ks, func() { _ = ks.Close() }, nil
+
+	default:
+		return nil, nil, fmt.Errorf("unknown pki-keystore: %q (supported: software, pkcs11)", pkiKeystore)
+	}
 }
