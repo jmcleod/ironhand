@@ -2296,3 +2296,39 @@ func TestValidRequestWithinSizeLimitSucceeds(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 }
+
+func TestWithKDFProfile_ValidProfiles(t *testing.T) {
+	for _, name := range []string{"interactive", "moderate", "sensitive"} {
+		t.Run(name, func(t *testing.T) {
+			opt, err := api.WithKDFProfile(name)
+			require.NoError(t, err, "WithKDFProfile(%q) should not error", name)
+			require.NotNil(t, opt)
+		})
+	}
+}
+
+func TestWithKDFProfile_InvalidProfile(t *testing.T) {
+	_, err := api.WithKDFProfile("nonexistent")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown KDF profile")
+}
+
+func TestWithKDFProfile_RegisterSucceeds(t *testing.T) {
+	// Verify registration works with each profile.
+	for _, name := range []string{"interactive", "moderate", "sensitive"} {
+		t.Run(name, func(t *testing.T) {
+			opt, err := api.WithKDFProfile(name)
+			require.NoError(t, err)
+
+			srv := setupServerWithOptions(t, opt)
+			defer srv.Close()
+			client := newClient(t)
+
+			resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", map[string]string{
+				"passphrase": "test-passphrase-long-enough",
+			})
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusCreated, resp.StatusCode)
+		})
+	}
+}

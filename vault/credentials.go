@@ -37,13 +37,15 @@ type CredentialProfile struct {
 }
 
 type credentialsOptions struct {
-	profile *CredentialProfile
+	profile   *CredentialProfile
+	kdfParams *Argon2idParams // override KDF params only (salts are generated)
 }
 
 // CredentialsOption customizes credential creation/opening.
 type CredentialsOption func(*credentialsOptions)
 
 // WithCredentialProfile sets the KDF profile used for credential derivation.
+// Both salts must be non-empty.
 func WithCredentialProfile(profile CredentialProfile) CredentialsOption {
 	return func(o *credentialsOptions) {
 		cp := CredentialProfile{
@@ -55,7 +57,18 @@ func WithCredentialProfile(profile CredentialProfile) CredentialsOption {
 	}
 }
 
-func defaultCredentialProfile() (CredentialProfile, error) {
+// WithCredentialKDFParams overrides only the Argon2id parameters for new
+// credential creation. Fresh random salts are still generated automatically.
+// This is ignored when WithCredentialProfile is also set (full profile takes
+// precedence).
+func WithCredentialKDFParams(params Argon2idParams) CredentialsOption {
+	return func(o *credentialsOptions) {
+		p := params
+		o.kdfParams = &p
+	}
+}
+
+func defaultCredentialProfile(kdfOverride *Argon2idParams) (CredentialProfile, error) {
 	saltPass, err := util.RandomBytes(16)
 	if err != nil {
 		return CredentialProfile{}, fmt.Errorf("generating passphrase salt: %w", err)
@@ -64,8 +77,12 @@ func defaultCredentialProfile() (CredentialProfile, error) {
 	if err != nil {
 		return CredentialProfile{}, fmt.Errorf("generating secret salt: %w", err)
 	}
+	params := crypto.DefaultArgon2idParams()
+	if kdfOverride != nil {
+		params = *kdfOverride
+	}
 	return CredentialProfile{
-		KDFParams:  crypto.DefaultArgon2idParams(),
+		KDFParams:  params,
 		SaltPass:   saltPass,
 		SaltSecret: saltSecret,
 	}, nil
@@ -77,7 +94,7 @@ func profileFromOptions(opts ...CredentialsOption) (CredentialProfile, error) {
 		opt(&o)
 	}
 	if o.profile == nil {
-		return defaultCredentialProfile()
+		return defaultCredentialProfile(o.kdfParams)
 	}
 	if len(o.profile.SaltPass) == 0 || len(o.profile.SaltSecret) == 0 {
 		return CredentialProfile{}, fmt.Errorf("credential profile requires non-empty salts")
@@ -250,12 +267,12 @@ type lockedCredentials struct {
 	SaltSecret []byte         `json:"salt_secret"`
 }
 
-var exportKDFParams = util.Argon2idParams{
-	Time:        3,
-	MemoryKiB:   64 * 1024,
-	Parallelism: 4,
-	KeyLen:      32,
-}
+// exportKDFParams uses the "sensitive" profile for credential export blobs
+// because these are long-lived offline artifacts that may be stored on disk.
+var exportKDFParams = func() util.Argon2idParams {
+	p, _ := util.Argon2idProfile(util.KDFProfileSensitive)
+	return p
+}()
 
 // ExportCredentials encrypts credentials into a portable byte blob protected
 // by the given passphrase. The output format is:

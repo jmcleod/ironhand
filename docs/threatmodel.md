@@ -104,8 +104,21 @@ The Content-Security-Policy `style-src` directive previously included `'unsafe-i
 
 - Evidence: `api/security_headers.go` (`generateCSPNonce`, `CSPNonce`, nonce in CSP header), `web/web.go` (`NonceFunc`, nonce meta tag injection), `web/src/lib/utils.ts` (`getCSPNonce`), `web/src/components/ui/chart.tsx` (nonce on `<style>`), `api/api_test.go` (`TestCSP_NoUnsafeInline`, `TestCSP_ContainsNonce`, `TestCSP_NonceIsUniquePerRequest`, `TestCSP_NonceAvailableInContext`, `TestCSP_TighterDirectives`).
 
+### Argon2id defaults below contemporary hardware targets (`was Low → Addressed`)
+
+The default Argon2id parameters were `Time=1, Memory=64 MiB`, which — while not broken — fell below OWASP Password Storage Cheat Sheet recommended baselines for Argon2id. The fix raises defaults and introduces named profiles with enforced minimums:
+
+- **Default raised** to `Time=3, Memory=64 MiB, Parallelism=4` (the "moderate" profile), aligned with OWASP guidance.
+- **Named profiles** — three deployment-appropriate presets: `interactive` (t=2, m=19 MiB — OWASP minimum), `moderate` (t=3, m=64 MiB — production default), and `sensitive` (t=4, m=128 MiB — high-value secrets).
+- **CLI flag** `--kdf-profile` allows operators to select a profile at server startup. Backup and credential export blobs now use the `sensitive` profile.
+- **Validation** — `ValidateArgon2idParams` enforces minimum thresholds (Time≥1, Memory≥19 MiB, Parallelism≥1) to prevent dangerously weak configurations.
+- **Backward compatibility** — existing vaults are unaffected because KDF parameters are persisted in vault state at creation time. Only newly created vaults and credentials use the updated defaults.
+
+- Evidence: `internal/util/argon2id.go` (`DefaultArgon2idParams`, `Argon2idProfile`, `ValidateArgon2idParams`, minimum constants), `crypto/keys.go` (profile/validation exposure), `vault/credentials.go` (`WithCredentialKDFParams`, `exportKDFParams` → sensitive), `api/handlers.go` (`backupKDFParams` → sensitive), `api/api.go` (`WithKDFProfile`, `kdfParamsForNewVault`), `api/auth_handlers.go` (Register uses configured profile), `cmd/ironhand/cmd/server.go` (`--kdf-profile` flag), `internal/util/util_test.go` (`TestDefaultArgon2idParams_MeetsOWASPMinimums`, `TestArgon2idProfile_*`, `TestValidateArgon2idParams`), `vault/vault_test.go` (`TestVault_BackwardCompat_OldKDFParams`, `TestVault_WithCredentialKDFParams_OverridesDefault`), `api/api_test.go` (`TestWithKDFProfile_*`).
+
 ## Operational Recommendations
 
 1. When deploying behind a reverse proxy, set `--trusted-proxies` to the CIDR ranges of your proxy/load balancer so that rate limiters see real client IPs instead of the proxy's address.
 2. Set `--audit-retention-days` and/or `--audit-max-entries` explicitly in production.
 3. Choose hardware-backed PKI key custody (PKCS#11 or custom KMS backend) for high-assurance CA deployments.
+4. Review the `--kdf-profile` setting. The default `moderate` profile is appropriate for most deployments. Use `sensitive` for environments with high-value secrets where additional derivation latency is acceptable.

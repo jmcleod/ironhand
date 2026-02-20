@@ -592,3 +592,66 @@ func TestVault_StaleSessionRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrStaleSession))
 }
+
+// TestVault_BackwardCompat_OldKDFParams verifies that vaults created with
+// the old default KDF parameters (Time=1, Memory=64MiB) can still be
+// opened after the default was raised to Time=3.
+func TestVault_BackwardCompat_OldKDFParams(t *testing.T) {
+	ctx := t.Context()
+	repo := memory.NewRepository()
+
+	oldParams := Argon2idParams{Time: 1, MemoryKiB: 64 * 1024, Parallelism: 4, KeyLen: 32}
+	creds, err := NewCredentials("test-passphrase",
+		WithCredentialKDFParams(oldParams),
+	)
+	require.NoError(t, err)
+	defer creds.Destroy()
+
+	// Verify the credentials use the old params.
+	assert.Equal(t, oldParams, creds.Profile().KDFParams)
+
+	v := New("compat-test", repo, WithEpochCache(NewMemoryEpochCache()))
+	session, err := v.Create(ctx, creds, WithKDFParams(oldParams))
+	require.NoError(t, err)
+	defer session.Close()
+
+	// Store some data.
+	require.NoError(t, session.Put(ctx, "item1", Fields{"key": []byte("value")}))
+	session.Close()
+
+	// Re-open with the stored profile (which contains old params).
+	openCreds, err := OpenCredentials(
+		creds.SecretKey(),
+		"test-passphrase",
+		creds.MemberID(),
+		creds.PrivateKey(),
+		WithCredentialProfile(creds.Profile()),
+	)
+	require.NoError(t, err)
+
+	session2, err := v.Open(ctx, openCreds)
+	require.NoError(t, err)
+	defer session2.Close()
+
+	// Verify the stored data is intact.
+	fields, err := session2.Get(ctx, "item1")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), fields["key"])
+}
+
+// TestVault_WithCredentialKDFParams_OverridesDefault verifies that
+// WithCredentialKDFParams overrides the default KDF parameters while
+// still generating fresh salts.
+func TestVault_WithCredentialKDFParams_OverridesDefault(t *testing.T) {
+	customParams := Argon2idParams{Time: 5, MemoryKiB: 32 * 1024, Parallelism: 2, KeyLen: 32}
+	creds, err := NewCredentials("test-passphrase",
+		WithCredentialKDFParams(customParams),
+	)
+	require.NoError(t, err)
+	defer creds.Destroy()
+
+	profile := creds.Profile()
+	assert.Equal(t, customParams, profile.KDFParams)
+	assert.NotEmpty(t, profile.SaltPass, "salts should be generated")
+	assert.NotEmpty(t, profile.SaltSecret, "salts should be generated")
+}

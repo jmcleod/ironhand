@@ -16,6 +16,7 @@ import (
 	"github.com/go-openapi/runtime/middleware"
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/pki"
 	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/vault"
@@ -39,8 +40,9 @@ type API struct {
 	webauthn                   *webauthn.WebAuthn
 	webauthnCeremonies         map[string]webauthnCeremonyState
 	webauthnCeremonyMu         sync.Mutex
-	trustedProxies             []netip.Prefix // CIDR ranges for trusted reverse proxies; nil = trust none (fail-safe)
-	auditMu                    vaultMutex     // serialises audit appends per vault
+	trustedProxies             []netip.Prefix       // CIDR ranges for trusted reverse proxies; nil = trust none (fail-safe)
+	kdfParams                  *util.Argon2idParams // nil = use DefaultArgon2idParams(); overridden by --kdf-profile
+	auditMu                    vaultMutex           // serialises audit appends per vault
 	auditMaxAge                time.Duration
 	auditMaxEntries            int
 	auditAppendsSinceRetention atomic.Int64 // counts appends since last retention check
@@ -152,6 +154,32 @@ func WithTrustedProxies(cidrs []string) (Option, error) {
 	return func(a *API) {
 		a.trustedProxies = prefixes
 	}, nil
+}
+
+// WithKDFProfile sets the Argon2id KDF profile used for new vault and
+// credential creation. The profile name must be one of: "interactive",
+// "moderate", "sensitive". When not set, the "moderate" profile is used
+// (Time=3, Memory=64 MiB, Parallelism=4).
+//
+// This does NOT affect existing vaults — they store their KDF parameters
+// in vault state at creation time and continue using those parameters.
+func WithKDFProfile(name string) (Option, error) {
+	p, err := util.Argon2idProfile(name)
+	if err != nil {
+		return nil, err
+	}
+	return func(a *API) {
+		a.kdfParams = &p
+	}, nil
+}
+
+// kdfParamsForNewVault returns the Argon2id parameters to use when creating
+// new vaults or credentials. Returns the configured profile or the default.
+func (a *API) kdfParamsForNewVault() util.Argon2idParams {
+	if a.kdfParams != nil {
+		return *a.kdfParams
+	}
+	return util.DefaultArgon2idParams()
 }
 
 // New creates a new API instance.

@@ -112,6 +112,34 @@ func TestDefaultArgon2idParams(t *testing.T) {
 	if params.MemoryKiB == 0 || params.Time == 0 || params.Parallelism == 0 {
 		t.Errorf("DefaultArgon2idParams returned zeroed params: %+v", params)
 	}
+	// Default must be at least the moderate profile.
+	if params.Time < 3 {
+		t.Errorf("default Time=%d should be at least 3 (moderate profile)", params.Time)
+	}
+	if params.MemoryKiB < 64*1024 {
+		t.Errorf("default MemoryKiB=%d should be at least 64 MiB (moderate profile)", params.MemoryKiB)
+	}
+}
+
+func TestArgon2idProfile_ExposedThroughCryptoPackage(t *testing.T) {
+	p, err := Argon2idProfile(KDFProfileSensitive)
+	if err != nil {
+		t.Fatalf("Argon2idProfile failed: %v", err)
+	}
+	if p.Time < 4 || p.MemoryKiB < 128*1024 {
+		t.Errorf("sensitive profile params too low: %+v", p)
+	}
+}
+
+func TestValidateArgon2idParams_ExposedThroughCryptoPackage(t *testing.T) {
+	p := DefaultArgon2idParams()
+	if err := ValidateArgon2idParams(p); err != nil {
+		t.Errorf("default params should be valid: %v", err)
+	}
+	p.MemoryKiB = 1
+	if err := ValidateArgon2idParams(p); err == nil {
+		t.Error("expected error for extremely low memory")
+	}
 }
 
 func TestGenerateX25519Keypair(t *testing.T) {

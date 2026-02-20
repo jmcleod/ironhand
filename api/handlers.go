@@ -27,14 +27,12 @@ import (
 )
 
 // backupKDFParams are the Argon2id parameters used to derive the encryption key
-// for vault backup files. These match the hardened parameters used for credential
-// export (see vault/credentials.go).
-var backupKDFParams = util.Argon2idParams{
-	Time:        3,
-	MemoryKiB:   64 * 1024,
-	Parallelism: 4,
-	KeyLen:      32,
-}
+// for vault backup files. These use the "sensitive" profile because backups are
+// long-lived offline artifacts that may be stored on external media.
+var backupKDFParams = func() util.Argon2idParams {
+	p, _ := util.Argon2idProfile(util.KDFProfileSensitive)
+	return p
+}()
 
 // isReservedItemID reports whether itemID is reserved for internal use
 // (vault metadata or PKI CA state) and should be blocked from user CRUD.

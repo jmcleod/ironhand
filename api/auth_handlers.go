@@ -53,7 +53,10 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 	a.regIPLimiter.record(clientIP)
 	a.regGlobalLimiter.record()
 
-	creds, err := vault.NewCredentials(req.Passphrase)
+	kdfParams := a.kdfParamsForNewVault()
+	creds, err := vault.NewCredentials(req.Passphrase,
+		vault.WithCredentialKDFParams(kdfParams),
+	)
 	if err != nil {
 		writeInternalError(w, "failed to create account credentials", err)
 		return

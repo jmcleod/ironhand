@@ -91,6 +91,20 @@ type vaultState struct {
 
 The KDF parameters and salts are shared across all vault members, enabling any member with the correct passphrase and secret key to derive the same MUK.
 
+### KDF Profiles
+
+Argon2id parameters are configurable via named profiles selected with the `--kdf-profile` flag:
+
+| Profile | Time | Memory | Parallelism | Use Case |
+|---|---|---|---|---|
+| `interactive` | 2 | 19 MiB | 4 | Development, testing, high-throughput APIs |
+| `moderate` (default) | 3 | 64 MiB | 4 | Production web applications |
+| `sensitive` | 4 | 128 MiB | 4 | CA root keys, backups, credential export |
+
+Enforced minimums prevent dangerously weak configurations: Time≥1, Memory≥19 MiB (OWASP minimum for Argon2id), Parallelism≥1.
+
+KDF parameters are persisted in vault state at creation time — changing the server-side profile does not affect existing vaults.
+
 ## Sessions
 
 ### Session Structure
@@ -341,6 +355,7 @@ ironhand server [flags]
 | `--webauthn-rp-id` | `localhost` | WebAuthn Relying Party ID (domain) |
 | `--webauthn-rp-origin` | | WebAuthn Relying Party origin (default: `https://localhost:<port>`) |
 | `--webauthn-rp-name` | `IronHand` | WebAuthn Relying Party display name |
+| `--kdf-profile` | `moderate` | Argon2id KDF profile for new accounts: `interactive`, `moderate`, `sensitive` |
 | `--audit-retention-days` | `0` | Automatically prune audit entries older than N days (`0` disables) |
 | `--audit-max-entries` | `0` | Automatically keep only newest N audit entries per vault (`0` disables) |
 | `--trusted-proxies` | | Comma-separated CIDR ranges of trusted reverse proxies |
@@ -699,7 +714,7 @@ Vault and Session operations are stateless beyond the Repository interface, so c
 - **Member revocation** — Epoch rotation ensures revoked members lose access to new and re-wrapped data.
 - **Storage rollback** — Epoch cache detects if storage is reverted to a prior state.
 - **Record swapping** — AAD binds ciphertext to its identity (vault, type, ID, epoch, version), preventing substitution.
-- **Brute-force** — Argon2id with configurable memory-hard parameters.
+- **Brute-force** — Argon2id with configurable memory-hard parameters (named profiles: `interactive`, `moderate`, `sensitive`; enforced minimums per OWASP guidance).
 
 ### Not Protected Against
 
@@ -799,6 +814,7 @@ When `--pki-keystore=pkcs11` is set, all CA and certificate private keys are gen
 | PKCS#11 module | `--pkcs11-module` | `IRONHAND_PKCS11_MODULE` | |
 | PKCS#11 token label | `--pkcs11-token-label` | `IRONHAND_PKCS11_TOKEN_LABEL` | |
 | PKCS#11 PIN | `--pkcs11-pin` | `IRONHAND_PKCS11_PIN` | |
+| KDF profile | `--kdf-profile` | | `moderate` |
 | Audit retention (days) | `--audit-retention-days` | | `0` (disabled) |
 | Audit max entries | `--audit-max-entries` | | `0` (disabled) |
 | Trusted proxies | `--trusted-proxies` | | (trust none) |

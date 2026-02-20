@@ -62,9 +62,27 @@ func DeriveMUK(secretKey []byte, passphrase string, opts ...DeriveMUKOption) ([]
 	return util.NewTwoSecretKey(passphrase, options.saltPass, options.params, secretKey, options.saltSecret, options.info)
 }
 
-// DefaultArgon2idParams returns the default Argon2id parameters.
+// Named KDF profiles for different deployment scenarios.
+const (
+	KDFProfileInteractive = util.KDFProfileInteractive // sub-second, dev/testing
+	KDFProfileModerate    = util.KDFProfileModerate    // production default
+	KDFProfileSensitive   = util.KDFProfileSensitive   // high-value secrets
+)
+
+// DefaultArgon2idParams returns the default Argon2id parameters (moderate profile).
 func DefaultArgon2idParams() Argon2idParams {
 	return util.DefaultArgon2idParams()
+}
+
+// Argon2idProfile returns the Argon2idParams for a named profile.
+func Argon2idProfile(name string) (Argon2idParams, error) {
+	return util.Argon2idProfile(name)
+}
+
+// ValidateArgon2idParams checks that the given parameters meet the minimum
+// acceptable thresholds.
+func ValidateArgon2idParams(p Argon2idParams) error {
+	return util.ValidateArgon2idParams(p)
 }
 
 // GenerateX25519Keypair generates a new X25519 key pair for member identity.

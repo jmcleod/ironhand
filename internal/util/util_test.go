@@ -250,3 +250,130 @@ func TestRandom(t *testing.T) {
 		}
 	})
 }
+
+func TestDefaultArgon2idParams_MeetsOWASPMinimums(t *testing.T) {
+	p := DefaultArgon2idParams()
+	if p.Time < 3 {
+		t.Errorf("default Time=%d is below OWASP recommended minimum of 3", p.Time)
+	}
+	if p.MemoryKiB < 64*1024 {
+		t.Errorf("default MemoryKiB=%d is below OWASP recommended minimum of %d (64 MiB)", p.MemoryKiB, 64*1024)
+	}
+	if p.Parallelism < 1 {
+		t.Errorf("default Parallelism=%d must be at least 1", p.Parallelism)
+	}
+	if p.KeyLen != 32 {
+		t.Errorf("default KeyLen=%d must be 32", p.KeyLen)
+	}
+}
+
+func TestArgon2idProfile_AllProfiles(t *testing.T) {
+	profiles := []struct {
+		name      string
+		minTime   uint32
+		minMemKiB uint32
+	}{
+		{KDFProfileInteractive, 2, 19 * 1024},
+		{KDFProfileModerate, 3, 64 * 1024},
+		{KDFProfileSensitive, 4, 128 * 1024},
+	}
+
+	for _, tc := range profiles {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := Argon2idProfile(tc.name)
+			if err != nil {
+				t.Fatalf("Argon2idProfile(%q) failed: %v", tc.name, err)
+			}
+			if p.Time < tc.minTime {
+				t.Errorf("profile %q: Time=%d, want at least %d", tc.name, p.Time, tc.minTime)
+			}
+			if p.MemoryKiB < tc.minMemKiB {
+				t.Errorf("profile %q: MemoryKiB=%d, want at least %d", tc.name, p.MemoryKiB, tc.minMemKiB)
+			}
+			if p.Parallelism < 1 {
+				t.Errorf("profile %q: Parallelism must be at least 1", tc.name)
+			}
+			if p.KeyLen != 32 {
+				t.Errorf("profile %q: KeyLen=%d, want 32", tc.name, p.KeyLen)
+			}
+			// Every profile must pass validation.
+			if err := ValidateArgon2idParams(p); err != nil {
+				t.Errorf("profile %q failed validation: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestArgon2idProfile_UnknownReturnsError(t *testing.T) {
+	_, err := Argon2idProfile("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unknown profile")
+	}
+}
+
+func TestArgon2idProfile_Ordering(t *testing.T) {
+	inter, _ := Argon2idProfile(KDFProfileInteractive)
+	mod, _ := Argon2idProfile(KDFProfileModerate)
+	sens, _ := Argon2idProfile(KDFProfileSensitive)
+
+	// Profiles should be ordered by cost: interactive < moderate < sensitive.
+	if inter.Time > mod.Time || inter.MemoryKiB > mod.MemoryKiB {
+		t.Error("interactive profile should have lower or equal cost than moderate")
+	}
+	if mod.Time > sens.Time || mod.MemoryKiB > sens.MemoryKiB {
+		t.Error("moderate profile should have lower or equal cost than sensitive")
+	}
+}
+
+func TestValidateArgon2idParams(t *testing.T) {
+	t.Run("ValidParams", func(t *testing.T) {
+		p := DefaultArgon2idParams()
+		if err := ValidateArgon2idParams(p); err != nil {
+			t.Errorf("default params should be valid: %v", err)
+		}
+	})
+
+	t.Run("KeyLenNot32", func(t *testing.T) {
+		p := DefaultArgon2idParams()
+		p.KeyLen = 16
+		if err := ValidateArgon2idParams(p); err == nil {
+			t.Error("expected error for KeyLen != 32")
+		}
+	})
+
+	t.Run("TimeTooLow", func(t *testing.T) {
+		p := DefaultArgon2idParams()
+		p.Time = 0
+		if err := ValidateArgon2idParams(p); err == nil {
+			t.Error("expected error for Time=0")
+		}
+	})
+
+	t.Run("MemoryTooLow", func(t *testing.T) {
+		p := DefaultArgon2idParams()
+		p.MemoryKiB = 1024 // 1 MiB — far below 19 MiB minimum
+		if err := ValidateArgon2idParams(p); err == nil {
+			t.Error("expected error for MemoryKiB=1024")
+		}
+	})
+
+	t.Run("ParallelismTooLow", func(t *testing.T) {
+		p := DefaultArgon2idParams()
+		p.Parallelism = 0
+		if err := ValidateArgon2idParams(p); err == nil {
+			t.Error("expected error for Parallelism=0")
+		}
+	})
+
+	t.Run("MinimumAcceptableParams", func(t *testing.T) {
+		p := Argon2idParams{
+			Time:        MinArgon2Time,
+			MemoryKiB:   MinArgon2MemoryKiB,
+			Parallelism: MinArgon2Parallel,
+			KeyLen:      32,
+		}
+		if err := ValidateArgon2idParams(p); err != nil {
+			t.Errorf("minimum acceptable params should be valid: %v", err)
+		}
+	})
+}
