@@ -93,9 +93,9 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:       expiresAt,
 		LastAccessedAt:  time.Now(),
 	})
-	writeSessionCookie(w, r, token, expiresAt)
-	writeSessionSecretCookie(w, r, sessionSecret, expiresAt)
-	writeCSRFCookie(w, r)
+	writeSessionCookie(w, r, token, expiresAt, a.trustedProxies)
+	writeSessionSecretCookie(w, r, sessionSecret, expiresAt, a.trustedProxies)
+	writeCSRFCookie(w, r, a.trustedProxies)
 
 	a.audit.logEvent(AuditRegister, r, record.SecretKeyID)
 	writeJSON(w, http.StatusCreated, RegisterResponse{SecretKey: secretKey})
@@ -205,9 +205,9 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:       expiresAt,
 		LastAccessedAt:  time.Now(),
 	})
-	writeSessionCookie(w, r, token, expiresAt)
-	writeSessionSecretCookie(w, r, sessionSecret, expiresAt)
-	writeCSRFCookie(w, r)
+	writeSessionCookie(w, r, token, expiresAt, a.trustedProxies)
+	writeSessionSecretCookie(w, r, sessionSecret, expiresAt, a.trustedProxies)
+	writeCSRFCookie(w, r, a.trustedProxies)
 
 	a.audit.logEvent(AuditLoginSuccess, r, record.SecretKeyID)
 	writeJSON(w, http.StatusOK, struct{}{})
@@ -341,8 +341,8 @@ func (a *API) Logout(w http.ResponseWriter, r *http.Request) {
 		}
 		a.sessions.Delete(cookie.Value)
 	}
-	clearSessionCookie(w, r)
-	clearCSRFCookie(w, r)
+	clearSessionCookie(w, r, a.trustedProxies)
+	clearCSRFCookie(w, r, a.trustedProxies)
 	a.audit.logEvent(AuditLogout, r, secretKeyID)
 	writeJSON(w, http.StatusOK, struct{}{})
 }

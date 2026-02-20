@@ -353,7 +353,7 @@ The server uses Chi for HTTP routing with middleware:
 
 - `middleware.Logger` — Request logging
 - `middleware.Recoverer` — Panic recovery
-- `SecurityHeaders` — CSP, HSTS, X-Frame-Options, Permissions-Policy, X-Content-Type-Options
+- `SecurityHeaders` — CSP, HSTS (proxy-aware: only trusts forwarded-proto from `--trusted-proxies`), X-Frame-Options, Permissions-Policy, X-Content-Type-Options
 - `noCacheHeaders` — `Cache-Control: no-store` and `Pragma: no-cache` on all API responses (prevents sensitive data caching)
 - `AuthMiddleware` — Session cookie or header-based authentication (header auth disabled by default)
 - `CSRFMiddleware` — Double-submit cookie CSRF protection for mutating requests

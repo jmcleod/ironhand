@@ -1425,7 +1425,7 @@ func TestSecurityHeadersPresent(t *testing.T) {
 	epochCache := vault.NewMemoryEpochCache()
 	a := api.New(repo, epochCache)
 	r := chi.NewRouter()
-	r.Use(api.SecurityHeaders)
+	r.Use(a.SecurityHeaders)
 	r.Mount("/api/v1", a.Router())
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -1530,7 +1530,7 @@ func TestNoCacheHeaders_NotOnHealthEndpoint(t *testing.T) {
 	epochCache := vault.NewMemoryEpochCache()
 	a := api.New(repo, epochCache)
 	r := chi.NewRouter()
-	r.Use(api.SecurityHeaders)
+	r.Use(a.SecurityHeaders)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
 	})

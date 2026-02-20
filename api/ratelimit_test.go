@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/netip"
 	"testing"
@@ -731,4 +732,111 @@ func TestExtractClientIPWithTrustedProxies_NarrowCIDR(t *testing.T) {
 		got := extractClientIPWithProxies(r, trusted)
 		assert.Equal(t, "10.0.0.2", got, "10.0.0.2 is not in 10.0.0.1/32")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// requestIsSecureWithProxies — forwarded-proto trust model
+// ---------------------------------------------------------------------------
+
+func TestRequestIsSecure_DirectTLSAlwaysSecure(t *testing.T) {
+	// When the connection is direct TLS, result is always true regardless of
+	// proxy configuration or headers.
+	r := &http.Request{
+		TLS:        &tls.ConnectionState{},
+		RemoteAddr: "1.2.3.4:443",
+	}
+	assert.True(t, requestIsSecureWithProxies(r, nil))
+}
+
+func TestRequestIsSecure_NoTrustedProxies_IgnoresForwardedProtoHeaders(t *testing.T) {
+	// Without trusted proxies configured (nil/empty), forwarded-proto headers
+	// must be ignored — fail-safe default.
+	t.Run("XForwardedProto", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.1:80",
+			Header:     http.Header{"X-Forwarded-Proto": []string{"https"}},
+		}
+		assert.False(t, requestIsSecureWithProxies(r, nil), "should ignore X-Forwarded-Proto without trusted proxies")
+		assert.False(t, requestIsSecureWithProxies(r, []netip.Prefix{}), "should ignore X-Forwarded-Proto with empty trusted proxies")
+	})
+	t.Run("Forwarded", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.1:80",
+			Header:     http.Header{"Forwarded": []string{"proto=https"}},
+		}
+		assert.False(t, requestIsSecureWithProxies(r, nil), "should ignore Forwarded header without trusted proxies")
+	})
+}
+
+func TestRequestIsSecure_UntrustedPeer_IgnoresForwardedProtoHeaders(t *testing.T) {
+	// Even with trusted proxies configured, a peer outside the trusted range
+	// must not have its forwarded-proto headers honored.
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}
+
+	t.Run("XForwardedProto_UntrustedPeer", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "192.168.1.1:80",
+			Header:     http.Header{"X-Forwarded-Proto": []string{"https"}},
+		}
+		assert.False(t, requestIsSecureWithProxies(r, trusted), "untrusted peer's X-Forwarded-Proto must be ignored")
+	})
+	t.Run("Forwarded_UntrustedPeer", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "192.168.1.1:80",
+			Header:     http.Header{"Forwarded": []string{"proto=https"}},
+		}
+		assert.False(t, requestIsSecureWithProxies(r, trusted), "untrusted peer's Forwarded header must be ignored")
+	})
+}
+
+func TestRequestIsSecure_TrustedPeer_HonorsForwardedProtoHeaders(t *testing.T) {
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}
+
+	t.Run("XForwardedProto_HTTPS", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.5:80",
+			Header:     http.Header{"X-Forwarded-Proto": []string{"https"}},
+		}
+		assert.True(t, requestIsSecureWithProxies(r, trusted))
+	})
+	t.Run("XForwardedProto_HTTP", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.5:80",
+			Header:     http.Header{"X-Forwarded-Proto": []string{"http"}},
+		}
+		assert.False(t, requestIsSecureWithProxies(r, trusted))
+	})
+	t.Run("Forwarded_HTTPS", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.5:80",
+			Header:     http.Header{"Forwarded": []string{"proto=https"}},
+		}
+		assert.True(t, requestIsSecureWithProxies(r, trusted))
+	})
+	t.Run("Forwarded_HTTP", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.5:80",
+			Header:     http.Header{"Forwarded": []string{"proto=http"}},
+		}
+		assert.False(t, requestIsSecureWithProxies(r, trusted))
+	})
+}
+
+func TestRequestIsSecure_TrustedPeer_NoHeaders_NotSecure(t *testing.T) {
+	// Trusted peer but no forwarded-proto headers → not secure (no TLS).
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}
+	r := &http.Request{
+		RemoteAddr: "10.0.0.5:80",
+	}
+	assert.False(t, requestIsSecureWithProxies(r, trusted))
+}
+
+func TestRequestIsSecure_PackageLevelFunction_FailSafe(t *testing.T) {
+	// The package-level requestIsSecure (no proxies) must always ignore
+	// forwarded-proto headers.
+	r := &http.Request{
+		RemoteAddr: "10.0.0.1:80",
+		Header:     http.Header{"X-Forwarded-Proto": []string{"https"}},
+	}
+	assert.False(t, requestIsSecure(r), "package-level requestIsSecure must be fail-safe")
 }

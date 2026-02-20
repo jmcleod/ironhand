@@ -75,6 +75,12 @@ The `GET /pki/crl.pem` endpoint previously called `GenerateCRL` directly, which 
 
 - Evidence: `pki/pki.go` (`LoadCRL`, `storeCRL`, `GenerateCRL` persistence, `InitCA` auto-gen), `api/handlers.go` (`GetCRL` read-only, `GenerateCRL` POST handler, `RevokeCert` auto-regen), `api/api.go` (route table), `api/api_test.go` (`TestCRL_*`), `pki/pki_test.go` (`TestLoadCRL_ReturnsCachedCRL`).
 
+### Forwarded-proto header trust without proxy validation (`was P1 → Addressed`)
+
+`requestIsSecure` previously trusted `X-Forwarded-Proto` and `Forwarded` headers from any peer, allowing an untrusted client to spoof HTTPS status. This influenced the `Secure` flag on session/CSRF cookies and HSTS header emission. The fix applies the same trusted-proxy validation model used for client IP extraction: forwarded-protocol headers are only honored when `--trusted-proxies` is configured AND the request's `RemoteAddr` falls within a trusted CIDR range. A shared `isPeerTrusted` helper (also used by `extractClientIPWithProxies`) enforces the check consistently. `SecurityHeaders` was converted from a standalone function to an `*API` method so it has access to the trusted-proxy configuration.
+
+- Evidence: `api/middleware.go` (`requestIsSecureWithProxies`, `isPeerTrusted`), `api/security_headers.go` (`SecurityHeaders` method), `api/csrf.go` (proxy-aware cookie functions), `api/auth_handlers.go` / `api/webauthn.go` (updated callsites), `api/ratelimit_test.go` (`TestRequestIsSecure_*`).
+
 ### Sensitive data exposure via caching (`was P1 → Addressed`)
 
 All API responses now include `Cache-Control: no-store` and `Pragma: no-cache` headers via the `noCacheHeaders` middleware applied at the API router level. This prevents browsers and intermediate proxies from persisting secret keys, decrypted vault items, private keys, TOTP secrets, and other sensitive data to disk caches. The middleware is scoped to the API router only — non-API routes (health, web UI) are unaffected.

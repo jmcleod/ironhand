@@ -381,9 +381,9 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:       expiresAt,
 		LastAccessedAt:  time.Now(),
 	})
-	writeSessionCookie(w, r, token, expiresAt)
-	writeSessionSecretCookie(w, r, sessionSecret, expiresAt)
-	writeCSRFCookie(w, r)
+	writeSessionCookie(w, r, token, expiresAt, a.trustedProxies)
+	writeSessionSecretCookie(w, r, sessionSecret, expiresAt, a.trustedProxies)
+	writeCSRFCookie(w, r, a.trustedProxies)
 
 	a.audit.logEvent(AuditWebAuthnLoginSuccess, r, record.SecretKeyID)
 	writeJSON(w, http.StatusOK, struct{}{})

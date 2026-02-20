@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -101,8 +102,8 @@ func (a *API) credentialsFromSessionCookie(r *http.Request) (*vault.Credentials,
 	return creds, true
 }
 
-func writeSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
-	secure := requestIsSecure(r)
+func writeSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time, trustedProxies []netip.Prefix) {
+	secure := requestIsSecureWithProxies(r, trustedProxies)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
@@ -114,8 +115,8 @@ func writeSessionCookie(w http.ResponseWriter, r *http.Request, token string, ex
 	})
 }
 
-func writeSessionSecretCookie(w http.ResponseWriter, r *http.Request, secret string, expiresAt time.Time) {
-	secure := requestIsSecure(r)
+func writeSessionSecretCookie(w http.ResponseWriter, r *http.Request, secret string, expiresAt time.Time, trustedProxies []netip.Prefix) {
+	secure := requestIsSecureWithProxies(r, trustedProxies)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionSecretCookieName,
 		Value:    secret,
@@ -127,8 +128,8 @@ func writeSessionSecretCookie(w http.ResponseWriter, r *http.Request, secret str
 	})
 }
 
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	secure := requestIsSecure(r)
+func clearSessionCookie(w http.ResponseWriter, r *http.Request, trustedProxies []netip.Prefix) {
+	secure := requestIsSecureWithProxies(r, trustedProxies)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
@@ -166,14 +167,57 @@ func deriveSessionPassphrase(sessionID, sessionSecret string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func requestIsSecure(r *http.Request) bool {
+// requestIsSecureWithProxies reports whether the original client connection
+// uses TLS.
+//
+// Forwarded-protocol headers (X-Forwarded-Proto, Forwarded) are only honored
+// when trustedProxies is non-empty AND the request's RemoteAddr falls within
+// one of the trusted CIDR ranges — the same trust model used by
+// extractClientIPWithProxies. When trustedProxies is nil or empty (the
+// default), only the direct TLS state (r.TLS) is checked.
+func requestIsSecureWithProxies(r *http.Request, trustedProxies []netip.Prefix) bool {
 	if r.TLS != nil {
 		return true
 	}
+
+	if !isPeerTrusted(r, trustedProxies) {
+		return false
+	}
+
 	if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		return true
 	}
 	return strings.Contains(strings.ToLower(r.Header.Get("Forwarded")), "proto=https")
+}
+
+// requestIsSecure is the package-level convenience function for contexts
+// without an API instance. It trusts no proxy headers and only checks r.TLS
+// (fail-safe default).
+func requestIsSecure(r *http.Request) bool {
+	return requestIsSecureWithProxies(r, nil)
+}
+
+// isPeerTrusted reports whether the request's direct peer (RemoteAddr) falls
+// within one of the configured trusted proxy CIDR ranges. Returns false when
+// trustedProxies is nil or empty (fail-safe default).
+func isPeerTrusted(r *http.Request, trustedProxies []netip.Prefix) bool {
+	if len(trustedProxies) == 0 {
+		return false
+	}
+	remoteIP, _ := parseIPCandidate(r.RemoteAddr)
+	if remoteIP == "" {
+		return false
+	}
+	addr, err := netip.ParseAddr(remoteIP)
+	if err != nil {
+		return false
+	}
+	for _, prefix := range trustedProxies {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func credentialsFromContext(ctx context.Context) *vault.Credentials {

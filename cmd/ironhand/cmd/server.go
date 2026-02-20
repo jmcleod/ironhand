@@ -175,7 +175,7 @@ var serverCmd = &cobra.Command{
 		r := chi.NewRouter()
 		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
-		r.Use(api.SecurityHeaders)
+		r.Use(a.SecurityHeaders)
 
 		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("OK"))

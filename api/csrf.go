@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/jmcleod/ironhand/internal/uuid"
@@ -52,9 +53,9 @@ func (a *API) CSRFMiddleware(next http.Handler) http.Handler {
 // writeCSRFCookie sets the CSRF double-submit cookie. It is intentionally
 // NOT HttpOnly so that the browser-side SPA can read it and include it as a
 // request header on mutating requests.
-func writeCSRFCookie(w http.ResponseWriter, r *http.Request) {
+func writeCSRFCookie(w http.ResponseWriter, r *http.Request, trustedProxies []netip.Prefix) {
 	token := uuid.New()
-	secure := requestIsSecure(r)
+	secure := requestIsSecureWithProxies(r, trustedProxies)
 	http.SetCookie(w, &http.Cookie{
 		Name:     csrfCookieName,
 		Value:    token,
@@ -66,8 +67,8 @@ func writeCSRFCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 // clearCSRFCookie removes the CSRF cookie on logout.
-func clearCSRFCookie(w http.ResponseWriter, r *http.Request) {
-	secure := requestIsSecure(r)
+func clearCSRFCookie(w http.ResponseWriter, r *http.Request, trustedProxies []netip.Prefix) {
+	secure := requestIsSecureWithProxies(r, trustedProxies)
 	http.SetCookie(w, &http.Cookie{
 		Name:     csrfCookieName,
 		Value:    "",

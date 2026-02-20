@@ -415,21 +415,7 @@ func (a *API) extractClientIP(r *http.Request) string {
 func extractClientIPWithProxies(r *http.Request, trustedProxies []netip.Prefix) string {
 	remoteIP, _ := parseIPCandidate(r.RemoteAddr)
 
-	// Determine whether the direct peer is trusted.
-	// Default: trust no proxy headers unless explicitly configured.
-	proxyTrusted := false
-	if len(trustedProxies) > 0 && remoteIP != "" {
-		if addr, err := netip.ParseAddr(remoteIP); err == nil {
-			for _, prefix := range trustedProxies {
-				if prefix.Contains(addr) {
-					proxyTrusted = true
-					break
-				}
-			}
-		}
-	}
-
-	if proxyTrusted {
+	if isPeerTrusted(r, trustedProxies) {
 		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
 			for _, part := range strings.Split(xff, ",") {
 				if ip, ok := parseIPCandidate(part); ok {
