@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,23 +23,25 @@ import (
 
 // API holds the dependencies needed by the REST handlers.
 type API struct {
-	repo               storage.Repository
-	epochCache         vault.EpochCache
-	sessions           SessionStore
-	rateLimiter        *loginRateLimiter
-	ipLimiter          *ipRateLimiter
-	globalLimiter      *globalRateLimiter
-	audit              *auditLogger
-	metrics            *metricsCollector
-	headerAuthEnabled  bool
-	idleTimeout        time.Duration
-	keyStore           pki.KeyStore
-	webauthn           *webauthn.WebAuthn
-	webauthnCeremonies map[string]webauthnCeremonyState
-	webauthnCeremonyMu sync.Mutex
-	auditMu            vaultMutex // serialises audit appends per vault
-	auditMaxAge        time.Duration
-	auditMaxEntries    int
+	repo                       storage.Repository
+	epochCache                 vault.EpochCache
+	sessions                   SessionStore
+	rateLimiter                *loginRateLimiter
+	ipLimiter                  *ipRateLimiter
+	globalLimiter              *globalRateLimiter
+	audit                      *auditLogger
+	metrics                    *metricsCollector
+	headerAuthEnabled          bool
+	idleTimeout                time.Duration
+	keyStore                   pki.KeyStore
+	webauthn                   *webauthn.WebAuthn
+	webauthnCeremonies         map[string]webauthnCeremonyState
+	webauthnCeremonyMu         sync.Mutex
+	trustedProxies             []netip.Prefix // CIDR ranges for trusted reverse proxies
+	auditMu                    vaultMutex     // serialises audit appends per vault
+	auditMaxAge                time.Duration
+	auditMaxEntries            int
+	auditAppendsSinceRetention atomic.Int64 // counts appends since last retention check
 }
 
 // DefaultIdleTimeout is the default session idle timeout (30 minutes).
@@ -115,6 +120,34 @@ func WithAuditRetention(maxAge time.Duration, maxEntries int) Option {
 		a.auditMaxAge = maxAge
 		a.auditMaxEntries = maxEntries
 	}
+}
+
+// WithTrustedProxies configures the CIDR ranges of trusted reverse proxies.
+// When set, proxy headers (X-Forwarded-For, Forwarded, X-Real-IP) are only
+// honored if the request's RemoteAddr falls within one of these ranges.
+// When empty (the default), proxy headers are trusted unconditionally
+// (legacy behaviour).
+func WithTrustedProxies(cidrs []string) (Option, error) {
+	prefixes := make([]netip.Prefix, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			// Try as a bare IP address (add /32 or /128).
+			addr, addrErr := netip.ParseAddr(cidr)
+			if addrErr != nil {
+				return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", cidr, err)
+			}
+			bits := 32
+			if addr.Is6() {
+				bits = 128
+			}
+			prefix = netip.PrefixFrom(addr, bits)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return func(a *API) {
+		a.trustedProxies = prefixes
+	}, nil
 }
 
 // New creates a new API instance.

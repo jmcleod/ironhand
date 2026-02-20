@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -297,4 +298,106 @@ func TestExtractClientIP(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// extractClientIPWithProxies (trusted proxy) tests
+// ---------------------------------------------------------------------------
+
+func TestExtractClientIPWithTrustedProxies(t *testing.T) {
+	trustedCIDR := netip.MustParsePrefix("10.0.0.0/8")
+
+	tests := []struct {
+		name           string
+		remoteAddr     string
+		headers        map[string]string
+		trustedProxies []netip.Prefix
+		want           string
+	}{
+		{
+			name:           "trusted proxy honors XFF",
+			remoteAddr:     "10.0.0.1:80",
+			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
+			trustedProxies: []netip.Prefix{trustedCIDR},
+			want:           "198.51.100.25",
+		},
+		{
+			name:           "untrusted peer ignores XFF",
+			remoteAddr:     "192.168.1.1:80",
+			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
+			trustedProxies: []netip.Prefix{trustedCIDR},
+			want:           "192.168.1.1",
+		},
+		{
+			name:           "untrusted peer ignores Forwarded",
+			remoteAddr:     "192.168.1.1:80",
+			headers:        map[string]string{"Forwarded": "for=198.51.100.25"},
+			trustedProxies: []netip.Prefix{trustedCIDR},
+			want:           "192.168.1.1",
+		},
+		{
+			name:           "untrusted peer ignores X-Real-IP",
+			remoteAddr:     "192.168.1.1:80",
+			headers:        map[string]string{"X-Real-IP": "198.51.100.25"},
+			trustedProxies: []netip.Prefix{trustedCIDR},
+			want:           "192.168.1.1",
+		},
+		{
+			name:           "no trusted proxies configured - legacy trust all",
+			remoteAddr:     "192.168.1.1:80",
+			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
+			trustedProxies: nil,
+			want:           "198.51.100.25",
+		},
+		{
+			name:           "empty trusted proxies - legacy trust all",
+			remoteAddr:     "192.168.1.1:80",
+			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
+			trustedProxies: []netip.Prefix{},
+			want:           "198.51.100.25",
+		},
+		{
+			name:           "trusted proxy with no headers falls back to remote",
+			remoteAddr:     "10.0.0.1:80",
+			trustedProxies: []netip.Prefix{trustedCIDR},
+			want:           "10.0.0.1",
+		},
+		{
+			name:           "multiple CIDRs - second matches",
+			remoteAddr:     "172.16.0.1:80",
+			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
+			trustedProxies: []netip.Prefix{trustedCIDR, netip.MustParsePrefix("172.16.0.0/12")},
+			want:           "198.51.100.25",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &http.Request{RemoteAddr: tt.remoteAddr}
+			r.Header = make(http.Header)
+			for k, v := range tt.headers {
+				r.Header.Set(k, v)
+			}
+			got := extractClientIPWithProxies(r, tt.trustedProxies)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestWithTrustedProxies(t *testing.T) {
+	t.Run("valid CIDRs", func(t *testing.T) {
+		opt, err := WithTrustedProxies([]string{"10.0.0.0/8", "172.16.0.0/12"})
+		require.NoError(t, err)
+		require.NotNil(t, opt)
+	})
+
+	t.Run("bare IP treated as /32", func(t *testing.T) {
+		opt, err := WithTrustedProxies([]string{"10.0.0.1"})
+		require.NoError(t, err)
+		require.NotNil(t, opt)
+	})
+
+	t.Run("invalid CIDR returns error", func(t *testing.T) {
+		_, err := WithTrustedProxies([]string{"not-a-cidr"})
+		require.Error(t, err)
+	})
 }

@@ -343,6 +343,7 @@ ironhand server [flags]
 | `--webauthn-rp-name` | `IronHand` | WebAuthn Relying Party display name |
 | `--audit-retention-days` | `0` | Automatically prune audit entries older than N days (`0` disables) |
 | `--audit-max-entries` | `0` | Automatically keep only newest N audit entries per vault (`0` disables) |
+| `--trusted-proxies` | | Comma-separated CIDR ranges of trusted reverse proxies |
 
 If no TLS certificate is provided, the server generates a self-signed certificate at startup.
 
@@ -779,3 +780,4 @@ When `--pki-keystore=pkcs11` is set, all CA and certificate private keys are gen
 | PKCS#11 PIN | `--pkcs11-pin` | `IRONHAND_PKCS11_PIN` | |
 | Audit retention (days) | `--audit-retention-days` | | `0` (disabled) |
 | Audit max entries | `--audit-max-entries` | | `0` (disabled) |
+| Trusted proxies | `--trusted-proxies` | | (trust all) |

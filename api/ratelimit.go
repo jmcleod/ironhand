@@ -255,51 +255,85 @@ func (rl *globalRateLimiter) recordFailure() {
 // Helper: extract client IP
 // ---------------------------------------------------------------------------
 
-// extractClientIP returns the best-effort client IP address for rate limiting.
+// extractClientIP returns the client IP for rate limiting. It delegates to
+// extractClientIPWithProxies using the API's configured trusted proxies.
+func (a *API) extractClientIP(r *http.Request) string {
+	return extractClientIPWithProxies(r, a.trustedProxies)
+}
+
+// extractClientIPWithProxies returns the best-effort client IP address.
 //
-// Priority:
-// 1. First valid entry in X-Forwarded-For (original client when behind proxies)
+// When trustedProxies is non-empty, proxy headers (X-Forwarded-For,
+// Forwarded, X-Real-IP) are only honored if the request's RemoteAddr
+// falls within one of the trusted CIDR ranges. This prevents untrusted
+// clients from spoofing their source IP via headers.
+//
+// When trustedProxies is empty (the default), the legacy behaviour is
+// preserved: proxy headers are consulted unconditionally.
+//
+// Priority when proxy headers are trusted:
+// 1. First valid entry in X-Forwarded-For
 // 2. First valid "for=" value in Forwarded
 // 3. X-Real-IP
-// 4. RemoteAddr (host[:port], including IPv6)
-//
-// NOTE: Proxy headers are trustworthy only when set by trusted infrastructure.
-// Deployments should ensure direct client traffic cannot spoof them.
-func extractClientIP(r *http.Request) string {
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		for _, part := range strings.Split(xff, ",") {
-			if ip, ok := parseIPCandidate(part); ok {
+// 4. RemoteAddr
+func extractClientIPWithProxies(r *http.Request, trustedProxies []netip.Prefix) string {
+	remoteIP, _ := parseIPCandidate(r.RemoteAddr)
+
+	// Determine whether the direct peer is trusted.
+	proxyTrusted := len(trustedProxies) == 0 // empty = trust all (legacy)
+	if !proxyTrusted && remoteIP != "" {
+		if addr, err := netip.ParseAddr(remoteIP); err == nil {
+			for _, prefix := range trustedProxies {
+				if prefix.Contains(addr) {
+					proxyTrusted = true
+					break
+				}
+			}
+		}
+	}
+
+	if proxyTrusted {
+		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+			for _, part := range strings.Split(xff, ",") {
+				if ip, ok := parseIPCandidate(part); ok {
+					return ip
+				}
+			}
+		}
+
+		if fwd := strings.TrimSpace(r.Header.Get("Forwarded")); fwd != "" {
+			for _, elem := range strings.Split(fwd, ",") {
+				for _, param := range strings.Split(elem, ";") {
+					param = strings.TrimSpace(param)
+					if !strings.HasPrefix(strings.ToLower(param), "for=") {
+						continue
+					}
+					raw := strings.TrimSpace(param[4:])
+					if ip, ok := parseIPCandidate(raw); ok {
+						return ip
+					}
+				}
+			}
+		}
+
+		if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
+			if ip, ok := parseIPCandidate(xrip); ok {
 				return ip
 			}
 		}
 	}
 
-	if fwd := strings.TrimSpace(r.Header.Get("Forwarded")); fwd != "" {
-		for _, elem := range strings.Split(fwd, ",") {
-			for _, param := range strings.Split(elem, ";") {
-				param = strings.TrimSpace(param)
-				if !strings.HasPrefix(strings.ToLower(param), "for=") {
-					continue
-				}
-				raw := strings.TrimSpace(param[4:])
-				if ip, ok := parseIPCandidate(raw); ok {
-					return ip
-				}
-			}
-		}
+	if remoteIP != "" {
+		return remoteIP
 	}
-
-	if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
-		if ip, ok := parseIPCandidate(xrip); ok {
-			return ip
-		}
-	}
-
-	if ip, ok := parseIPCandidate(r.RemoteAddr); ok {
-		return ip
-	}
-
 	return ""
+}
+
+// extractClientIP is the package-level function for use in tests and
+// contexts without an API instance. It uses the legacy behaviour of
+// trusting all proxy headers unconditionally.
+func extractClientIP(r *http.Request) string {
+	return extractClientIPWithProxies(r, nil)
 }
 
 func parseIPCandidate(raw string) (string, bool) {

@@ -6,15 +6,7 @@ Current potential issues identified from the active implementation and deploymen
 
 ## Current Known Potential Issues
 
-### 1) Client IP trust boundary in proxy deployments (`Low`)
-
-`extractClientIP` now correctly parses IPv4/IPv6 and supports `X-Forwarded-For`, `Forwarded`, and `X-Real-IP`, but these headers are only safe when injected by trusted reverse proxies/LBs.
-
-- Impact: if clients can spoof forwarding headers, per-IP rate limiting can be bypassed or distorted.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/api/ratelimit.go`, `/Users/jmcleod/Development/Personal/ironhand/api/ratelimit_test.go`.
-- Mitigation: enforce trusted proxy boundaries and strip/overwrite forwarding headers at the edge.
-
-### 2) Audit retention defaults (`Low`)
+### 1) Audit retention defaults (`Low`)
 
 Audit retention controls exist but default to disabled (`--audit-retention-days=0`, `--audit-max-entries=0`).
 
@@ -22,7 +14,7 @@ Audit retention controls exist but default to disabled (`--audit-retention-days=
 - Evidence: `/Users/jmcleod/Development/Personal/ironhand/cmd/ironhand/cmd/server.go`, `/Users/jmcleod/Development/Personal/ironhand/api/audit_store.go`.
 - Mitigation: set environment-appropriate retention policy in deployment baselines.
 
-### 3) PKI backend portability (`Low`)
+### 2) PKI backend portability (`Low`)
 
 PKCS#11 is implemented for hardware-backed key custody, but cloud KMS backends (AWS/GCP/Azure) are not included in-tree.
 
@@ -30,8 +22,30 @@ PKCS#11 is implemented for hardware-backed key custody, but cloud KMS backends (
 - Evidence: `/Users/jmcleod/Development/Personal/ironhand/pki/keystore.go`, `/Users/jmcleod/Development/Personal/ironhand/pki/keystore_pkcs11.go`.
 - Mitigation: add cloud KMS keystore adapters or provide deployment guidance for external integration.
 
+## Resolved Since Prior Review
+
+### Client IP trust boundary (`was Low → Addressed`)
+
+`--trusted-proxies` flag now restricts forwarded-header trust to configured CIDR ranges. When set, `X-Forwarded-For`, `Forwarded`, and `X-Real-IP` headers are only honored if the direct TCP peer is within a trusted range. The legacy behaviour (trust all) is preserved when the flag is omitted for backward compatibility.
+
+- Evidence: `api/ratelimit.go` (`extractClientIPWithProxies`), `api/ratelimit_test.go` (`TestExtractClientIPWithTrustedProxies`), `cmd/ironhand/cmd/server.go` (`--trusted-proxies` flag).
+
+### WebAuthn ceremony state management (`was P1 → Addressed`)
+
+- Expired/abandoned WebAuthn login ceremonies are now proactively evicted before each new insertion (bounded to `maxCeremonyEntries`).
+- The raw passphrase is no longer stored in ceremony state. Instead, the pre-derived login passphrase (`passphrase:secretKey`) is computed immediately and stored, minimizing the lifetime of plaintext passphrase material in memory.
+- SessionData is stored as the typed `webauthn.SessionData` directly, eliminating unnecessary JSON marshal/unmarshal churn.
+
+- Evidence: `api/webauthn.go` (`evictExpiredCeremoniesLocked`, `webauthnCeremonyState`).
+
+### Audit retention performance (`was P1 → Addressed`)
+
+Retention pruning has been moved from inline (every append) to threshold-triggered: pruning runs every N appends (where N is derived from `auditMaxEntries` or a default of 50). The append path itself is O(1) — it writes only the new entry and chain tip. Timestamps are parsed once during deserialization (`parseCreatedAt`) and reused as `time.Time` values for comparisons, eliminating repeated string parsing.
+
+- Evidence: `api/audit_store.go` (`auditRetentionThreshold`, `auditRetentionCheckThreshold`, `parseCreatedAt`), `api/api.go` (`auditAppendsSinceRetention`).
+
 ## Operational Recommendations
 
-1. Configure trusted reverse-proxy policy for forwarded headers before enabling internet-facing traffic.
+1. Set `--trusted-proxies` to the CIDR ranges of your reverse proxy/load balancer before enabling internet-facing traffic.
 2. Set `--audit-retention-days` and/or `--audit-max-entries` explicitly in production.
 3. Choose hardware-backed PKI key custody (PKCS#11 or custom KMS backend) for high-assurance CA deployments.

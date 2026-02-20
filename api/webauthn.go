@@ -16,6 +16,10 @@ import (
 
 const (
 	webauthnCeremonyTTL = 5 * time.Minute
+	// maxCeremonyEntries is the maximum number of concurrent WebAuthn
+	// login ceremonies allowed. When inserting a new ceremony would exceed
+	// this limit, expired entries are evicted first.
+	maxCeremonyEntries = 1000
 )
 
 // webauthnUser adapts an accountRecord to the webauthn.User interface.
@@ -198,7 +202,7 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Rate-limit checks — same pattern as Login handler.
 	accountID, _ := accountLookupID(req.SecretKey)
-	clientIP := extractClientIP(r)
+	clientIP := a.extractClientIP(r)
 	if blocked, retryAfter := a.globalLimiter.check(); blocked {
 		a.audit.logFailure(AuditLoginRateLimited, r, "global rate limited")
 		writeRateLimited(w, retryAfter)
@@ -232,19 +236,20 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store ceremony state keyed by the challenge to retrieve later.
-	sessionJSON, err := json.Marshal(sessionData)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to serialize ceremony state")
-		return
-	}
+	// Derive the login passphrase immediately and store only the derived
+	// form. The raw passphrase and secret key are combined into the login
+	// passphrase that ImportCredentials needs later. By computing it now
+	// we avoid retaining the plaintext passphrase in ceremony state.
+	loginPassphrase := combineLoginPassphrase(req.Passphrase, req.SecretKey)
 
+	// Evict expired ceremonies before inserting to bound memory usage.
 	a.webauthnCeremonyMu.Lock()
+	a.evictExpiredCeremoniesLocked()
 	a.webauthnCeremonies[sessionData.Challenge] = webauthnCeremonyState{
-		SecretKey:   req.SecretKey,
-		Passphrase:  req.Passphrase,
-		SessionData: string(sessionJSON),
-		ExpiresAt:   time.Now().Add(webauthnCeremonyTTL),
+		SecretKey:       req.SecretKey,
+		LoginPassphrase: loginPassphrase,
+		SessionData:     *sessionData,
+		ExpiresAt:       time.Now().Add(webauthnCeremonyTTL),
 	}
 	a.webauthnCeremonyMu.Unlock()
 
@@ -282,19 +287,13 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Rate-limit recording helpers.
 	accountID, _ := accountLookupID(state.SecretKey)
-	clientIP := extractClientIP(r)
+	clientIP := a.extractClientIP(r)
 	recordLoginFailure := func() {
 		a.globalLimiter.recordFailure()
 		a.ipLimiter.recordFailure(clientIP)
 		if accountID != "" {
 			a.rateLimiter.recordFailure(accountID)
 		}
-	}
-
-	var sessionData webauthn.SessionData
-	if err := json.Unmarshal([]byte(state.SessionData), &sessionData); err != nil {
-		writeError(w, http.StatusInternalServerError, "corrupt ceremony state")
-		return
 	}
 
 	record, err := a.loadAccountRecord(state.SecretKey)
@@ -305,7 +304,7 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	user := newWebAuthnUser(record)
 
-	_, err = a.webauthn.ValidateLogin(user, sessionData, parsedResponse)
+	_, err = a.webauthn.ValidateLogin(user, state.SessionData, parsedResponse)
 	if err != nil {
 		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "webauthn validation failed",
@@ -324,8 +323,7 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	loginPassphrase := combineLoginPassphrase(state.Passphrase, state.SecretKey)
-	creds, err := vault.ImportCredentials(blob, loginPassphrase)
+	creds, err := vault.ImportCredentials(blob, state.LoginPassphrase)
 	if err != nil {
 		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "invalid passphrase (webauthn)",
@@ -364,9 +362,28 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // webauthnCeremonyState holds state for an in-progress WebAuthn login ceremony.
+//
+// The raw passphrase is NOT stored. Instead, LoginPassphrase holds the
+// pre-derived login passphrase (passphrase + ":" + secretKey) which is the
+// minimum material needed for ImportCredentials. This minimises the lifetime
+// and exposure of the plaintext passphrase.
+//
+// SessionData is stored as the typed webauthn.SessionData directly,
+// avoiding unnecessary marshal/unmarshal churn.
 type webauthnCeremonyState struct {
-	SecretKey   string
-	Passphrase  string
-	SessionData string
-	ExpiresAt   time.Time
+	SecretKey       string
+	LoginPassphrase string
+	SessionData     webauthn.SessionData
+	ExpiresAt       time.Time
+}
+
+// evictExpiredCeremoniesLocked removes all expired ceremonies from the map.
+// The caller must hold a.webauthnCeremonyMu.
+func (a *API) evictExpiredCeremoniesLocked() {
+	now := time.Now()
+	for k, v := range a.webauthnCeremonies {
+		if now.After(v.ExpiresAt) {
+			delete(a.webauthnCeremonies, k)
+		}
+	}
 }

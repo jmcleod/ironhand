@@ -48,6 +48,10 @@ const (
 	auditRecordType  = "AUDIT"
 	auditTipType     = "AUDIT_TIP"
 	auditTipRecordID = "tip"
+	// auditRetentionThreshold is the number of appends per vault before
+	// retention is checked. This amortises the cost of reading all entries
+	// over multiple writes.
+	auditRetentionThreshold = 50
 )
 
 type auditAction string
@@ -76,6 +80,22 @@ type auditEntry struct {
 	MemberID  string      `json:"member_id"`
 	CreatedAt string      `json:"created_at"`
 	PrevHash  string      `json:"prev_hash,omitempty"`
+
+	// createdAtTime is the parsed form of CreatedAt, used for comparisons
+	// and sorting. It is not serialised to JSON; it is populated when the
+	// entry is created or deserialised.
+	createdAtTime time.Time
+}
+
+// parseCreatedAt populates createdAtTime from the CreatedAt string.
+func (e *auditEntry) parseCreatedAt() {
+	t, err := time.Parse(time.RFC3339Nano, e.CreatedAt)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, e.CreatedAt)
+	}
+	if err == nil {
+		e.createdAtTime = t
+	}
 }
 
 // auditGenesisHash is the well-known hash used as PrevHash for the first entry.
@@ -107,14 +127,16 @@ func (a *API) appendAuditEntry(session *vault.Session, vaultID, itemID, memberID
 		}
 	}
 
+	now := time.Now().UTC()
 	entry := auditEntry{
-		ID:        uuid.New(),
-		VaultID:   vaultID,
-		ItemID:    itemID,
-		Action:    action,
-		MemberID:  memberID,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		PrevHash:  prevHash,
+		ID:            uuid.New(),
+		VaultID:       vaultID,
+		ItemID:        itemID,
+		Action:        action,
+		MemberID:      memberID,
+		CreatedAt:     now.Format(time.RFC3339Nano),
+		PrevHash:      prevHash,
+		createdAtTime: now,
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
@@ -146,13 +168,35 @@ func (a *API) appendAuditEntry(session *vault.Session, vaultID, itemID, memberID
 		return err
 	}
 
-	// Apply configured retention policy while still holding the per-vault lock.
+	// Check whether retention pruning is needed, but do it on a
+	// threshold basis rather than every write to keep the append path
+	// O(1). The counter is per-API (not per-vault) for simplicity; the
+	// worst case is a slight delay in pruning across vaults.
 	if a.auditMaxAge > 0 || a.auditMaxEntries > 0 {
-		if err := a.enforceAuditRetentionLocked(session, vaultID); err != nil {
-			return err
+		count := a.auditAppendsSinceRetention.Add(1)
+		if count >= int64(a.auditRetentionCheckThreshold()) {
+			a.auditAppendsSinceRetention.Store(0)
+			if err := a.enforceAuditRetentionLocked(session, vaultID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// auditRetentionCheckThreshold returns the number of appends between
+// retention checks. It uses the configured auditMaxEntries as a hint:
+// check at most every max/2 appends, with a floor of auditRetentionThreshold.
+func (a *API) auditRetentionCheckThreshold() int {
+	if a.auditMaxEntries > 0 && a.auditMaxEntries/2 < auditRetentionThreshold {
+		// For very small max-entries settings, check more frequently
+		// so we don't overshoot by too much.
+		if a.auditMaxEntries/2 > 0 {
+			return a.auditMaxEntries / 2
+		}
+		return 1
+	}
+	return auditRetentionThreshold
 }
 
 func (a *API) listAuditEntries(session *vault.Session, vaultID, itemID string) ([]auditEntry, error) {
@@ -183,12 +227,17 @@ func (a *API) listAuditEntries(session *vault.Session, vaultID, itemID string) (
 		if err := json.Unmarshal(data, &entry); err != nil {
 			continue
 		}
+		entry.parseCreatedAt()
 		if itemID != "" && entry.ItemID != itemID {
 			continue
 		}
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool {
+		if !entries[i].createdAtTime.IsZero() && !entries[j].createdAtTime.IsZero() {
+			return entries[i].createdAtTime.After(entries[j].createdAtTime)
+		}
+		// Fall back to string comparison for legacy entries with unparseable timestamps.
 		return entries[i].CreatedAt > entries[j].CreatedAt
 	})
 	return entries, nil
@@ -209,6 +258,9 @@ func (a *API) enforceAuditRetentionLocked(session *vault.Session, vaultID string
 
 	// listAuditEntries returns newest-first. Convert to chronological order.
 	sort.Slice(entries, func(i, j int) bool {
+		if !entries[i].createdAtTime.IsZero() && !entries[j].createdAtTime.IsZero() {
+			return entries[i].createdAtTime.Before(entries[j].createdAtTime)
+		}
 		return entries[i].CreatedAt < entries[j].CreatedAt
 	})
 
@@ -219,12 +271,8 @@ func (a *API) enforceAuditRetentionLocked(session *vault.Session, vaultID string
 		cutoff := time.Now().Add(-a.auditMaxAge)
 		filtered := make([]auditEntry, 0, len(retained))
 		for _, e := range retained {
-			ts, parseErr := time.Parse(time.RFC3339Nano, e.CreatedAt)
-			if parseErr != nil {
-				ts, parseErr = time.Parse(time.RFC3339, e.CreatedAt)
-			}
 			// Keep unparseable legacy entries rather than risk data loss.
-			if parseErr != nil || !ts.Before(cutoff) {
+			if e.createdAtTime.IsZero() || !e.createdAtTime.Before(cutoff) {
 				filtered = append(filtered, e)
 			}
 		}

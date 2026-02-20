@@ -104,7 +104,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	// Derive the account lookup ID for rate-limit tracking.
 	// This is a SHA-256 hash — safe for logs and maps.
 	accountID, _ := accountLookupID(req.SecretKey)
-	clientIP := extractClientIP(r)
+	clientIP := a.extractClientIP(r)
 
 	// Check rate limits before any expensive work: global → IP → per-account.
 	if blocked, retryAfter := a.globalLimiter.check(); blocked {
