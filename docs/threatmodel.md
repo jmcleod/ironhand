@@ -58,6 +58,12 @@ All API handlers now return stable generic messages to clients instead of concat
 
 - Evidence: `api/errors.go` (`writeInternalError`), `api/handlers.go`, `api/auth_handlers.go`, `api/webauthn.go`, `api/models.go` (`CorrelationID`).
 
+### Sensitive data exposure via caching (`was P1 → Addressed`)
+
+All API responses now include `Cache-Control: no-store` and `Pragma: no-cache` headers via the `noCacheHeaders` middleware applied at the API router level. This prevents browsers and intermediate proxies from persisting secret keys, decrypted vault items, private keys, TOTP secrets, and other sensitive data to disk caches. The middleware is scoped to the API router only — non-API routes (health, web UI) are unaffected.
+
+- Evidence: `api/security_headers.go` (`noCacheHeaders`), `api/api.go` (`Router()` middleware chain), `api/api_test.go` (`TestNoCacheHeaders_*`).
+
 ## Operational Recommendations
 
 1. When deploying behind a reverse proxy, set `--trusted-proxies` to the CIDR ranges of your proxy/load balancer so that rate limiters see real client IPs instead of the proxy's address.

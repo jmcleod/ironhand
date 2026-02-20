@@ -163,6 +163,7 @@ IronHand protects against:
 - **Session fixation** — CSRF token rotated on login; idle timeout invalidates stale sessions
 - **Session store compromise** — persistent session encryption key wrapped with external key; session passphrase split across server and client cookie via HMAC-SHA256
 - **IP spoofing via proxy headers** — proxy headers ignored by default; `--trusted-proxies` must be explicitly set to trust forwarded headers from known CIDR ranges
+- **Cache-based data leakage** — all API responses set `Cache-Control: no-store` to prevent browsers and proxies from persisting sensitive data to disk
 
 IronHand does **not** protect against:
 

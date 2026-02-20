@@ -196,6 +196,12 @@ func New(repo storage.Repository, epochCache vault.EpochCache, opts ...Option) *
 func (a *API) Router() chi.Router {
 	r := chi.NewRouter()
 
+	// Prevent caching of all API responses. Auth endpoints return secret
+	// keys, vault endpoints return decrypted items, and PKI endpoints
+	// return private keys — none of this should persist in browser or
+	// proxy caches.
+	r.Use(noCacheHeaders)
+
 	r.Get("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/yaml")
 		w.Write(openapiSpec)

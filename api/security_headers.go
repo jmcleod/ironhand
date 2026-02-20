@@ -20,3 +20,17 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// noCacheHeaders is middleware that prevents caching of API responses.
+// It sets Cache-Control: no-store to prevent browsers and intermediate
+// proxies from persisting sensitive data (secret keys, vault items,
+// credentials, private keys, etc.) to disk.
+//
+// Pragma: no-cache is included for HTTP/1.0 backward compatibility.
+func noCacheHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
+		next.ServeHTTP(w, r)
+	})
+}

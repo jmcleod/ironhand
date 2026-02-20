@@ -1351,6 +1351,110 @@ func TestSecurityHeadersPresent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Cache-Control: no-store tests
+// ---------------------------------------------------------------------------
+
+func TestNoCacheHeaders_OnPublicAPIRoute(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+
+	// The openapi.yaml route is public (no auth needed) but still
+	// inside the API router, so it should get no-cache headers.
+	resp, err := http.Get(srv.URL + "/api/v1/openapi.yaml")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	assert.Equal(t, "no-cache", resp.Header.Get("Pragma"))
+}
+
+func TestNoCacheHeaders_OnAuthEndpoint(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	// Register returns a secret_key — must not be cached.
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", map[string]string{
+		"passphrase": "test-passphrase-nocache",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	assert.Equal(t, "no-cache", resp.Header.Get("Pragma"))
+}
+
+func TestNoCacheHeaders_OnVaultItemRead(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	// Create a vault and item.
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "NoCacheV"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+	resp = doJSON(t, client, http.MethodPost, base+"/items/secret-item", map[string]any{
+		"fields": map[string]string{"password": "super-secret"},
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	// Read the item — response contains decrypted secrets.
+	resp = doJSON(t, client, http.MethodGet, base+"/items/secret-item", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	assert.Equal(t, "no-cache", resp.Header.Get("Pragma"))
+}
+
+func TestNoCacheHeaders_OnErrorResponse(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	// Unauthenticated request to a protected endpoint returns 401.
+	resp := doJSON(t, client, http.MethodGet, srv.URL+"/api/v1/vaults", nil)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+
+	// Even error responses must have no-cache headers to prevent
+	// caching of error bodies that may contain endpoint metadata.
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	assert.Equal(t, "no-cache", resp.Header.Get("Pragma"))
+}
+
+func TestNoCacheHeaders_NotOnHealthEndpoint(t *testing.T) {
+	// The /health endpoint is mounted outside the API router,
+	// so it should NOT get the no-cache headers.
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	a := api.New(repo, epochCache)
+	r := chi.NewRouter()
+	r.Use(api.SecurityHeaders)
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
+	})
+	r.Mount("/api/v1", a.Router())
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/health")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// Health endpoint should NOT have no-cache headers.
+	assert.Empty(t, resp.Header.Get("Cache-Control"), "health endpoint should not have Cache-Control: no-store")
+	assert.Empty(t, resp.Header.Get("Pragma"), "health endpoint should not have Pragma: no-cache")
+}
+
+// ---------------------------------------------------------------------------
 // P1-4: Session idle timeout tests
 // ---------------------------------------------------------------------------
 
