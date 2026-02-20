@@ -262,6 +262,12 @@ func TestCreateAndListVaults(t *testing.T) {
 	require.NotEmpty(t, list.Vaults)
 	assert.Equal(t, create.VaultID, list.Vaults[0].VaultID)
 	assert.Equal(t, "Personal", list.Vaults[0].Name)
+
+	// Verify pagination metadata is present with sensible defaults.
+	assert.Equal(t, 1, list.TotalCount)
+	assert.Equal(t, 100, list.Limit)
+	assert.Equal(t, 0, list.Offset)
+	assert.False(t, list.HasMore)
 }
 
 func TestVaultCRUD(t *testing.T) {
@@ -305,6 +311,12 @@ func TestVaultCRUD(t *testing.T) {
 	assert.Equal(t, "item-1", list.Items[0].ItemID)
 	assert.Equal(t, "item-1", list.Items[0].Name)
 	assert.Equal(t, "custom", list.Items[0].Type)
+
+	// Verify pagination metadata.
+	assert.Equal(t, 1, list.TotalCount)
+	assert.Equal(t, 100, list.Limit)
+	assert.Equal(t, 0, list.Offset)
+	assert.False(t, list.HasMore)
 }
 
 func TestAuditLogTracksItemAccessAndModification(t *testing.T) {
@@ -353,6 +365,12 @@ func TestAuditLogTracksItemAccessAndModification(t *testing.T) {
 	var auditResp api.ListAuditLogsResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&auditResp))
 	require.GreaterOrEqual(t, len(auditResp.Entries), 4)
+
+	// Verify pagination metadata.
+	assert.GreaterOrEqual(t, auditResp.TotalCount, 4)
+	assert.Equal(t, 100, auditResp.Limit)
+	assert.Equal(t, 0, auditResp.Offset)
+	assert.False(t, auditResp.HasMore)
 
 	actions := make(map[string]bool)
 	for _, e := range auditResp.Entries {
@@ -2331,4 +2349,155 @@ func TestWithKDFProfile_RegisterSucceeds(t *testing.T) {
 			assert.Equal(t, http.StatusCreated, resp.StatusCode)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Pagination integration tests
+// ---------------------------------------------------------------------------
+
+func TestListItemsPagination(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	// Create a vault with 5 items.
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "PaginationTest",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+
+	for i := 0; i < 5; i++ {
+		itemID := fmt.Sprintf("item-%d", i)
+		r := doJSON(t, client, http.MethodPost, base+"/items/"+itemID, map[string]any{
+			"fields": map[string]string{"_name": itemID, "_type": "login"},
+		})
+		defer r.Body.Close()
+		require.Equal(t, http.StatusCreated, r.StatusCode)
+	}
+
+	t.Run("default returns all with metadata", func(t *testing.T) {
+		resp := doJSON(t, client, http.MethodGet, base+"/items", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var list api.ListItemsResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+		assert.Len(t, list.Items, 5)
+		assert.Equal(t, 5, list.TotalCount)
+		assert.Equal(t, 100, list.Limit)
+		assert.Equal(t, 0, list.Offset)
+		assert.False(t, list.HasMore)
+	})
+
+	t.Run("limit=2 offset=0", func(t *testing.T) {
+		resp := doJSON(t, client, http.MethodGet, base+"/items?limit=2&offset=0", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var list api.ListItemsResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+		assert.Len(t, list.Items, 2)
+		assert.Equal(t, 5, list.TotalCount)
+		assert.Equal(t, 2, list.Limit)
+		assert.Equal(t, 0, list.Offset)
+		assert.True(t, list.HasMore)
+	})
+
+	t.Run("limit=2 offset=4 partial last page", func(t *testing.T) {
+		resp := doJSON(t, client, http.MethodGet, base+"/items?limit=2&offset=4", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var list api.ListItemsResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+		assert.Len(t, list.Items, 1)
+		assert.Equal(t, 5, list.TotalCount)
+		assert.Equal(t, 2, list.Limit)
+		assert.Equal(t, 4, list.Offset)
+		assert.False(t, list.HasMore)
+	})
+
+	t.Run("offset beyond total returns empty", func(t *testing.T) {
+		resp := doJSON(t, client, http.MethodGet, base+"/items?limit=2&offset=100", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var list api.ListItemsResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+		assert.Empty(t, list.Items)
+		assert.Equal(t, 5, list.TotalCount)
+		assert.False(t, list.HasMore)
+	})
+}
+
+func TestListAuditLogsPagination(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{
+		"name": "AuditPagination",
+	})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+
+	// Generate audit entries by creating several items.
+	for i := 0; i < 5; i++ {
+		itemID := fmt.Sprintf("audit-item-%d", i)
+		r := doJSON(t, client, http.MethodPost, base+"/items/"+itemID, map[string]any{
+			"fields": map[string]string{"_name": itemID},
+		})
+		defer r.Body.Close()
+		require.Equal(t, http.StatusCreated, r.StatusCode)
+	}
+
+	// Fetch all audit entries (default pagination).
+	resp = doJSON(t, client, http.MethodGet, base+"/audit", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var fullList api.ListAuditLogsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&fullList))
+	totalEntries := fullList.TotalCount
+	require.GreaterOrEqual(t, totalEntries, 5)
+
+	t.Run("paginated subset", func(t *testing.T) {
+		resp := doJSON(t, client, http.MethodGet, base+"/audit?limit=2&offset=0", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var list api.ListAuditLogsResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+		assert.Len(t, list.Entries, 2)
+		assert.Equal(t, totalEntries, list.TotalCount)
+		assert.True(t, list.HasMore)
+	})
+
+	t.Run("item_id filter with pagination", func(t *testing.T) {
+		resp := doJSON(t, client, http.MethodGet, base+"/audit?item_id=audit-item-0&limit=1&offset=0", nil)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var list api.ListAuditLogsResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+		// total_count should reflect the filtered count for audit-item-0.
+		assert.GreaterOrEqual(t, list.TotalCount, 1)
+		assert.LessOrEqual(t, list.TotalCount, totalEntries)
+		for _, e := range list.Entries {
+			assert.Equal(t, "audit-item-0", e.ItemID)
+		}
+	})
 }

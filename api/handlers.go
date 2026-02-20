@@ -200,8 +200,14 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 	}
 	items = filtered
 
-	summaries := make([]ItemSummary, 0, len(items))
-	for _, itemID := range items {
+	// Paginate the ID list before fetching metadata to avoid
+	// loading every item's fields for large vaults.
+	limit, offset := parsePagination(r)
+	start, end, pgMeta := paginateSlice(len(items), limit, offset)
+	page := items[start:end]
+
+	summaries := make([]ItemSummary, 0, len(page))
+	for _, itemID := range page {
 		fields, err := session.Get(r.Context(), itemID)
 		if err != nil {
 			continue
@@ -221,7 +227,7 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, ListItemsResponse{Items: summaries})
+	writeJSON(w, http.StatusOK, ListItemsResponse{Items: summaries, PaginationMeta: pgMeta})
 }
 
 // PutItem handles POST /vaults/{vaultID}/items/{itemID}.
@@ -419,8 +425,14 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(idx.VaultIDs)
 
-	result := make([]VaultSummary, 0, len(idx.VaultIDs))
-	for _, vaultID := range idx.VaultIDs {
+	// Paginate the vault ID list before opening sessions to avoid
+	// the cost of opening every vault's session and reading metadata.
+	limit, offset := parsePagination(r)
+	start, end, pgMeta := paginateSlice(len(idx.VaultIDs), limit, offset)
+	pageIDs := idx.VaultIDs[start:end]
+
+	result := make([]VaultSummary, 0, len(pageIDs))
+	for _, vaultID := range pageIDs {
 		session, err := a.openSession(r.Context(), vaultID, creds)
 		if err != nil {
 			// The vault may have been deleted or access revoked — skip it.
@@ -428,10 +440,10 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		meta := vaultMetadata{}
+		vmeta := vaultMetadata{}
 		metaFields, err := session.Get(r.Context(), vaultMetadataItemID)
 		if err == nil {
-			meta = decodeVaultMetadata(metaFields)
+			vmeta = decodeVaultMetadata(metaFields)
 		} else if !errors.Is(err, storage.ErrNotFound) {
 			slog.Debug("list vaults: metadata read failed", "vault_id", vaultID, "error", err)
 		}
@@ -452,14 +464,14 @@ func (a *API) ListVaults(w http.ResponseWriter, r *http.Request) {
 		}
 		result = append(result, VaultSummary{
 			VaultID:     vaultID,
-			Name:        meta.Name,
-			Description: meta.Description,
+			Name:        vmeta.Name,
+			Description: vmeta.Description,
 			Epoch:       epoch,
 			ItemCount:   count,
 		})
 	}
 
-	writeJSON(w, http.StatusOK, ListVaultsResponse{Vaults: result})
+	writeJSON(w, http.StatusOK, ListVaultsResponse{Vaults: result, PaginationMeta: pgMeta})
 }
 
 // DeleteVault handles DELETE /vaults/{vaultID}.
@@ -674,8 +686,14 @@ func (a *API) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	resp := make([]AuditEntryResponse, 0, len(entries))
-	for _, entry := range entries {
+
+	// Paginate the already-sorted entries.
+	limit, offset := parsePagination(r)
+	start, end, pgMeta := paginateSlice(len(entries), limit, offset)
+	page := entries[start:end]
+
+	resp := make([]AuditEntryResponse, 0, len(page))
+	for _, entry := range page {
 		resp = append(resp, AuditEntryResponse{
 			ID:        entry.ID,
 			ItemID:    entry.ItemID,
@@ -685,7 +703,7 @@ func (a *API) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, ListAuditLogsResponse{Entries: resp})
+	writeJSON(w, http.StatusOK, ListAuditLogsResponse{Entries: resp, PaginationMeta: pgMeta})
 }
 
 // ExportAuditLog handles GET /vaults/{vaultID}/audit/export.

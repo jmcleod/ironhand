@@ -66,11 +66,13 @@ type VaultSummary struct {
 // ListVaultsResponse is returned from GET /vaults.
 type ListVaultsResponse struct {
 	Vaults []VaultSummary `json:"vaults"`
+	PaginationMeta
 }
 
 // ListItemsResponse is returned from GET /vaults/{vaultID}/items.
 type ListItemsResponse struct {
 	Items []ItemSummary `json:"items"`
+	PaginationMeta
 }
 
 // ItemSummary is returned in vault item listings.
@@ -148,6 +150,7 @@ type AuditEntryResponse struct {
 // ListAuditLogsResponse is returned from GET /vaults/{vaultID}/audit.
 type ListAuditLogsResponse struct {
 	Entries []AuditEntryResponse `json:"entries"`
+	PaginationMeta
 }
 
 // ExportAuditEntryResponse extends AuditEntryResponse with the chain hash.

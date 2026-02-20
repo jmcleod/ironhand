@@ -34,7 +34,44 @@ components:
       schema:
         type: string
 
+    PaginationLimit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return (default 100, max 200).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 100
+
+    PaginationOffset:
+      name: offset
+      in: query
+      required: false
+      description: Number of items to skip for pagination.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
   schemas:
+    PaginationMeta:
+      type: object
+      properties:
+        total_count:
+          type: integer
+          description: Total number of items matching the query.
+        limit:
+          type: integer
+          description: Maximum items per page (server-capped at 200).
+        offset:
+          type: integer
+          description: Number of items skipped.
+        has_more:
+          type: boolean
+          description: Whether more items exist beyond this page.
+
     CreateVaultRequest:
       type: object
       properties:
@@ -195,20 +232,24 @@ components:
           type: integer
 
     ListVaultsResponse:
-      type: object
-      properties:
-        vaults:
-          type: array
-          items:
-            $ref: '#/components/schemas/VaultSummary'
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          properties:
+            vaults:
+              type: array
+              items:
+                $ref: '#/components/schemas/VaultSummary'
 
     ListItemsResponse:
-      type: object
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/ItemSummary'
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ItemSummary'
 
     ItemSummary:
       type: object
@@ -342,12 +383,14 @@ components:
           format: date-time
 
     ListAuditLogsResponse:
-      type: object
-      properties:
-        entries:
-          type: array
-          items:
-            $ref: '#/components/schemas/AuditEntryResponse'
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          properties:
+            entries:
+              type: array
+              items:
+                $ref: '#/components/schemas/AuditEntryResponse'
 
     ErrorResponse:
       type: object
@@ -772,6 +815,9 @@ paths:
       operationId: listVaults
       security:
         - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PaginationLimit'
+        - $ref: '#/components/parameters/PaginationOffset'
       responses:
         '200':
           description: Vault list
@@ -842,6 +888,8 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/PaginationLimit'
+        - $ref: '#/components/parameters/PaginationOffset'
       responses:
         '200':
           description: List of item IDs
@@ -1073,6 +1121,8 @@ paths:
           required: false
           schema:
             type: string
+        - $ref: '#/components/parameters/PaginationLimit'
+        - $ref: '#/components/parameters/PaginationOffset'
       responses:
         '200':
           description: Audit log entries (newest first)

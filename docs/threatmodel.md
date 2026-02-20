@@ -129,6 +129,20 @@ Several authentication paths created and passed sensitive secrets as Go `string`
 
 - Evidence: `api/middleware.go` (`combineLoginPassphrase`, `deriveSessionPassphrase` → `*memguard.LockedBuffer`, `credentialsFromSessionCookie` uses `ImportCredentialsBytes`), `api/webauthn.go` (`webauthnCeremonyState` fields → `*memguard.Enclave`), `vault/credentials.go` (`ExportCredentialsBytes`, `ImportCredentialsBytes`), `api/auth_handlers.go` (all handlers use locked buffers + string zeroing), `api/handlers.go` (`defer util.WipeBytes(plaintext)` in Export/Import), `api/totp.go` (wipe decoded secret + HMAC sum), `api/session_store_memory.go` (field zeroing on Delete), `api/session_store_persistent.go` (wipe decrypted data), `vault/credentials_test.go` (`TestExportImportCredentialsBytes_*`), `api/webauthn_test.go` (`TestCeremonyState_SecretsInEnclaves`).
 
+### API listing endpoints lack pagination/limits (`was Medium → Addressed`)
+
+Three listing endpoints (`ListItems`, `ListVaults`, `ListAuditLogs`) returned unbounded result sets, violating OWASP API4 (Unrestricted Resource Consumption) and ASVS V13. A malicious or careless client could exhaust server resources by requesting lists from vaults with thousands of items or large audit histories.
+
+The fix adds offset-based pagination with server-side caps:
+
+- **Shared pagination helper** — `parsePagination` reads `limit`/`offset` query parameters, defaulting to 100 items per page with a hard cap of 200. `paginateSlice` computes slice bounds and populates `PaginationMeta` (total_count, limit, offset, has_more).
+- **ListItems** — Paginates the filtered item ID list *before* fetching per-item metadata, avoiding the N+1 cost for items outside the requested page.
+- **ListVaults** — Paginates the sorted vault ID list *before* opening sessions, avoiding the cost of opening every vault's session.
+- **ListAuditLogs** — Paginates the sorted entry list *after* `listAuditEntries` returns (full decrypt+sort is required before pagination). The internal helper remains unpaginated for callers that need full lists (ExportAuditLog, enforceAuditRetentionLocked).
+- **Backward compatible** — Existing clients that omit pagination parameters receive the first 100 items plus additive metadata fields they can ignore.
+
+- Evidence: `api/pagination.go` (helper), `api/handlers.go` (ListItems, ListVaults, ListAuditLogs), `api/models.go` (PaginationMeta embedded), `api/openapi.yaml` (spec updated), `api/pagination_test.go` (unit tests), `api/api_test.go` (integration tests).
+
 ## Operational Recommendations
 
 1. When deploying behind a reverse proxy, set `--trusted-proxies` to the CIDR ranges of your proxy/load balancer so that rate limiters see real client IPs instead of the proxy's address.
