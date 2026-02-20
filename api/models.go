@@ -170,7 +170,8 @@ type ExportAuditLogResponse struct {
 
 // ErrorResponse is returned for all error cases.
 type ErrorResponse struct {
-	Error string `json:"error"`
+	Error         string `json:"error"`
+	CorrelationID string `json:"correlation_id,omitempty"`
 }
 
 // ExportVaultRequest is the JSON body for POST /vaults/{vaultID}/export.

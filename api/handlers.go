@@ -115,7 +115,7 @@ func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
 
 	var req CreateVaultRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -239,7 +239,7 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 
 	var req PutItemRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -252,7 +252,7 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 
 	fields, err := fieldsFromAPI(req.Fields)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, "invalid item fields")
 		return
 	}
 	if err := session.Put(r.Context(), itemID, fields); err != nil {
@@ -352,7 +352,7 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 
 	var req UpdateItemRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -365,7 +365,7 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 
 	fields, err := fieldsFromAPI(req.Fields)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, "invalid item fields")
 		return
 	}
 	if err := session.Update(r.Context(), itemID, fields); err != nil {
@@ -507,7 +507,7 @@ func (a *API) AddMember(w http.ResponseWriter, r *http.Request) {
 
 	var req AddMemberRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -526,7 +526,7 @@ func (a *API) AddMember(w http.ResponseWriter, r *http.Request) {
 
 	pubKeyBytes, err := base64.StdEncoding.DecodeString(req.PubKey)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid base64 pub_key: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid base64 pub_key")
 		return
 	}
 	if len(pubKeyBytes) != 32 {
@@ -764,7 +764,7 @@ func (a *API) ExportVault(w http.ResponseWriter, r *http.Request) {
 
 	var req ExportVaultRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Passphrase == "" {
@@ -876,7 +876,7 @@ func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
 
 	// Parse multipart form (50 MB limit).
 	if err := r.ParseMultipartForm(50 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid multipart form: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid multipart form")
 		return
 	}
 
@@ -888,14 +888,14 @@ func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
 
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "file is required: "+err.Error())
+		writeError(w, http.StatusBadRequest, "file is required")
 		return
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(io.LimitReader(file, 50<<20))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to read file: "+err.Error())
+		writeError(w, http.StatusBadRequest, "failed to read file")
 		return
 	}
 
@@ -927,7 +927,7 @@ func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
 
 	var payload vaultExportPayload
 	if err := json.Unmarshal(plaintext, &payload); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid backup format: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid backup format")
 		return
 	}
 	if payload.FormatVersion != 1 {
@@ -1060,7 +1060,7 @@ func (a *API) InitCA(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "vault is already initialized as a CA")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, "failed to initialize CA", err)
 		return
 	}
 
@@ -1094,7 +1094,7 @@ func (a *API) GetCAInfo(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "vault is not initialized as a CA")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, "failed to retrieve CA info", err)
 		return
 	}
 
@@ -1128,7 +1128,7 @@ func (a *API) GetCACert(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "vault is not initialized as a CA")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, "failed to retrieve CA certificate", err)
 		return
 	}
 
@@ -1202,7 +1202,7 @@ func (a *API) IssueCert(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "vault is not initialized as a CA")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, "failed to issue certificate", err)
 		return
 	}
 
@@ -1259,7 +1259,7 @@ func (a *API) RevokeCert(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, pki.ErrCertAlreadyRevoked):
 			writeError(w, http.StatusConflict, "certificate is already revoked")
 		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeInternalError(w, "failed to revoke certificate", err)
 		}
 		return
 	}
@@ -1309,7 +1309,7 @@ func (a *API) RenewCert(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, pki.ErrNotCertificateItem):
 			writeError(w, http.StatusBadRequest, "item is not a certificate")
 		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeInternalError(w, "failed to renew certificate", err)
 		}
 		return
 	}
@@ -1348,7 +1348,7 @@ func (a *API) GetCRL(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "vault is not initialized as a CA")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, "failed to generate CRL", err)
 		return
 	}
 
@@ -1400,7 +1400,7 @@ func (a *API) SignCSR(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "vault is not initialized as a CA")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, "failed to sign CSR", err)
 		return
 	}
 

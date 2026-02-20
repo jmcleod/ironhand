@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
+	"github.com/jmcleod/ironhand/internal/uuid"
 	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/vault"
 )
@@ -25,6 +27,21 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, ErrorResponse{Error: msg})
 }
 
+// writeInternalError logs the full error detail server-side with a unique
+// correlation ID, then returns a generic error message to the client along
+// with the correlation ID so operators can match user reports to log entries.
+func writeInternalError(w http.ResponseWriter, msg string, err error) {
+	corrID := uuid.New()
+	slog.Error(msg,
+		slog.String("correlation_id", corrID),
+		slog.String("error", err.Error()),
+	)
+	writeJSON(w, http.StatusInternalServerError, ErrorResponse{
+		Error:         msg,
+		CorrelationID: corrID,
+	})
+}
+
 func mapError(w http.ResponseWriter, err error) {
 	if _, ok := errors.AsType[vault.UnauthorizedError](err); ok {
 		writeError(w, http.StatusForbidden, "forbidden")
@@ -35,15 +52,17 @@ func mapError(w http.ResponseWriter, err error) {
 		return
 	}
 	if _, ok := errors.AsType[vault.SessionClosedError](err); ok {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeInternalError(w, "internal server error", err)
 		return
 	}
 	if _, ok := errors.AsType[vault.RollbackError](err); ok {
 		writeError(w, http.StatusConflict, "rollback detected")
 		return
 	}
-	if _, ok := errors.AsType[vault.ValidationError](err); ok {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if ve, ok := errors.AsType[vault.ValidationError](err); ok {
+		// ValidationError messages describe user-input violations (e.g.
+		// "field X is required") and are safe to return to the client.
+		writeError(w, http.StatusBadRequest, ve.Error())
 		return
 	}
 	if _, ok := errors.AsType[vault.VaultExistsError](err); ok {
@@ -59,6 +78,6 @@ func mapError(w http.ResponseWriter, err error) {
 	case errors.Is(err, storage.ErrCASFailed):
 		writeError(w, http.StatusConflict, "conflict")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeInternalError(w, "internal server error", err)
 	}
 }

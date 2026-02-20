@@ -88,7 +88,7 @@ func (a *API) BeginWebAuthnRegistration(w http.ResponseWriter, r *http.Request) 
 	user := newWebAuthnUser(record)
 	options, sessionData, err := a.webauthn.BeginRegistration(user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to begin webauthn registration: "+err.Error())
+		writeInternalError(w, "failed to begin webauthn registration", err)
 		return
 	}
 
@@ -148,7 +148,9 @@ func (a *API) FinishWebAuthnRegistration(w http.ResponseWriter, r *http.Request)
 
 	credential, err := a.webauthn.FinishRegistration(user, sessionData, r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "webauthn registration failed: "+err.Error())
+		slog.Warn("webauthn registration failed",
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusBadRequest, "webauthn registration failed")
 		return
 	}
 
@@ -188,7 +190,7 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		Passphrase string `json:"passphrase"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.SecretKey == "" {
@@ -232,7 +234,7 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	user := newWebAuthnUser(record)
 	options, sessionData, err := a.webauthn.BeginLogin(user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to begin webauthn login: "+err.Error())
+		writeInternalError(w, "failed to begin webauthn login", err)
 		return
 	}
 
@@ -267,7 +269,7 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	// Parse the credential assertion to extract the challenge.
 	parsedResponse, err := protocol.ParseCredentialRequestResponseBody(r.Body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid webauthn response: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid webauthn response")
 		return
 	}
 
@@ -308,8 +310,9 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "webauthn validation failed",
-			slog.String("account_id", record.SecretKeyID))
-		writeError(w, http.StatusUnauthorized, "webauthn login failed: "+err.Error())
+			slog.String("account_id", record.SecretKeyID),
+			slog.String("error", err.Error()))
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 

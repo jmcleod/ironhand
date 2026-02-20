@@ -25,7 +25,7 @@ const (
 func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Passphrase == "" {
@@ -39,7 +39,7 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 
 	creds, err := vault.NewCredentials(req.Passphrase)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create account credentials: "+err.Error())
+		writeInternalError(w, "failed to create account credentials", err)
 		return
 	}
 	defer creds.Destroy()
@@ -48,7 +48,7 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 	loginPassphrase := combineLoginPassphrase(req.Passphrase, secretKey)
 	exported, err := vault.ExportCredentials(creds, loginPassphrase)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to export account credentials: "+err.Error())
+		writeInternalError(w, "failed to export account credentials", err)
 		return
 	}
 	record := accountRecord{
@@ -89,7 +89,7 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Passphrase == "" {
@@ -255,7 +255,7 @@ func (a *API) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 
 	var req EnableTwoFactorRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
