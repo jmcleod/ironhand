@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useVault } from '@/contexts/VaultContext';
 import { Fingerprint, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -16,18 +16,28 @@ const SAVED_SECRET_KEY_KEY = 'ironhand_saved_secret_key';
 export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
   const { unlock, unlockWithPasskey } = useVault();
   const { toast } = useToast();
-  const [secretKey, setSecretKey] = useState(() => localStorage.getItem(SAVED_SECRET_KEY_KEY) ?? '');
+  // Use sessionStorage (not localStorage) so the secret key is cleared when the
+  // browser tab/window closes.  This limits the XSS blast radius: an attacker
+  // that achieves script execution can only read the key while the tab is open,
+  // not after the user has left.
+  const [secretKey, setSecretKey] = useState(() => sessionStorage.getItem(SAVED_SECRET_KEY_KEY) ?? '');
   const [passphrase, setPassphrase] = useState('');
   const [totpCode, setTotpCode] = useState('');
   const [rememberKey, setRememberKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
 
+  // One-time migration: clear any secret key previously stored in localStorage
+  // by the old implementation to avoid leaving it on disk indefinitely.
+  useEffect(() => {
+    try { localStorage.removeItem(SAVED_SECRET_KEY_KEY); } catch { /* storage access may be denied */ }
+  }, []);
+
   const handleRememberKey = () => {
     if (rememberKey) {
-      localStorage.setItem(SAVED_SECRET_KEY_KEY, secretKey.trim());
+      sessionStorage.setItem(SAVED_SECRET_KEY_KEY, secretKey.trim());
     } else {
-      localStorage.removeItem(SAVED_SECRET_KEY_KEY);
+      sessionStorage.removeItem(SAVED_SECRET_KEY_KEY);
     }
   };
 
@@ -94,11 +104,18 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
               inputMode="numeric"
               className="bg-muted border-border font-mono"
             />
-            <div className="flex items-center gap-2">
-              <Checkbox id="remember-key" checked={rememberKey} onCheckedChange={v => setRememberKey(v === true)} />
-              <label htmlFor="remember-key" className="text-sm text-muted-foreground">
-                Remember secret key on this device
-              </label>
+            <div>
+              <div className="flex items-center gap-2">
+                <Checkbox id="remember-key" checked={rememberKey} onCheckedChange={v => setRememberKey(v === true)} />
+                <label htmlFor="remember-key" className="text-sm text-muted-foreground">
+                  Remember secret key for this session
+                </label>
+              </div>
+              {rememberKey && (
+                <p className="text-xs text-muted-foreground/70 mt-1 ml-6">
+                  Key is kept in memory until this tab is closed. It is not written to disk, but could be read by malicious scripts (XSS).
+                </p>
+              )}
             </div>
             <Button className="w-full" onClick={handleUnlock} disabled={anyLoading || !secretKey || !passphrase}>
               {loading ? 'Logging in...' : 'Login'}

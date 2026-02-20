@@ -58,6 +58,12 @@ All API handlers now return stable generic messages to clients instead of concat
 
 - Evidence: `api/errors.go` (`writeInternalError`), `api/handlers.go`, `api/auth_handlers.go`, `api/webauthn.go`, `api/models.go` (`CorrelationID`).
 
+### WebUI secret key storage scope (`was Low → Addressed`)
+
+The "Remember secret key" checkbox previously persisted the secret key in `localStorage`, which survives browser restarts and is accessible to any script running on the same origin indefinitely. This has been changed to `sessionStorage`, which is scoped to the browser tab lifetime — the key is automatically cleared when the tab or window closes. A one-time migration (`useEffect`) removes any key previously stored in `localStorage`. When the checkbox is enabled, an inline risk warning is displayed to the user explaining that the key could be read by malicious scripts (XSS) while the tab is open.
+
+- Evidence: `web/src/pages/UnlockPage.tsx` (`sessionStorage`, migration `useEffect`, risk warning text).
+
 ### Sensitive data exposure via caching (`was P1 → Addressed`)
 
 All API responses now include `Cache-Control: no-store` and `Pragma: no-cache` headers via the `noCacheHeaders` middleware applied at the API router level. This prevents browsers and intermediate proxies from persisting secret keys, decrypted vault items, private keys, TOTP secrets, and other sensitive data to disk caches. The middleware is scoped to the API router only — non-API routes (health, web UI) are unaffected.
