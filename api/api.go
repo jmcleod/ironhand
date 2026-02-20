@@ -39,7 +39,7 @@ type API struct {
 	webauthn                   *webauthn.WebAuthn
 	webauthnCeremonies         map[string]webauthnCeremonyState
 	webauthnCeremonyMu         sync.Mutex
-	trustedProxies             []netip.Prefix // CIDR ranges for trusted reverse proxies
+	trustedProxies             []netip.Prefix // CIDR ranges for trusted reverse proxies; nil = trust none (fail-safe)
 	auditMu                    vaultMutex     // serialises audit appends per vault
 	auditMaxAge                time.Duration
 	auditMaxEntries            int
@@ -125,10 +125,12 @@ func WithAuditRetention(maxAge time.Duration, maxEntries int) Option {
 }
 
 // WithTrustedProxies configures the CIDR ranges of trusted reverse proxies.
-// When set, proxy headers (X-Forwarded-For, Forwarded, X-Real-IP) are only
-// honored if the request's RemoteAddr falls within one of these ranges.
-// When empty (the default), proxy headers are trusted unconditionally
-// (legacy behaviour).
+// Proxy headers (X-Forwarded-For, Forwarded, X-Real-IP) are only honored
+// if the request's RemoteAddr falls within one of these ranges.
+//
+// When not configured (the default), proxy headers are never consulted and
+// the TCP peer address (RemoteAddr) is always used. This fail-safe default
+// prevents IP spoofing when the server is deployed without a reverse proxy.
 func WithTrustedProxies(cidrs []string) (Option, error) {
 	prefixes := make([]netip.Prefix, 0, len(cidrs))
 	for _, cidr := range cidrs {

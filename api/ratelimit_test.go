@@ -357,6 +357,9 @@ func TestRegGlobalLimiter_SlidingWindowExpiry(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExtractClientIP(t *testing.T) {
+	// The package-level extractClientIP passes nil trustedProxies, which
+	// means proxy headers are NEVER trusted (fail-safe default). Only
+	// RemoteAddr is used.
 	tests := []struct {
 		name       string
 		remoteAddr string
@@ -374,36 +377,28 @@ func TestExtractClientIP(t *testing.T) {
 			want:       "::1",
 		},
 		{
-			name:       "xff first valid wins",
+			name:       "xff ignored without trusted proxies",
 			remoteAddr: "10.0.0.1:80",
 			headers: map[string]string{
 				"X-Forwarded-For": "198.51.100.25, 203.0.113.9",
 			},
-			want: "198.51.100.25",
+			want: "10.0.0.1",
 		},
 		{
-			name:       "xff skips invalid entries",
-			remoteAddr: "10.0.0.1:80",
-			headers: map[string]string{
-				"X-Forwarded-For": "unknown, not-an-ip, 203.0.113.7",
-			},
-			want: "203.0.113.7",
-		},
-		{
-			name:       "forwarded fallback",
+			name:       "forwarded ignored without trusted proxies",
 			remoteAddr: "10.0.0.1:80",
 			headers: map[string]string{
 				"Forwarded": `for=198.51.100.1;proto=https;by=203.0.113.43`,
 			},
-			want: "198.51.100.1",
+			want: "10.0.0.1",
 		},
 		{
-			name:       "x-real-ip fallback",
+			name:       "x-real-ip ignored without trusted proxies",
 			remoteAddr: "10.0.0.1:80",
 			headers: map[string]string{
 				"X-Real-IP": "203.0.113.11",
 			},
-			want: "203.0.113.11",
+			want: "10.0.0.1",
 		},
 		{
 			name:       "empty when nothing parseable",
@@ -467,18 +462,18 @@ func TestExtractClientIPWithTrustedProxies(t *testing.T) {
 			want:           "192.168.1.1",
 		},
 		{
-			name:           "no trusted proxies configured - legacy trust all",
+			name:           "no trusted proxies configured - trust none (fail-safe)",
 			remoteAddr:     "192.168.1.1:80",
 			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
 			trustedProxies: nil,
-			want:           "198.51.100.25",
+			want:           "192.168.1.1",
 		},
 		{
-			name:           "empty trusted proxies - legacy trust all",
+			name:           "empty trusted proxies - trust none (fail-safe)",
 			remoteAddr:     "192.168.1.1:80",
 			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
 			trustedProxies: []netip.Prefix{},
-			want:           "198.51.100.25",
+			want:           "192.168.1.1",
 		},
 		{
 			name:           "trusted proxy with no headers falls back to remote",
@@ -681,7 +676,7 @@ func TestAPIExtractClientIP_MethodWithTrustedProxies(t *testing.T) {
 }
 
 func TestAPIExtractClientIP_MethodWithoutTrustedProxies(t *testing.T) {
-	a := &API{} // trustedProxies is nil — legacy behavior
+	a := &API{} // trustedProxies is nil — fail-safe: trust no proxy headers
 
 	r := &http.Request{
 		RemoteAddr: "192.168.1.1:80",
@@ -690,7 +685,7 @@ func TestAPIExtractClientIP_MethodWithoutTrustedProxies(t *testing.T) {
 		},
 	}
 	got := a.extractClientIP(r)
-	assert.Equal(t, "198.51.100.25", got, "should trust headers with no proxy config (legacy)")
+	assert.Equal(t, "192.168.1.1", got, "should ignore proxy headers when no trusted proxies configured")
 }
 
 func TestExtractClientIPWithTrustedProxies_SpoofAttempt(t *testing.T) {

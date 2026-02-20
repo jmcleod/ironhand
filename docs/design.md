@@ -797,4 +797,4 @@ When `--pki-keystore=pkcs11` is set, all CA and certificate private keys are gen
 | PKCS#11 PIN | `--pkcs11-pin` | `IRONHAND_PKCS11_PIN` | |
 | Audit retention (days) | `--audit-retention-days` | | `0` (disabled) |
 | Audit max entries | `--audit-max-entries` | | `0` (disabled) |
-| Trusted proxies | `--trusted-proxies` | | (trust all) |
+| Trusted proxies | `--trusted-proxies` | | (trust none) |

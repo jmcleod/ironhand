@@ -26,7 +26,7 @@ PKCS#11 is implemented for hardware-backed key custody, but cloud KMS backends (
 
 ### Client IP trust boundary (`was Low → Addressed`)
 
-`--trusted-proxies` flag now restricts forwarded-header trust to configured CIDR ranges. When set, `X-Forwarded-For`, `Forwarded`, and `X-Real-IP` headers are only honored if the direct TCP peer is within a trusted range. The legacy behaviour (trust all) is preserved when the flag is omitted for backward compatibility.
+`--trusted-proxies` flag controls forwarded-header trust. Proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`) are only honored if (1) trusted proxies are explicitly configured AND (2) the direct TCP peer falls within a trusted CIDR range. When `--trusted-proxies` is not set (the default), proxy headers are never consulted and `RemoteAddr` is always used — a fail-safe default aligned with OWASP guidance (A05: Security Misconfiguration).
 
 - Evidence: `api/ratelimit.go` (`extractClientIPWithProxies`), `api/ratelimit_test.go` (`TestExtractClientIPWithTrustedProxies`), `cmd/ironhand/cmd/server.go` (`--trusted-proxies` flag).
 
@@ -58,6 +58,6 @@ All API handlers now return stable generic messages to clients instead of concat
 
 ## Operational Recommendations
 
-1. Set `--trusted-proxies` to the CIDR ranges of your reverse proxy/load balancer before enabling internet-facing traffic.
+1. When deploying behind a reverse proxy, set `--trusted-proxies` to the CIDR ranges of your proxy/load balancer so that rate limiters see real client IPs instead of the proxy's address.
 2. Set `--audit-retention-days` and/or `--audit-max-entries` explicitly in production.
 3. Choose hardware-backed PKI key custody (PKCS#11 or custom KMS backend) for high-assurance CA deployments.

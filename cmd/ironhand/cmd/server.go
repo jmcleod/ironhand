@@ -140,6 +140,8 @@ var serverCmd = &cobra.Command{
 			}
 			apiOpts = append(apiOpts, proxyOpt)
 			fmt.Printf("Trusted proxy CIDRs: %v\n", trustedProxies)
+		} else {
+			fmt.Println("No trusted proxies configured — proxy headers (X-Forwarded-For, etc.) will be ignored")
 		}
 		if keyStore != nil {
 			apiOpts = append(apiOpts, api.WithKeyStore(keyStore))
@@ -271,7 +273,7 @@ func init() {
 	serverCmd.Flags().StringVar(&pkcs11PIN, "pkcs11-pin", "", "PKCS#11 user PIN (also via IRONHAND_PKCS11_PIN env var)")
 	serverCmd.Flags().IntVar(&auditRetentionDays, "audit-retention-days", 0, "Automatically prune per-vault audit entries older than this many days (0 disables)")
 	serverCmd.Flags().IntVar(&auditMaxEntries, "audit-max-entries", 0, "Automatically keep only the newest N per-vault audit entries (0 disables)")
-	serverCmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxies", nil, "CIDR ranges of trusted reverse proxies (e.g., 10.0.0.0/8,172.16.0.0/12); proxy headers are only honored from these sources")
+	serverCmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxies", nil, "CIDR ranges of trusted reverse proxies (e.g., 10.0.0.0/8,172.16.0.0/12); proxy headers are ignored unless this is set")
 }
 
 // resolveSessionWrappingKey resolves the session wrapping key from the

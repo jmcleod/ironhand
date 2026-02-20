@@ -162,7 +162,7 @@ IronHand protects against:
 - **Credential leakage** — header-based auth disabled by default; private keys redacted in API responses
 - **Session fixation** — CSRF token rotated on login; idle timeout invalidates stale sessions
 - **Session store compromise** — persistent session encryption key wrapped with external key; session passphrase split across server and client cookie via HMAC-SHA256
-- **IP spoofing via proxy headers** — `--trusted-proxies` restricts forwarded header trust to configured CIDR ranges
+- **IP spoofing via proxy headers** — proxy headers ignored by default; `--trusted-proxies` must be explicitly set to trust forwarded headers from known CIDR ranges
 
 IronHand does **not** protect against:
 
@@ -195,13 +195,15 @@ MFA setup routes share the registration per-IP limiter to prevent TOTP secret ge
 
 #### Trusted Proxies
 
-By default, proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`) are trusted unconditionally for client IP extraction. In production behind a reverse proxy, configure `--trusted-proxies` to restrict header trust to known infrastructure:
+By default, proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`) are **ignored** and the TCP peer address (`RemoteAddr`) is always used for client IP extraction. This fail-safe default prevents IP spoofing when the server is deployed directly or without a properly configured reverse proxy.
+
+When deploying behind a reverse proxy, configure `--trusted-proxies` so that rate limiters see real client IPs:
 
 ```sh
 ironhand server --trusted-proxies 10.0.0.0/8,172.16.0.0/12
 ```
 
-When configured, proxy headers are only honored if the request originates from one of the specified CIDR ranges. Requests from other sources use the TCP peer address directly, preventing IP spoofing via headers.
+When configured, proxy headers are only honored if the request originates from one of the specified CIDR ranges. Requests from other sources still use the TCP peer address directly.
 
 ### Session Management
 

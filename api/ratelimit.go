@@ -397,13 +397,15 @@ func (a *API) extractClientIP(r *http.Request) string {
 
 // extractClientIPWithProxies returns the best-effort client IP address.
 //
-// When trustedProxies is non-empty, proxy headers (X-Forwarded-For,
-// Forwarded, X-Real-IP) are only honored if the request's RemoteAddr
-// falls within one of the trusted CIDR ranges. This prevents untrusted
-// clients from spoofing their source IP via headers.
+// Proxy headers (X-Forwarded-For, Forwarded, X-Real-IP) are only honored
+// if trustedProxies is non-empty AND the request's RemoteAddr falls within
+// one of the trusted CIDR ranges. This prevents untrusted clients from
+// spoofing their source IP via headers.
 //
-// When trustedProxies is empty (the default), the legacy behaviour is
-// preserved: proxy headers are consulted unconditionally.
+// When trustedProxies is nil or empty (the default), proxy headers are
+// never consulted and RemoteAddr is always returned. This fail-safe
+// default is the OWASP-aligned behaviour — to trust proxy headers, the
+// operator must explicitly configure --trusted-proxies.
 //
 // Priority when proxy headers are trusted:
 // 1. First valid entry in X-Forwarded-For
@@ -414,8 +416,9 @@ func extractClientIPWithProxies(r *http.Request, trustedProxies []netip.Prefix) 
 	remoteIP, _ := parseIPCandidate(r.RemoteAddr)
 
 	// Determine whether the direct peer is trusted.
-	proxyTrusted := len(trustedProxies) == 0 // empty = trust all (legacy)
-	if !proxyTrusted && remoteIP != "" {
+	// Default: trust no proxy headers unless explicitly configured.
+	proxyTrusted := false
+	if len(trustedProxies) > 0 && remoteIP != "" {
 		if addr, err := netip.ParseAddr(remoteIP); err == nil {
 			for _, prefix := range trustedProxies {
 				if prefix.Contains(addr) {
@@ -464,8 +467,8 @@ func extractClientIPWithProxies(r *http.Request, trustedProxies []netip.Prefix) 
 }
 
 // extractClientIP is the package-level function for use in tests and
-// contexts without an API instance. It uses the legacy behaviour of
-// trusting all proxy headers unconditionally.
+// contexts without an API instance. It trusts no proxy headers and
+// always returns RemoteAddr (fail-safe default).
 func extractClientIP(r *http.Request) string {
 	return extractClientIPWithProxies(r, nil)
 }
