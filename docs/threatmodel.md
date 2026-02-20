@@ -81,6 +81,12 @@ The `GET /pki/crl.pem` endpoint previously called `GenerateCRL` directly, which 
 
 - Evidence: `api/middleware.go` (`requestIsSecureWithProxies`, `isPeerTrusted`), `api/security_headers.go` (`SecurityHeaders` method), `api/csrf.go` (proxy-aware cookie functions), `api/auth_handlers.go` / `api/webauthn.go` (updated callsites), `api/ratelimit_test.go` (`TestRequestIsSecure_*`).
 
+### Revoke-cert handler accepted malformed JSON (`was P1 → Addressed`)
+
+The `POST /pki/items/{itemID}/revoke` handler previously caught all `json.Decode` errors with a blanket fallback to `reason = "unspecified"`, silently accepting malformed JSON, unknown fields, and oversized bodies. This masked client bugs and bypassed request validation. The fix distinguishes intentionally empty bodies (`io.EOF`) — which are allowed as a convenience — from actual errors: malformed JSON and unknown fields return 400, oversized bodies return 413.
+
+- Evidence: `api/handlers.go` (`RevokeCert` decode error handling), `api/api_test.go` (`TestRevokeCert_EmptyBodyDefaultsToUnspecified`, `TestRevokeCert_MalformedJSONReturns400`, `TestRevokeCert_UnknownFieldReturns400`, `TestRevokeCert_OversizedBodyReturns413`).
+
 ### Sensitive data exposure via caching (`was P1 → Addressed`)
 
 All API responses now include `Cache-Control: no-store` and `Pragma: no-cache` headers via the `noCacheHeaders` middleware applied at the API router level. This prevents browsers and intermediate proxies from persisting secret keys, decrypted vault items, private keys, TOTP secrets, and other sensitive data to disk caches. The middleware is scoped to the API router only — non-API routes (health, web UI) are unaffected.

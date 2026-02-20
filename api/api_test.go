@@ -960,6 +960,85 @@ func TestPKIRevokeCert(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 }
 
+// initCAAndIssueCert is a test helper that creates a CA, issues one cert,
+// and returns the item ID of the issued certificate.
+func initCAAndIssueCert(t *testing.T, client *http.Client, base string) string {
+	t.Helper()
+	doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
+		"common_name":    "Test CA",
+		"validity_years": 10,
+	})
+	resp := doJSON(t, client, http.MethodPost, base+"/pki/issue", map[string]any{
+		"common_name":   "leaf.example.com",
+		"validity_days": 365,
+	})
+	defer resp.Body.Close()
+	var issueResp api.IssueCertResponse
+	json.NewDecoder(resp.Body).Decode(&issueResp)
+	return issueResp.ItemID
+}
+
+// TestRevokeCert_EmptyBodyDefaultsToUnspecified verifies that sending an empty
+// body (no JSON at all) is accepted and defaults the reason to "unspecified".
+func TestRevokeCert_EmptyBodyDefaultsToUnspecified(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+	itemID := initCAAndIssueCert(t, client, base)
+
+	// POST with completely empty body (Content-Length: 0).
+	resp := doRaw(t, client, http.MethodPost, base+"/pki/items/"+itemID+"/revoke", "application/json", nil)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+// TestRevokeCert_MalformedJSONReturns400 verifies that malformed JSON is
+// rejected with 400 instead of silently falling through.
+func TestRevokeCert_MalformedJSONReturns400(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+	_ = initCAAndIssueCert(t, client, base)
+
+	resp := doRaw(t, client, http.MethodPost, base+"/pki/items/fake-id/revoke", "application/json", []byte(`{invalid json`))
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestRevokeCert_UnknownFieldReturns400 verifies that unknown JSON fields
+// are rejected (DisallowUnknownFields).
+func TestRevokeCert_UnknownFieldReturns400(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+	_ = initCAAndIssueCert(t, client, base)
+
+	resp := doRaw(t, client, http.MethodPost, base+"/pki/items/fake-id/revoke", "application/json", []byte(`{"reason":"superseded","bogus":"field"}`))
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+// TestRevokeCert_OversizedBodyReturns413 verifies that an oversized body
+// is rejected with 413.
+func TestRevokeCert_OversizedBodyReturns413(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+	_ = initCAAndIssueCert(t, client, base)
+
+	// maxSmallBodySize is 64KB; build a valid-looking JSON body that
+	// exceeds the limit so MaxBytesReader triggers before decode completes.
+	padding := strings.Repeat("x", 128*1024)
+	oversized := []byte(`{"reason":"` + padding + `"}`)
+	resp := doRaw(t, client, http.MethodPost, base+"/pki/items/fake-id/revoke", "application/json", oversized)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
 func TestPKIRenewCert(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()

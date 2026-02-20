@@ -1228,7 +1228,18 @@ func (a *API) RevokeCert(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		// Allow empty body (defaults to unspecified reason).
+		// An empty body (io.EOF) is intentionally allowed — it defaults
+		// the reason to "unspecified". Any other decode error (malformed
+		// JSON, unknown fields, oversized body) is rejected.
+		if !errors.Is(err, io.EOF) {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			} else {
+				writeError(w, http.StatusBadRequest, "invalid request body")
+			}
+			return
+		}
 		req.Reason = "unspecified"
 	}
 
