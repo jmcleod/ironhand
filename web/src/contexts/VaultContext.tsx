@@ -23,6 +23,7 @@ import {
   finishWebAuthnRegistration as apiFinishWebAuthnRegistration,
   beginWebAuthnLogin as apiBeginWebAuthnLogin,
   finishWebAuthnLogin as apiFinishWebAuthnLogin,
+  type ApiError,
 } from '@/lib/api';
 import { generateId } from '@/lib/crypto';
 import { FIELD_CREATED, FIELD_NAME, FIELD_TYPE, FIELD_UPDATED, ItemType, Vault, VaultItem } from '@/types/vault';
@@ -133,7 +134,11 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         setJustRegistered(false);
         await refresh();
         return true;
-      } catch {
+      } catch (err) {
+        // Surface passkey_required so the UI can guide the user.
+        if ((err as ApiError).message === 'passkey_required') {
+          throw err;
+        }
         return false;
       }
     },

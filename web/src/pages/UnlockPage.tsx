@@ -43,17 +43,35 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
 
   const handleUnlock = async () => {
     setLoading(true);
-    const success = await unlock(secretKey.trim(), passphrase, totpCode);
-    setLoading(false);
-    if (!success) {
+    try {
+      const success = await unlock(secretKey.trim(), passphrase, totpCode);
+      if (!success) {
+        toast({
+          title: 'Login Failed',
+          description: 'Invalid credentials or one-time code.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      handleRememberKey();
+    } catch (err) {
+      const msg = (err as { message?: string }).message;
+      if (msg === 'passkey_required') {
+        toast({
+          title: 'Passkey Required',
+          description: 'This account has a passkey enabled. Please use "Sign in with Passkey" below.',
+          variant: 'destructive',
+        });
+        return;
+      }
       toast({
         title: 'Login Failed',
-        description: 'Invalid credentials or one-time code.',
+        description: 'An unexpected error occurred.',
         variant: 'destructive',
       });
-      return;
+    } finally {
+      setLoading(false);
     }
-    handleRememberKey();
   };
 
   const handlePasskeyLogin = async () => {

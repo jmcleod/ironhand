@@ -172,6 +172,17 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+
+	// Enforce passkey login when WebAuthn credentials are registered.
+	// Password-based login is not permitted once a passkey has been set up.
+	if len(record.WebAuthnCredentials) > 0 {
+		recordLoginFailure()
+		a.audit.logFailure(AuditLoginFailure, r, "passkey required, password login rejected",
+			slog.String("account_id", record.SecretKeyID))
+		writeError(w, http.StatusForbidden, "passkey_required")
+		return
+	}
+
 	if record.TOTPEnabled && !verifyTOTPCode(record.TOTPSecret, req.TOTPCode, time.Now()) {
 		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "invalid totp code",
