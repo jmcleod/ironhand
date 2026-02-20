@@ -64,6 +64,17 @@ The "Remember secret key" checkbox previously persisted the secret key in `local
 
 - Evidence: `web/src/pages/UnlockPage.tsx` (`sessionStorage`, migration `useEffect`, risk warning text).
 
+### GET CRL endpoint mutated CA state / CSRF bypass (`was P1 → Addressed`)
+
+The `GET /pki/crl.pem` endpoint previously called `GenerateCRL` directly, which increments the CA's `CRLNumber` and persists it — a state-mutating operation. Because the CSRF middleware exempts safe methods (GET, HEAD, OPTIONS), this mutation could be triggered by a cross-site request (e.g. `<img src=".../crl.pem">`). The fix separates read and write:
+
+- **`GET /pki/crl.pem`** — now read-only; calls `pki.LoadCRL()` to return the most recently cached CRL without mutating any state. No CRLNumber increment, no CA state write.
+- **`POST /pki/crl`** — new endpoint; calls `pki.GenerateCRL()` (state-mutating, increments CRLNumber). Protected by CSRF middleware on mutating methods.
+- **Auto-generation** — `InitCA` generates and caches CRL #1 automatically so GET works immediately. `RevokeCert` auto-regenerates the cached CRL so it always reflects the latest revocation state.
+- **Backward compatibility** — cached CRL is stored in a new reserved item (`__ca_crl`). For vaults initialised before this change, the first `POST /crl` or `RevokeCert` creates the item via upsert (Update → Put fallback).
+
+- Evidence: `pki/pki.go` (`LoadCRL`, `storeCRL`, `GenerateCRL` persistence, `InitCA` auto-gen), `api/handlers.go` (`GetCRL` read-only, `GenerateCRL` POST handler, `RevokeCert` auto-regen), `api/api.go` (route table), `api/api_test.go` (`TestCRL_*`), `pki/pki_test.go` (`TestLoadCRL_ReturnsCachedCRL`).
+
 ### Sensitive data exposure via caching (`was P1 → Addressed`)
 
 All API responses now include `Cache-Control: no-store` and `Pragma: no-cache` headers via the `noCacheHeaders` middleware applied at the API router level. This prevents browsers and intermediate proxies from persisting secret keys, decrypted vault items, private keys, TOTP secrets, and other sensitive data to disk caches. The middleware is scoped to the API router only — non-API routes (health, web UI) are unaffected.

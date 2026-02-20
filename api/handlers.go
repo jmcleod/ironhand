@@ -1266,6 +1266,13 @@ func (a *API) RevokeCert(w http.ResponseWriter, r *http.Request) {
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))
 
+	// Automatically regenerate the cached CRL so that the GET endpoint
+	// immediately reflects the revocation without a separate POST /crl.
+	if _, err := pki.GenerateCRL(r.Context(), session, a.keyStore); err != nil {
+		// Log but don't fail the revocation — the cert is already revoked.
+		slog.Error("auto-regenerating CRL after revocation", "error", err, "vault_id", vaultID)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1327,7 +1334,46 @@ func (a *API) RenewCert(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetCRL handles GET /vaults/{vaultID}/pki/crl.pem.
+// GetCRL handles GET /vaults/{vaultID}/pki/crl.pem.
+// It returns the most recently cached CRL without mutating CA state.
+// A CRL is automatically generated during InitCA and after each
+// GenerateCRL (POST) or RevokeCert, so a cached copy is always
+// available for initialised CAs.
 func (a *API) GetCRL(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	crlPEM, err := pki.LoadCRL(r.Context(), session)
+	if err != nil {
+		switch {
+		case errors.Is(err, pki.ErrNotCA):
+			writeError(w, http.StatusNotFound, "vault is not initialized as a CA")
+		case errors.Is(err, pki.ErrNoCRL):
+			writeError(w, http.StatusNotFound, "no CRL has been generated; POST to generate one first")
+		default:
+			writeInternalError(w, "failed to load CRL", err)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"crl.pem\"")
+	w.WriteHeader(http.StatusOK)
+	w.Write(crlPEM)
+}
+
+// GenerateCRL handles POST /vaults/{vaultID}/pki/crl.
+// It regenerates the CRL (incrementing CRLNumber), caches it, and returns
+// the PEM-encoded result. This is a state-mutating operation protected by
+// CSRF middleware.
+func (a *API) GenerateCRL(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
 

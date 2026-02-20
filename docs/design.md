@@ -442,7 +442,8 @@ type API struct {
 | `POST` | `/api/v1/vaults/{vaultID}/pki/issue` | Issue certificate |
 | `POST` | `/api/v1/vaults/{vaultID}/pki/items/{itemID}/revoke` | Revoke certificate |
 | `POST` | `/api/v1/vaults/{vaultID}/pki/items/{itemID}/renew` | Renew certificate |
-| `GET` | `/api/v1/vaults/{vaultID}/pki/crl.pem` | Generate and download CRL |
+| `GET` | `/api/v1/vaults/{vaultID}/pki/crl.pem` | Download cached CRL (read-only) |
+| `POST` | `/api/v1/vaults/{vaultID}/pki/crl` | Regenerate CRL (state-mutating, CSRF-protected) |
 | `POST` | `/api/v1/vaults/{vaultID}/pki/sign-csr` | Sign a CSR |
 
 #### Documentation
@@ -571,6 +572,7 @@ CA state is stored in reserved items prefixed with `__ca_`:
 | `__ca_cert` | PEM-encoded CA certificate |
 | `__ca_key` | CA private key: PEM-encoded (software) or `PKCS11:<label>` reference (HSM) |
 | `__ca_revocations` | JSON array of revocation entries |
+| `__ca_crl` | Most recently generated PEM-encoded CRL (cached for read-only retrieval) |
 
 These items are hidden from the regular item listing API and blocked from direct CRUD operations via `isReservedItemID()`.
 
@@ -582,7 +584,8 @@ These items are hidden from the regular item listing API and blocked from direct
 | `IssueCertificate` | Sign a new leaf certificate with SANs, key usages, and validity period |
 | `RevokeCertificate` | Mark a certificate as revoked with an optional reason code |
 | `RenewCertificate` | Reissue with new serial and validity, automatically revoke the old certificate |
-| `GenerateCRL` | Produce a PEM-encoded CRL containing all revoked certificates |
+| `GenerateCRL` | Produce a PEM-encoded CRL, increment CRLNumber, and cache the result |
+| `LoadCRL` | Return the most recently cached CRL (read-only, no state mutation) |
 | `SignCSR` | Accept a PEM-encoded CSR and issue a signed certificate using the requester's public key |
 
 ### KeyStore Architecture

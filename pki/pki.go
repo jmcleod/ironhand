@@ -54,6 +54,9 @@ var (
 	// ErrNotCertificateItem is returned when an operation that requires a
 	// certificate item is invoked on an item of a different type.
 	ErrNotCertificateItem = errors.New("item is not a certificate")
+
+	// ErrNoCRL is returned when no cached CRL has been generated yet.
+	ErrNoCRL = errors.New("no CRL has been generated")
 )
 
 // ---------------------------------------------------------------------------
@@ -65,12 +68,13 @@ const (
 	caCertItemID        = "__ca_cert"
 	caKeyItemID         = "__ca_key"
 	caRevocationsItemID = "__ca_revocations"
+	caCRLItemID         = "__ca_crl"
 )
 
 // ReservedItemIDs returns the set of reserved item IDs used by the PKI
 // subsystem. The API layer uses this to block user-facing CRUD access.
 func ReservedItemIDs() []string {
-	return []string{caStateItemID, caCertItemID, caKeyItemID, caRevocationsItemID}
+	return []string{caStateItemID, caCertItemID, caKeyItemID, caRevocationsItemID, caCRLItemID}
 }
 
 // IsReservedItemID reports whether itemID is reserved by the PKI subsystem.
@@ -444,6 +448,12 @@ func InitCA(ctx context.Context, session *vault.Session, subject pkix.Name, vali
 		return fmt.Errorf("storing CA revocations: %w", err)
 	}
 
+	// Generate and cache an initial (empty) CRL so that GET /crl.pem works
+	// immediately without requiring a separate POST to generate one first.
+	if _, err := GenerateCRL(ctx, session, ks); err != nil {
+		return fmt.Errorf("generating initial CRL: %w", err)
+	}
+
 	return nil
 }
 
@@ -716,7 +726,48 @@ func GenerateCRL(ctx context.Context, session *vault.Session, ks KeyStore) ([]by
 	}
 
 	crlPEM := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: crlDER})
+
+	// Cache the generated CRL so that read-only retrieval (LoadCRL) does not
+	// need to regenerate and therefore does not mutate state.
+	if err := storeCRL(ctx, session, crlPEM); err != nil {
+		return nil, fmt.Errorf("caching CRL: %w", err)
+	}
+
 	return crlPEM, nil
+}
+
+// LoadCRL returns the most recently generated (cached) CRL PEM bytes.
+// It returns ErrNoCRL if no CRL has been generated yet, and ErrNotCA if
+// the vault is not initialised as a CA.
+func LoadCRL(ctx context.Context, session *vault.Session) ([]byte, error) {
+	// Ensure the vault is actually a CA.
+	if _, err := loadCAState(ctx, session); err != nil {
+		return nil, err
+	}
+
+	fields, err := session.Get(ctx, caCRLItemID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, ErrNoCRL
+		}
+		return nil, fmt.Errorf("loading cached CRL: %w", err)
+	}
+	data, ok := fields["crl"]
+	if !ok || len(data) == 0 {
+		return nil, ErrNoCRL
+	}
+	return data, nil
+}
+
+// storeCRL persists the PEM-encoded CRL to the reserved CRL item.
+// It attempts an Update first (for existing vaults) and falls back to Put
+// for vaults that were initialised before the cached-CRL item existed.
+func storeCRL(ctx context.Context, session *vault.Session, crlPEM []byte) error {
+	err := session.Update(ctx, caCRLItemID, vault.Fields{"crl": crlPEM})
+	if err != nil && errors.Is(err, storage.ErrNotFound) {
+		return session.Put(ctx, caCRLItemID, vault.Fields{"crl": crlPEM})
+	}
+	return err
 }
 
 // GetCACertificate returns the CA certificate PEM string.

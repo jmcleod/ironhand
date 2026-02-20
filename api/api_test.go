@@ -5,10 +5,12 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -1006,41 +1008,132 @@ func TestPKIRenewCert(t *testing.T) {
 	assert.Equal(t, issueResp.ItemID, newItem.Fields["previous_item_id"])
 }
 
-func TestPKIGetCRL(t *testing.T) {
+// TestCRL_GetReturnsCachedAfterInit verifies that GET /crl.pem returns the
+// cached CRL that was automatically generated during InitCA, without mutating
+// CA state (CRLNumber stays at 1 — the initial generation).
+func TestCRL_GetReturnsCachedAfterInit(t *testing.T) {
 	srv := setupServer(t)
 	defer srv.Close()
 	client := newClient(t)
 	base := createVaultForPKI(t, client, srv.URL)
 
 	doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
-		"common_name":    "CRL Test CA",
+		"common_name":    "CRL Init CA",
 		"validity_years": 10,
 	})
 
-	// Issue 2 certs, revoke 1.
+	// GET should return the auto-generated CRL.
+	resp := doJSON(t, client, http.MethodGet, base+"/pki/crl.pem", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "BEGIN X509 CRL")
+
+	// CRLNumber should be 1 (from the initial generation in InitCA).
+	infoResp := doJSON(t, client, http.MethodGet, base+"/pki/info", nil)
+	defer infoResp.Body.Close()
+	var info api.CAInfoResponse
+	json.NewDecoder(infoResp.Body).Decode(&info)
+	assert.Equal(t, int64(1), info.CRLNumber)
+
+	// A second GET should not increment CRLNumber.
+	resp2 := doJSON(t, client, http.MethodGet, base+"/pki/crl.pem", nil)
+	defer resp2.Body.Close()
+	require.Equal(t, http.StatusOK, resp2.StatusCode)
+
+	infoResp2 := doJSON(t, client, http.MethodGet, base+"/pki/info", nil)
+	defer infoResp2.Body.Close()
+	var info2 api.CAInfoResponse
+	json.NewDecoder(infoResp2.Body).Decode(&info2)
+	assert.Equal(t, int64(1), info2.CRLNumber, "GET /crl.pem must not increment CRLNumber")
+}
+
+// TestCRL_PostRegeneratesAndIncrementsCRLNumber verifies that POST /crl
+// regenerates the CRL (incrementing CRLNumber) and returns the new CRL.
+func TestCRL_PostRegeneratesAndIncrementsCRLNumber(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
+		"common_name":    "CRL Post CA",
+		"validity_years": 10,
+	})
+
+	// CRLNumber is 1 after init (auto-generated CRL).
+	infoResp := doJSON(t, client, http.MethodGet, base+"/pki/info", nil)
+	defer infoResp.Body.Close()
+	var info api.CAInfoResponse
+	json.NewDecoder(infoResp.Body).Decode(&info)
+	require.Equal(t, int64(1), info.CRLNumber)
+
+	// POST /crl should regenerate → CRLNumber becomes 2.
+	resp := doJSON(t, client, http.MethodPost, base+"/pki/crl", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "BEGIN X509 CRL")
+
+	infoResp2 := doJSON(t, client, http.MethodGet, base+"/pki/info", nil)
+	defer infoResp2.Body.Close()
+	var info2 api.CAInfoResponse
+	json.NewDecoder(infoResp2.Body).Decode(&info2)
+	assert.Equal(t, int64(2), info2.CRLNumber, "POST /crl must increment CRLNumber")
+}
+
+// TestCRL_RevokeCertAutoRegeneratesCRL verifies that revoking a certificate
+// automatically regenerates the cached CRL so GET reflects the revocation.
+func TestCRL_RevokeCertAutoRegeneratesCRL(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	doJSON(t, client, http.MethodPost, base+"/pki/init", map[string]any{
+		"common_name":    "CRL Revoke CA",
+		"validity_years": 10,
+	})
+
+	// Issue a cert and revoke it.
 	resp := doJSON(t, client, http.MethodPost, base+"/pki/issue", map[string]any{
 		"common_name":   "revoke-me.example.com",
 		"validity_days": 365,
 	})
 	defer resp.Body.Close()
-	var issue1 api.IssueCertResponse
-	json.NewDecoder(resp.Body).Decode(&issue1)
+	var issue api.IssueCertResponse
+	json.NewDecoder(resp.Body).Decode(&issue)
 
-	doJSON(t, client, http.MethodPost, base+"/pki/issue", map[string]any{
-		"common_name":   "keep-me.example.com",
-		"validity_days": 365,
-	})
-
-	doJSON(t, client, http.MethodPost, base+"/pki/items/"+issue1.ItemID+"/revoke", map[string]string{
+	doJSON(t, client, http.MethodPost, base+"/pki/items/"+issue.ItemID+"/revoke", map[string]string{
 		"reason": "superseded",
 	})
 
-	// Get CRL.
-	resp = doJSON(t, client, http.MethodGet, base+"/pki/crl.pem", nil)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	body, _ := io.ReadAll(resp.Body)
+	// GET should return a CRL that contains the revoked serial.
+	crlResp := doJSON(t, client, http.MethodGet, base+"/pki/crl.pem", nil)
+	defer crlResp.Body.Close()
+	require.Equal(t, http.StatusOK, crlResp.StatusCode)
+	body, _ := io.ReadAll(crlResp.Body)
 	assert.Contains(t, string(body), "BEGIN X509 CRL")
+
+	// Parse the CRL and verify it contains a revoked entry.
+	block, _ := pem.Decode(body)
+	require.NotNil(t, block, "CRL PEM must decode")
+	crl, err := x509.ParseRevocationList(block.Bytes)
+	require.NoError(t, err)
+	assert.Len(t, crl.RevokedCertificateEntries, 1, "CRL must contain the revoked cert")
+}
+
+// TestCRL_GetReturns404WhenNotCA verifies GET /crl.pem returns 404 for a
+// vault that has not been initialised as a CA.
+func TestCRL_GetReturns404WhenNotCA(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+	base := createVaultForPKI(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodGet, base+"/pki/crl.pem", nil)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func TestPKIInfoReturns404WhenNotCA(t *testing.T) {

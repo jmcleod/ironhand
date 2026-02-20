@@ -253,7 +253,7 @@ Any vault can be initialized as a Certificate Authority. CA private keys, certif
 - **Intermediate CA** — A CA whose certificate is signed by another authority. Useful for delegating certificate issuance while keeping the root CA offline.
 - **Certificate items** — X.509 certificates stored as first-class vault items with structured fields (subject, issuer, serial number, validity dates, PEM-encoded certificate and private key).
 - **Revocation** — Certificates can be revoked, which updates their status and adds them to the CA's revocation list.
-- **CRL (Certificate Revocation List)** — Generated on demand from the CA's revocation records. Clients can fetch the CRL to verify certificate validity.
+- **CRL (Certificate Revocation List)** — Cached and served read-only via `GET /crl.pem`. Regenerated automatically on revocation or explicitly via `POST /crl`.
 
 ### How It Works
 
@@ -261,7 +261,7 @@ Any vault can be initialized as a Certificate Authority. CA private keys, certif
 2. **Issue certificates** — Specify a Common Name, SANs (DNS names, IPs, emails), key usages, and validity period. The CA signs a new leaf certificate with a fresh ECDSA P-256 keypair. Both the certificate and private key are stored as an encrypted vault item.
 3. **Revoke certificates** — Mark a certificate as revoked with an optional reason code. The certificate's status field is updated and it is added to the revocation list.
 4. **Renew certificates** — Reissue a certificate with the same subject and SANs but a new serial number and validity period. The old certificate is automatically revoked.
-5. **Generate CRLs** — Produce a PEM-encoded CRL containing all revoked certificates, signed by the CA.
+5. **Generate CRLs** — `POST /crl` regenerates the CRL (incrementing CRLNumber) and caches it. `GET /crl.pem` returns the cached CRL without mutating CA state. CRLs are also auto-regenerated after each revocation.
 6. **Sign CSRs** — Accept a PEM-encoded Certificate Signing Request, validate it, and issue a signed certificate using the requester's public key (no private key is generated or stored).
 7. **Import certificates** — Manually add externally-issued certificates to the vault for centralized management.
 
@@ -275,6 +275,7 @@ CA state is stored in reserved items within the vault (prefixed with `__ca_`). T
 | `__ca_cert` | PEM-encoded CA certificate |
 | `__ca_key` | PEM-encoded CA private key (encrypted by vault field-level encryption) |
 | `__ca_revocations` | JSON array of revocation entries (serial, timestamp, reason, item ID) |
+| `__ca_crl` | Most recently generated PEM-encoded CRL (cached for read-only retrieval) |
 
 ### HSM-Backed PKI Keys (PKCS#11)
 
@@ -397,7 +398,8 @@ All PKI endpoints are scoped to a vault and require session authentication.
 | `POST` | `/api/v1/vaults/{vaultID}/pki/issue` | Issue a new certificate |
 | `POST` | `/api/v1/vaults/{vaultID}/pki/items/{itemID}/revoke` | Revoke a certificate |
 | `POST` | `/api/v1/vaults/{vaultID}/pki/items/{itemID}/renew` | Renew a certificate |
-| `GET` | `/api/v1/vaults/{vaultID}/pki/crl.pem` | Generate and download the CRL (PEM) |
+| `GET` | `/api/v1/vaults/{vaultID}/pki/crl.pem` | Download the cached CRL (PEM, read-only) |
+| `POST` | `/api/v1/vaults/{vaultID}/pki/crl` | Regenerate CRL (state-mutating, CSRF-protected) |
 | `POST` | `/api/v1/vaults/{vaultID}/pki/sign-csr` | Sign a Certificate Signing Request |
 
 ### PKI Go Package
@@ -410,7 +412,8 @@ The `pki` package provides programmatic access to CA operations:
 | `pki.IssueCertificate(ctx, session, request)` | Issue a signed certificate |
 | `pki.RevokeCertificate(ctx, session, itemID, reason)` | Revoke a certificate |
 | `pki.RenewCertificate(ctx, session, itemID, validityDays)` | Renew a certificate (revokes the old one) |
-| `pki.GenerateCRL(ctx, session)` | Generate a PEM-encoded CRL |
+| `pki.GenerateCRL(ctx, session)` | Regenerate the CRL, increment CRLNumber, and cache it |
+| `pki.LoadCRL(ctx, session)` | Return the most recently cached CRL (read-only) |
 | `pki.GetCACertificate(ctx, session)` | Retrieve the CA certificate PEM |
 | `pki.GetCAInfo(ctx, session)` | Get CA metadata and certificate count |
 | `pki.SignCSR(ctx, session, csrPEM, validityDays, extKeyUsages)` | Sign a CSR |

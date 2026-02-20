@@ -261,7 +261,8 @@ func (a *API) Router() chi.Router {
 			r.Get("/info", a.GetCAInfo)
 			r.Get("/ca.pem", a.GetCACert)
 			r.Post("/issue", a.IssueCert)
-			r.Get("/crl.pem", a.GetCRL)
+			r.Get("/crl.pem", a.GetCRL)   // read-only: returns cached CRL
+			r.Post("/crl", a.GenerateCRL) // state-mutating: regenerate & cache CRL
 			r.Post("/sign-csr", a.SignCSR)
 			r.Post("/items/{itemID}/revoke", a.RevokeCert)
 			r.Post("/items/{itemID}/renew", a.RenewCert)

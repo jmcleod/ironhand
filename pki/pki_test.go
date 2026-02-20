@@ -52,7 +52,7 @@ func TestInitCA(t *testing.T) {
 	assert.Contains(t, info.Subject, "CN=Test Root CA")
 	assert.Contains(t, info.Subject, "O=TestOrg")
 	assert.Equal(t, int64(2), info.NextSerial)
-	assert.Equal(t, int64(0), info.CRLNumber)
+	assert.Equal(t, int64(1), info.CRLNumber) // InitCA auto-generates CRL #1
 	assert.Equal(t, 0, info.CertCount)
 
 	// Verify CA cert is retrievable and valid.
@@ -288,9 +288,39 @@ func TestGenerateCRL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, crl.RevokedCertificateEntries, 1)
 
-	// Verify CRL number incremented.
+	// Verify CRL number incremented. InitCA auto-generates CRL #1, so the
+	// explicit GenerateCRL call above produces CRL #2.
 	info, _ := pki.GetCAInfo(ctx, session)
-	assert.Equal(t, int64(1), info.CRLNumber)
+	assert.Equal(t, int64(2), info.CRLNumber)
+}
+
+// TestLoadCRL_ReturnsCachedCRL verifies that LoadCRL returns the most recently
+// generated CRL without mutating state.
+func TestLoadCRL_ReturnsCachedCRL(t *testing.T) {
+	ctx := t.Context()
+	session := newTestSession(t)
+
+	// Before InitCA, LoadCRL should fail.
+	_, err := pki.LoadCRL(ctx, session)
+	require.Error(t, err)
+
+	err = pki.InitCA(ctx, session, pkix.Name{CommonName: "Test CA"}, 10, false, nil)
+	require.NoError(t, err)
+
+	// InitCA auto-generates CRL #1; LoadCRL should return it.
+	crlPEM, err := pki.LoadCRL(ctx, session)
+	require.NoError(t, err)
+	assert.Contains(t, string(crlPEM), "BEGIN X509 CRL")
+
+	// Verify CRLNumber is still 1 (LoadCRL doesn't mutate).
+	info1, _ := pki.GetCAInfo(ctx, session)
+	require.Equal(t, int64(1), info1.CRLNumber)
+
+	// Call LoadCRL again — still 1.
+	_, err = pki.LoadCRL(ctx, session)
+	require.NoError(t, err)
+	info2, _ := pki.GetCAInfo(ctx, session)
+	assert.Equal(t, int64(1), info2.CRLNumber, "LoadCRL must not increment CRLNumber")
 }
 
 func TestGetCACertificate(t *testing.T) {
