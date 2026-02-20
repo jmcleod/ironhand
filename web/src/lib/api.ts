@@ -2,6 +2,26 @@ import { AuditEntry, CAInfo, HistoryEntry, IssueCertResult, RenewCertResult, Vau
 
 const API_BASE = '/api/v1';
 
+/** Pagination metadata returned by paginated list endpoints. */
+export interface PaginationMeta {
+  total_count: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+/** Pagination query parameters accepted by list endpoints. */
+export interface PaginationParams {
+  limit?: number;
+  offset?: number;
+}
+
+/** A paginated response containing items of type T plus pagination metadata. */
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: PaginationMeta;
+}
+
 export type ApiError = {
   status: number;
   message: string;
@@ -110,10 +130,19 @@ export async function enableTwoFactor(code: string): Promise<{ enabled: boolean 
   return (await resp.json()) as { enabled: boolean };
 }
 
-export async function listVaults(): Promise<VaultSummary[]> {
-  const resp = await request('/vaults');
-  const data = (await resp.json()) as { vaults: VaultSummary[] };
-  return data.vaults ?? [];
+export async function listVaults(params?: PaginationParams): Promise<PaginatedResponse<VaultSummary>> {
+  const qs = paginationQuery(params);
+  const resp = await request(`/vaults${qs}`);
+  const data = (await resp.json()) as { vaults: VaultSummary[] } & PaginationMeta;
+  return {
+    data: data.vaults ?? [],
+    pagination: { total_count: data.total_count, limit: data.limit, offset: data.offset, has_more: data.has_more },
+  };
+}
+
+/** Fetch all vaults across all pages. Used by VaultContext to populate the full vault list. */
+export async function listAllVaults(): Promise<VaultSummary[]> {
+  return fetchAllPages((offset) => listVaults({ limit: 200, offset }));
 }
 
 export async function createVault(input: { name?: string; description?: string }) {
@@ -142,10 +171,19 @@ export interface ItemSummary {
   type?: string;
 }
 
-export async function listItems(vaultID: string): Promise<ItemSummary[]> {
-  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/items`);
-  const data = (await resp.json()) as { items: ItemSummary[] };
-  return data.items ?? [];
+export async function listItems(vaultID: string, params?: PaginationParams): Promise<PaginatedResponse<ItemSummary>> {
+  const qs = paginationQuery(params);
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/items${qs}`);
+  const data = (await resp.json()) as { items: ItemSummary[] } & PaginationMeta;
+  return {
+    data: data.items ?? [],
+    pagination: { total_count: data.total_count, limit: data.limit, offset: data.offset, has_more: data.has_more },
+  };
+}
+
+/** Fetch all items for a vault across all pages. Used by VaultContext for client-side search. */
+export async function listAllItems(vaultID: string): Promise<ItemSummary[]> {
+  return fetchAllPages((offset) => listItems(vaultID, { limit: 200, offset }));
 }
 
 export async function getItem(vaultID: string, itemID: string): Promise<Record<string, string>> {
@@ -213,14 +251,23 @@ export async function getHistoryVersion(
   return data.fields;
 }
 
-export async function listAuditLogs(vaultID: string, itemID?: string): Promise<AuditEntry[]> {
-  const params = new URLSearchParams();
-  if (itemID) params.set('item_id', itemID);
-  const qs = params.toString();
-  const path = `/vaults/${encodeURIComponent(vaultID)}/audit${qs ? `?${qs}` : ''}`;
+export async function listAuditLogs(
+  vaultID: string,
+  itemID?: string,
+  params?: PaginationParams,
+): Promise<PaginatedResponse<AuditEntry>> {
+  const qs = new URLSearchParams();
+  if (itemID) qs.set('item_id', itemID);
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  if (params?.offset != null) qs.set('offset', String(params.offset));
+  const qsStr = qs.toString();
+  const path = `/vaults/${encodeURIComponent(vaultID)}/audit${qsStr ? `?${qsStr}` : ''}`;
   const resp = await request(path);
-  const data = (await resp.json()) as { entries: AuditEntry[] };
-  return data.entries ?? [];
+  const data = (await resp.json()) as { entries: AuditEntry[] } & PaginationMeta;
+  return {
+    data: data.entries ?? [],
+    pagination: { total_count: data.total_count, limit: data.limit, offset: data.offset, has_more: data.has_more },
+  };
 }
 
 export async function exportVault(vaultID: string, passphrase: string): Promise<Blob> {
@@ -365,6 +412,39 @@ export async function renewCert(
 export async function getCRL(vaultID: string): Promise<string> {
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/pki/crl.pem`);
   return resp.text();
+}
+
+// ---------------------------------------------------------------------------
+// Pagination helpers
+// ---------------------------------------------------------------------------
+
+/** Build a query string from optional pagination params (e.g., "?limit=100&offset=0"). */
+function paginationQuery(params?: PaginationParams): string {
+  if (!params) return '';
+  const qs = new URLSearchParams();
+  if (params.limit != null) qs.set('limit', String(params.limit));
+  if (params.offset != null) qs.set('offset', String(params.offset));
+  const s = qs.toString();
+  return s ? `?${s}` : '';
+}
+
+/**
+ * Fetch all pages from a paginated endpoint by repeatedly calling `fetcher`
+ * with increasing offsets until `has_more` is false. Returns the concatenated
+ * data array.
+ */
+async function fetchAllPages<T>(
+  fetcher: (offset: number) => Promise<PaginatedResponse<T>>,
+): Promise<T[]> {
+  const all: T[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await fetcher(offset);
+    all.push(...page.data);
+    if (!page.pagination.has_more) break;
+    offset += page.pagination.limit;
+  }
+  return all;
 }
 
 // ---------------------------------------------------------------------------
