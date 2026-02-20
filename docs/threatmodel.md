@@ -93,6 +93,17 @@ All API responses now include `Cache-Control: no-store` and `Pragma: no-cache` h
 
 - Evidence: `api/security_headers.go` (`noCacheHeaders`), `api/api.go` (`Router()` middleware chain), `api/api_test.go` (`TestNoCacheHeaders_*`).
 
+### CSP permitted inline styles (`was P1 → Addressed`)
+
+The Content-Security-Policy `style-src` directive previously included `'unsafe-inline'`, allowing any injected `<style>` element or inline `style` attribute to execute — a common XSS escalation vector. The fix replaces `'unsafe-inline'` with per-request cryptographic nonces:
+
+- A 16-byte base64-encoded nonce is generated per request in the `SecurityHeaders` middleware and stored in the request context.
+- The web handler injects the nonce into served HTML via a `<meta name="csp-nonce">` tag so client-side code can read it.
+- The only component with runtime `<style>` injection (`ChartStyle`) applies the nonce attribute, allowing its styles to load under the stricter policy.
+- Additional hardening directives added: `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`.
+
+- Evidence: `api/security_headers.go` (`generateCSPNonce`, `CSPNonce`, nonce in CSP header), `web/web.go` (`NonceFunc`, nonce meta tag injection), `web/src/lib/utils.ts` (`getCSPNonce`), `web/src/components/ui/chart.tsx` (nonce on `<style>`), `api/api_test.go` (`TestCSP_NoUnsafeInline`, `TestCSP_ContainsNonce`, `TestCSP_NonceIsUniquePerRequest`, `TestCSP_NonceAvailableInContext`, `TestCSP_TighterDirectives`).
+
 ## Operational Recommendations
 
 1. When deploying behind a reverse proxy, set `--trusted-proxies` to the CIDR ranges of your proxy/load balancer so that rate limiters see real client IPs instead of the proxy's address.

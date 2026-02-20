@@ -1517,9 +1517,117 @@ func TestSecurityHeadersPresent(t *testing.T) {
 	assert.Equal(t, "DENY", resp.Header.Get("X-Frame-Options"))
 	assert.Equal(t, "strict-origin-when-cross-origin", resp.Header.Get("Referrer-Policy"))
 	assert.Contains(t, resp.Header.Get("Permissions-Policy"), "camera=()")
-	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "default-src 'self'")
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.Contains(t, csp, "default-src 'self'")
+
 	// HSTS should NOT be set for plain HTTP.
 	assert.Empty(t, resp.Header.Get("Strict-Transport-Security"))
+}
+
+func TestCSP_NoUnsafeInline(t *testing.T) {
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	a := api.New(repo, epochCache)
+	r := chi.NewRouter()
+	r.Use(a.SecurityHeaders)
+	r.Mount("/api/v1", a.Router())
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/openapi.yaml")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.NotContains(t, csp, "'unsafe-inline'", "CSP must not contain 'unsafe-inline'")
+}
+
+func TestCSP_ContainsNonce(t *testing.T) {
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	a := api.New(repo, epochCache)
+	r := chi.NewRouter()
+	r.Use(a.SecurityHeaders)
+	r.Mount("/api/v1", a.Router())
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/openapi.yaml")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.Contains(t, csp, "style-src 'self' 'nonce-", "CSP must have nonce-based style-src")
+}
+
+func TestCSP_NonceIsUniquePerRequest(t *testing.T) {
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	a := api.New(repo, epochCache)
+	r := chi.NewRouter()
+	r.Use(a.SecurityHeaders)
+	r.Mount("/api/v1", a.Router())
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	// Make two requests and verify they get different nonces.
+	resp1, err := http.Get(srv.URL + "/api/v1/openapi.yaml")
+	require.NoError(t, err)
+	defer resp1.Body.Close()
+	csp1 := resp1.Header.Get("Content-Security-Policy")
+
+	resp2, err := http.Get(srv.URL + "/api/v1/openapi.yaml")
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	csp2 := resp2.Header.Get("Content-Security-Policy")
+
+	assert.NotEqual(t, csp1, csp2, "each request must get a unique CSP nonce")
+}
+
+func TestCSP_NonceAvailableInContext(t *testing.T) {
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	a := api.New(repo, epochCache)
+	r := chi.NewRouter()
+	r.Use(a.SecurityHeaders)
+
+	var capturedNonce string
+	r.Get("/test", func(w http.ResponseWriter, r *http.Request) {
+		capturedNonce = api.CSPNonce(r.Context())
+		w.Write([]byte("ok"))
+	})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/test")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.NotEmpty(t, capturedNonce, "CSPNonce must return a non-empty nonce from the request context")
+	// Verify the nonce in the context matches the one in the CSP header.
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.Contains(t, csp, "'nonce-"+capturedNonce+"'", "CSP header must contain the same nonce from context")
+}
+
+func TestCSP_TighterDirectives(t *testing.T) {
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	a := api.New(repo, epochCache)
+	r := chi.NewRouter()
+	r.Use(a.SecurityHeaders)
+	r.Mount("/api/v1", a.Router())
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/openapi.yaml")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.Contains(t, csp, "object-src 'none'", "CSP must block object embeds")
+	assert.Contains(t, csp, "base-uri 'none'", "CSP must block base tag injection")
+	assert.Contains(t, csp, "frame-ancestors 'none'", "CSP must block framing")
 }
 
 // ---------------------------------------------------------------------------

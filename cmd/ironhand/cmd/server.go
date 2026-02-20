@@ -183,7 +183,9 @@ var serverCmd = &cobra.Command{
 
 		r.Mount("/api/v1", a.Router())
 
-		webHandler, err := web.Handler()
+		webHandler, err := web.Handler(func(r *http.Request) string {
+			return api.CSPNonce(r.Context())
+		})
 		if err != nil {
 			return err
 		}
