@@ -32,11 +32,13 @@ PKCS#11 is implemented for hardware-backed key custody, but cloud KMS backends (
 
 ### WebAuthn ceremony state management (`was P1 → Addressed`)
 
-- Expired/abandoned WebAuthn login ceremonies are now proactively evicted before each new insertion (bounded to `maxCeremonyEntries`).
+- Expired/abandoned WebAuthn login ceremonies are now proactively evicted before each new insertion.
+- Hard cap enforced: after TTL eviction, if active ceremonies still meet or exceed `maxCeremonyEntries` (1000), the new ceremony is rejected with HTTP 503. This prevents an attacker from flooding the map faster than entries expire.
+- Cap-exceeded events are audit-logged (`ceremony_cap_exceeded`) and fire a `ceremony_pressure` alert.
 - The raw passphrase is no longer stored in ceremony state. Instead, the pre-derived login passphrase (`passphrase:secretKey`) is computed immediately and stored, minimizing the lifetime of plaintext passphrase material in memory.
 - SessionData is stored as the typed `webauthn.SessionData` directly, eliminating unnecessary JSON marshal/unmarshal churn.
 
-- Evidence: `api/webauthn.go` (`evictExpiredCeremoniesLocked`, `webauthnCeremonyState`).
+- Evidence: `api/webauthn.go` (`evictExpiredCeremoniesLocked`, hard-cap check in `BeginWebAuthnLogin`), `api/audit.go` (`AuditCeremonyCapExceeded`), `api/metrics.go` (`AlertCeremonyPressure`), `api/webauthn_test.go` (`TestCeremonyCap_*`).
 
 ### Audit retention performance (`was P1 → Addressed`)
 

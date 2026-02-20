@@ -11,6 +11,7 @@ type AlertType string
 const (
 	AlertLoginFailureSpike AlertType = "login_failure_spike"
 	AlertBulkExport        AlertType = "bulk_export"
+	AlertCeremonyPressure  AlertType = "ceremony_pressure"
 )
 
 // AlertEvent describes an anomaly that triggered an alert.
@@ -111,6 +112,20 @@ func (m *metricsCollector) recordExport() {
 		})
 		m.exports = m.exports[:0]
 	}
+}
+
+// recordCeremonyPressure fires an alert when the WebAuthn ceremony cap is hit.
+func (m *metricsCollector) recordCeremonyPressure(activeCeremonies int) {
+	if m == nil || m.alertFn == nil {
+		return
+	}
+	m.alertFn(AlertEvent{
+		Type:      AlertCeremonyPressure,
+		Message:   "WebAuthn ceremony cap reached; new ceremonies rejected",
+		Count:     activeCeremonies,
+		Threshold: activeCeremonies, // cap value is the threshold
+		Timestamp: time.Now(),
+	})
 }
 
 // trimWindow removes entries older than (now - window) from the sorted slice.

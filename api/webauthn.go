@@ -16,9 +16,10 @@ import (
 
 const (
 	webauthnCeremonyTTL = 5 * time.Minute
-	// maxCeremonyEntries is the maximum number of concurrent WebAuthn
-	// login ceremonies allowed. When inserting a new ceremony would exceed
-	// this limit, expired entries are evicted first.
+	// maxCeremonyEntries is the hard cap on concurrent WebAuthn login
+	// ceremonies. When inserting a new ceremony would exceed this limit,
+	// expired entries are evicted first. If active ceremonies still exceed
+	// the cap after eviction, the new ceremony is rejected with 503.
 	maxCeremonyEntries = 1000
 )
 
@@ -253,6 +254,21 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	// Evict expired ceremonies before inserting to bound memory usage.
 	a.webauthnCeremonyMu.Lock()
 	a.evictExpiredCeremoniesLocked()
+
+	// Hard-cap: reject if active ceremonies still exceed the limit after
+	// eviction. This prevents an attacker from flooding the map faster
+	// than entries expire.
+	if len(a.webauthnCeremonies) >= maxCeremonyEntries {
+		a.webauthnCeremonyMu.Unlock()
+		a.audit.logFailure(AuditCeremonyCapExceeded, r, "webauthn ceremony cap exceeded",
+			slog.Int("active_ceremonies", len(a.webauthnCeremonies)))
+		if a.metrics != nil {
+			a.metrics.recordCeremonyPressure(len(a.webauthnCeremonies))
+		}
+		writeError(w, http.StatusServiceUnavailable, "too many active login ceremonies; try again later")
+		return
+	}
+
 	a.webauthnCeremonies[sessionData.Challenge] = webauthnCeremonyState{
 		SecretKey:       req.SecretKey,
 		LoginPassphrase: loginPassphrase,

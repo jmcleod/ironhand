@@ -247,3 +247,102 @@ func TestEvictionOnInsert_PartialExpiry(t *testing.T) {
 		assert.False(t, found, "expired ceremony %q should be gone", k)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Hard-cap enforcement tests
+// ---------------------------------------------------------------------------
+
+func TestCeremonyCap_RejectsWhenAtCapacity(t *testing.T) {
+	a := newTestAPIWithCeremonies()
+
+	// Fill the ceremony map to exactly maxCeremonyEntries with live entries.
+	for i := 0; i < maxCeremonyEntries; i++ {
+		key := "active-" + string(rune(i))
+		a.webauthnCeremonies[key] = webauthnCeremonyState{
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		}
+	}
+	require.Len(t, a.webauthnCeremonies, maxCeremonyEntries)
+
+	// Evict expired (none are expired) and check capacity.
+	a.webauthnCeremonyMu.Lock()
+	a.evictExpiredCeremoniesLocked()
+	atCap := len(a.webauthnCeremonies) >= maxCeremonyEntries
+	a.webauthnCeremonyMu.Unlock()
+
+	assert.True(t, atCap, "should be at capacity with %d active ceremonies", maxCeremonyEntries)
+}
+
+func TestCeremonyCap_AcceptsAfterEvictionFreesSpace(t *testing.T) {
+	a := newTestAPIWithCeremonies()
+
+	// Fill to cap: half expired, half live.
+	half := maxCeremonyEntries / 2
+	for i := 0; i < half; i++ {
+		a.webauthnCeremonies["expired-"+string(rune(i))] = webauthnCeremonyState{
+			ExpiresAt: time.Now().Add(-time.Minute),
+		}
+	}
+	for i := 0; i < half; i++ {
+		a.webauthnCeremonies["live-"+string(rune(i))] = webauthnCeremonyState{
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		}
+	}
+	require.Len(t, a.webauthnCeremonies, maxCeremonyEntries)
+
+	// After eviction, the live half remains — well under the cap.
+	a.webauthnCeremonyMu.Lock()
+	a.evictExpiredCeremoniesLocked()
+	underCap := len(a.webauthnCeremonies) < maxCeremonyEntries
+	a.webauthnCeremonyMu.Unlock()
+
+	assert.True(t, underCap, "eviction should free space below cap")
+	assert.Len(t, a.webauthnCeremonies, half)
+}
+
+func TestCeremonyCap_AllActiveBlocksInsert(t *testing.T) {
+	a := newTestAPIWithCeremonies()
+
+	// Fill entirely with active (non-expired) ceremonies.
+	for i := 0; i < maxCeremonyEntries; i++ {
+		key := "active-" + string(rune(i))
+		a.webauthnCeremonies[key] = webauthnCeremonyState{
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		}
+	}
+
+	// Eviction removes nothing. The cap check should block.
+	a.webauthnCeremonyMu.Lock()
+	a.evictExpiredCeremoniesLocked()
+	shouldReject := len(a.webauthnCeremonies) >= maxCeremonyEntries
+	a.webauthnCeremonyMu.Unlock()
+
+	assert.True(t, shouldReject, "all-active map at cap should reject new ceremonies")
+	assert.Len(t, a.webauthnCeremonies, maxCeremonyEntries, "no entries should have been evicted")
+}
+
+func TestCeremonyCap_ExactlyAtCapMinusOneAllowsInsert(t *testing.T) {
+	a := newTestAPIWithCeremonies()
+
+	// Fill to one below cap.
+	for i := 0; i < maxCeremonyEntries-1; i++ {
+		key := "active-" + string(rune(i))
+		a.webauthnCeremonies[key] = webauthnCeremonyState{
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		}
+	}
+	require.Len(t, a.webauthnCeremonies, maxCeremonyEntries-1)
+
+	a.webauthnCeremonyMu.Lock()
+	a.evictExpiredCeremoniesLocked()
+	shouldAllow := len(a.webauthnCeremonies) < maxCeremonyEntries
+	if shouldAllow {
+		a.webauthnCeremonies["new-ceremony"] = webauthnCeremonyState{
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		}
+	}
+	a.webauthnCeremonyMu.Unlock()
+
+	assert.True(t, shouldAllow, "should allow insert when one below cap")
+	assert.Len(t, a.webauthnCeremonies, maxCeremonyEntries, "should now be exactly at cap")
+}
