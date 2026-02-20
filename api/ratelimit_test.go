@@ -229,6 +229,130 @@ func TestGlobalRateLimiter_SlidingWindowExpiry(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Registration IP rate limiter tests
+// ---------------------------------------------------------------------------
+
+func TestRegIPLimiter_AllowsBeforeThreshold(t *testing.T) {
+	rl := newRegistrationIPLimiter()
+
+	for i := 0; i < regIPMaxRequests-1; i++ {
+		rl.record("192.168.1.1")
+		blocked, _ := rl.check("192.168.1.1")
+		assert.False(t, blocked, "should not block before regIPMaxRequests")
+	}
+}
+
+func TestRegIPLimiter_BlocksAfterThreshold(t *testing.T) {
+	rl := newRegistrationIPLimiter()
+
+	for i := 0; i < regIPMaxRequests; i++ {
+		rl.record("192.168.1.1")
+	}
+
+	blocked, retryAfter := rl.check("192.168.1.1")
+	require.True(t, blocked, "should block after regIPMaxRequests")
+	assert.Greater(t, retryAfter, time.Duration(0), "retry-after should be positive")
+}
+
+func TestRegIPLimiter_IsolatesIPs(t *testing.T) {
+	rl := newRegistrationIPLimiter()
+
+	for i := 0; i < regIPMaxRequests; i++ {
+		rl.record("192.168.1.1")
+	}
+	blocked, _ := rl.check("192.168.1.1")
+	require.True(t, blocked)
+
+	blocked2, _ := rl.check("10.0.0.1")
+	assert.False(t, blocked2, "different IP should not be blocked")
+}
+
+func TestRegIPLimiter_ExponentialBackoff(t *testing.T) {
+	rl := newRegistrationIPLimiter()
+
+	// Hit the threshold.
+	for i := 0; i < regIPMaxRequests; i++ {
+		rl.record("192.168.1.1")
+	}
+	_, first := rl.check("192.168.1.1")
+
+	// One more request should increase the lockout.
+	rl.record("192.168.1.1")
+	_, second := rl.check("192.168.1.1")
+	assert.Greater(t, second, first, "lockout should increase with more requests")
+}
+
+func TestRegIPLimiter_MaxLockoutCap(t *testing.T) {
+	rl := newRegistrationIPLimiter()
+
+	for i := 0; i < regIPMaxRequests+20; i++ {
+		rl.record("192.168.1.1")
+	}
+
+	_, retryAfter := rl.check("192.168.1.1")
+	assert.LessOrEqual(t, retryAfter, regIPMaxLockout+time.Second, "lockout should not exceed cap")
+}
+
+func TestRegIPLimiter_ExpiresOldRecords(t *testing.T) {
+	rl := newRegistrationIPLimiter()
+
+	// Manually inject an old record.
+	rl.mu.Lock()
+	rl.requests["192.168.1.1"] = &attemptRecord{
+		failures:    regIPMaxRequests + 1,
+		lastFailure: time.Now().Add(-2 * regIPExpiry),
+		lockedUntil: time.Now().Add(-regIPExpiry),
+	}
+	rl.mu.Unlock()
+
+	blocked, _ := rl.check("192.168.1.1")
+	assert.False(t, blocked, "expired record should be garbage-collected on check")
+}
+
+// ---------------------------------------------------------------------------
+// Registration global rate limiter tests
+// ---------------------------------------------------------------------------
+
+func TestRegGlobalLimiter_AllowsBeforeThreshold(t *testing.T) {
+	rl := newRegistrationGlobalLimiter()
+
+	for i := 0; i < regGlobalMaxRequests-1; i++ {
+		rl.record()
+		blocked, _ := rl.check()
+		assert.False(t, blocked, "should not block before regGlobalMaxRequests")
+	}
+}
+
+func TestRegGlobalLimiter_BlocksAfterThreshold(t *testing.T) {
+	rl := newRegistrationGlobalLimiter()
+
+	for i := 0; i < regGlobalMaxRequests; i++ {
+		rl.record()
+	}
+
+	blocked, retryAfter := rl.check()
+	require.True(t, blocked, "should block after regGlobalMaxRequests in window")
+	assert.Greater(t, retryAfter, time.Duration(0))
+	assert.LessOrEqual(t, retryAfter, regGlobalLockout+time.Second)
+}
+
+func TestRegGlobalLimiter_SlidingWindowExpiry(t *testing.T) {
+	rl := newRegistrationGlobalLimiter()
+
+	// Inject old requests outside the sliding window.
+	rl.mu.Lock()
+	for i := 0; i < regGlobalMaxRequests; i++ {
+		rl.requests = append(rl.requests, time.Now().Add(-2*regGlobalWindow))
+	}
+	rl.mu.Unlock()
+
+	// One new request should NOT trigger lockout — old ones are outside the window.
+	rl.record()
+	blocked, _ := rl.check()
+	assert.False(t, blocked, "expired requests outside window should not count")
+}
+
+// ---------------------------------------------------------------------------
 // extractClientIP tests
 // ---------------------------------------------------------------------------
 

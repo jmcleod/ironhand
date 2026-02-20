@@ -29,6 +29,8 @@ type API struct {
 	rateLimiter                *loginRateLimiter
 	ipLimiter                  *ipRateLimiter
 	globalLimiter              *globalRateLimiter
+	regIPLimiter               *registrationIPLimiter
+	regGlobalLimiter           *registrationGlobalLimiter
 	audit                      *auditLogger
 	metrics                    *metricsCollector
 	headerAuthEnabled          bool
@@ -153,12 +155,14 @@ func WithTrustedProxies(cidrs []string) (Option, error) {
 // New creates a new API instance.
 func New(repo storage.Repository, epochCache vault.EpochCache, opts ...Option) *API {
 	a := &API{
-		repo:          repo,
-		epochCache:    epochCache,
-		rateLimiter:   newLoginRateLimiter(),
-		ipLimiter:     newIPRateLimiter(),
-		globalLimiter: newGlobalRateLimiter(),
-		idleTimeout:   DefaultIdleTimeout,
+		repo:             repo,
+		epochCache:       epochCache,
+		rateLimiter:      newLoginRateLimiter(),
+		ipLimiter:        newIPRateLimiter(),
+		globalLimiter:    newGlobalRateLimiter(),
+		regIPLimiter:     newRegistrationIPLimiter(),
+		regGlobalLimiter: newRegistrationGlobalLimiter(),
+		idleTimeout:      DefaultIdleTimeout,
 	}
 	for _, opt := range opts {
 		opt(a)

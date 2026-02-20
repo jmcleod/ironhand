@@ -178,13 +178,20 @@ All mutating API requests (POST, PUT, DELETE) that use cookie-based session auth
 
 ### Rate Limiting
 
-Login endpoints enforce three levels of rate limiting:
+**Login** endpoints enforce three levels of rate limiting:
 
-- **Per-account** — 5 consecutive failures trigger exponential backoff (1 min → 30 min max)
+- **Per-account** — 5 consecutive failures trigger exponential backoff (1 min → 15 min max)
 - **Per-IP** — 20 failures from the same IP trigger IP-level throttling
 - **Global** — 100 failures per minute trigger a global cooldown
 
 Rate limits apply to both password-based and WebAuthn login flows.
+
+**Registration** endpoints enforce separate per-IP and global rate limiting before any expensive Argon2id KDF work is performed:
+
+- **Per-IP** — 5 registrations trigger exponential backoff (5 min → 1 hr max)
+- **Global** — 50 registrations per minute trigger a global cooldown
+
+MFA setup routes share the registration per-IP limiter to prevent TOTP secret generation spam.
 
 #### Trusted Proxies
 

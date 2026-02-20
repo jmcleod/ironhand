@@ -23,6 +23,20 @@ const (
 
 // Register handles POST /auth/register.
 func (a *API) Register(w http.ResponseWriter, r *http.Request) {
+	// Rate-limit registration before any expensive work.
+	clientIP := a.extractClientIP(r)
+	if blocked, retryAfter := a.regGlobalLimiter.check(); blocked {
+		a.audit.logFailure(AuditRegisterRateLimited, r, "global rate limited")
+		writeRegistrationRateLimited(w, retryAfter)
+		return
+	}
+	if blocked, retryAfter := a.regIPLimiter.check(clientIP); blocked {
+		a.audit.logFailure(AuditRegisterRateLimited, r, "ip rate limited",
+			slog.String("client_ip", clientIP))
+		writeRegistrationRateLimited(w, retryAfter)
+		return
+	}
+
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -36,6 +50,10 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("passphrase must be at least %d characters", minPassphraseLen))
 		return
 	}
+
+	// Record the request against both limiters before the expensive KDF.
+	a.regIPLimiter.record(clientIP)
+	a.regGlobalLimiter.record()
 
 	creds, err := vault.NewCredentials(req.Passphrase)
 	if err != nil {
@@ -217,6 +235,16 @@ func (a *API) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 
 // SetupTwoFactor handles POST /auth/2fa/setup.
 func (a *API) SetupTwoFactor(w http.ResponseWriter, r *http.Request) {
+	// Rate-limit MFA setup to prevent TOTP secret generation spam.
+	clientIP := a.extractClientIP(r)
+	if blocked, retryAfter := a.regIPLimiter.check(clientIP); blocked {
+		a.audit.logFailure(AuditRegisterRateLimited, r, "mfa setup ip rate limited",
+			slog.String("client_ip", clientIP))
+		writeRegistrationRateLimited(w, retryAfter)
+		return
+	}
+	a.regIPLimiter.record(clientIP)
+
 	creds := credentialsFromContext(r.Context())
 	if creds == nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")

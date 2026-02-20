@@ -252,6 +252,140 @@ func (rl *globalRateLimiter) recordFailure() {
 }
 
 // ---------------------------------------------------------------------------
+// Registration rate limiter (per-IP burst + global sliding window)
+// ---------------------------------------------------------------------------
+//
+// Registration is expensive (Argon2id KDF + key generation) and infrequent
+// by nature. These limits defend against credential-stuffing scripts and
+// resource-exhaustion attacks on the register endpoint.
+
+const (
+	// regIPMaxRequests is the maximum registrations per IP before lockout.
+	regIPMaxRequests = 5
+	// regIPBaseLockout is the initial lockout duration for per-IP registration.
+	regIPBaseLockout = 5 * time.Minute
+	// regIPMaxLockout caps the exponential backoff for per-IP registration.
+	regIPMaxLockout = 1 * time.Hour
+	// regIPExpiry is how long after the last request before the record expires.
+	regIPExpiry = 1 * time.Hour
+
+	// regGlobalWindow is the sliding window for the global registration limiter.
+	regGlobalWindow = 1 * time.Minute
+	// regGlobalMaxRequests is the max registrations within the window before lockout.
+	regGlobalMaxRequests = 50
+	// regGlobalLockout is the duration of the global registration lockout.
+	regGlobalLockout = 5 * time.Minute
+)
+
+// registrationIPLimiter tracks registration attempts per source IP to prevent
+// a single origin from performing excessive KDF work. Unlike the login IP
+// limiter, every request counts (not just failures), because each
+// registration invocation is expensive regardless of outcome.
+type registrationIPLimiter struct {
+	mu       sync.Mutex
+	requests map[string]*attemptRecord
+}
+
+func newRegistrationIPLimiter() *registrationIPLimiter {
+	return &registrationIPLimiter{
+		requests: make(map[string]*attemptRecord),
+	}
+}
+
+func (rl *registrationIPLimiter) check(ip string) (blocked bool, retryAfter time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	rec, ok := rl.requests[ip]
+	if !ok {
+		return false, 0
+	}
+	if time.Since(rec.lastFailure) > regIPExpiry {
+		delete(rl.requests, ip)
+		return false, 0
+	}
+	if time.Now().Before(rec.lockedUntil) {
+		return true, time.Until(rec.lockedUntil)
+	}
+	return false, 0
+}
+
+// record tracks a registration request (success or failure) for the given IP.
+func (rl *registrationIPLimiter) record(ip string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	rec, ok := rl.requests[ip]
+	if !ok {
+		rec = &attemptRecord{}
+		rl.requests[ip] = rec
+	}
+	rec.failures++ // "failures" used as a generic counter here
+	rec.lastFailure = time.Now()
+
+	if rec.failures >= regIPMaxRequests {
+		shift := rec.failures - regIPMaxRequests
+		lockout := regIPBaseLockout
+		for i := 0; i < shift; i++ {
+			lockout *= 2
+			if lockout > regIPMaxLockout {
+				lockout = regIPMaxLockout
+				break
+			}
+		}
+		rec.lockedUntil = time.Now().Add(lockout)
+	}
+}
+
+// registrationGlobalLimiter tracks total registration attempts across all IPs
+// using a sliding window to prevent distributed resource-exhaustion attacks.
+type registrationGlobalLimiter struct {
+	mu          sync.Mutex
+	requests    []time.Time
+	lockedUntil time.Time
+}
+
+func newRegistrationGlobalLimiter() *registrationGlobalLimiter {
+	return &registrationGlobalLimiter{}
+}
+
+func (rl *registrationGlobalLimiter) check() (blocked bool, retryAfter time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	if time.Now().Before(rl.lockedUntil) {
+		return true, time.Until(rl.lockedUntil)
+	}
+	return false, 0
+}
+
+func (rl *registrationGlobalLimiter) record() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	rl.requests = append(rl.requests, now)
+
+	// Trim requests outside the window.
+	cutoff := now.Add(-regGlobalWindow)
+	start := 0
+	for start < len(rl.requests) && rl.requests[start].Before(cutoff) {
+		start++
+	}
+	rl.requests = rl.requests[start:]
+
+	if len(rl.requests) >= regGlobalMaxRequests {
+		rl.lockedUntil = now.Add(regGlobalLockout)
+	}
+}
+
+// writeRegistrationRateLimited sends a 429 response for registration throttling.
+func writeRegistrationRateLimited(w http.ResponseWriter, retryAfter time.Duration) {
+	w.Header().Set("Retry-After", retryAfterString(retryAfter))
+	writeError(w, http.StatusTooManyRequests, "too many requests; try again later")
+}
+
+// ---------------------------------------------------------------------------
 // Helper: extract client IP
 // ---------------------------------------------------------------------------
 

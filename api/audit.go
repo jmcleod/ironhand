@@ -35,6 +35,7 @@ const (
 	AuditPrivateKeyAccessed   AuditEvent = "private_key_accessed"
 	AuditWebAuthnRegistered   AuditEvent = "webauthn_registered"
 	AuditWebAuthnLoginSuccess AuditEvent = "webauthn_login_success"
+	AuditRegisterRateLimited  AuditEvent = "register_rate_limited"
 )
 
 // auditLogger wraps slog.Logger for structured security audit logging.

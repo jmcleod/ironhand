@@ -527,15 +527,32 @@ WebAuthn provides phishing-resistant second-factor authentication. The passphras
 
 ### Rate Limiting
 
+#### Login rate limiting
+
 Login endpoints enforce three tiers of rate limiting:
 
 | Tier | Key | Max Failures | Lockout Range |
 |---|---|---|---|
-| Per-account | SHA-256(secret_key) | 5 | 1 min → 30 min (exponential) |
+| Per-account | SHA-256(secret_key) | 5 | 1 min → 15 min (exponential) |
 | Per-IP | Client IP | 20 | 1 min → 30 min |
 | Global | — | 100/min | 5 min |
 
 Rate limits apply to both password-based and WebAuthn login flows. Successful login clears per-account and per-IP counters.
+
+#### Registration rate limiting
+
+Registration performs expensive Argon2id KDF work on every call. Separate rate limiters prevent resource-exhaustion and credential-stuffing abuse:
+
+| Tier | Key | Max Requests | Lockout Range |
+|---|---|---|---|
+| Per-IP | Client IP | 5 | 5 min → 1 hr (exponential) |
+| Global | — | 50/min | 5 min |
+
+Every registration request (success or failure) counts toward the limit. The per-IP limiter uses the same exponential backoff model as login but with tighter thresholds appropriate for the low-frequency nature of registration.
+
+#### MFA setup rate limiting
+
+MFA setup routes (`/auth/2fa/setup`) share the registration per-IP limiter to prevent TOTP secret generation spam.
 
 ## Certificate Authority (PKI)
 

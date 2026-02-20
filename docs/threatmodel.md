@@ -44,6 +44,18 @@ Retention pruning has been moved from inline (every append) to threshold-trigger
 
 - Evidence: `api/audit_store.go` (`auditRetentionThreshold`, `auditRetentionCheckThreshold`, `parseCreatedAt`), `api/api.go` (`auditAppendsSinceRetention`).
 
+### Registration brute-force/abuse controls (`was P1 → Addressed`)
+
+Registration now enforces two-tier rate limiting (per-IP + global) before any expensive Argon2id KDF work is performed. Per-IP allows 5 registrations before exponential backoff (5 min → 1 hr). Global allows 50 registrations/min before a 5-minute cooldown. MFA setup routes share the per-IP limiter to prevent TOTP secret generation spam. All throttled requests are audit-logged (`register_rate_limited`).
+
+- Evidence: `api/ratelimit.go` (`registrationIPLimiter`, `registrationGlobalLimiter`), `api/auth_handlers.go` (Register, SetupTwoFactor), `api/ratelimit_test.go`.
+
+### Excessive error detail in API responses (`was P1 → Addressed`)
+
+All API handlers now return stable generic messages to clients instead of concatenating raw `err.Error()` details. Internal errors are logged server-side with a unique correlation ID via `writeInternalError`. The `ErrorResponse` includes an optional `correlation_id` field so operators can match user reports to log entries. Approximately 40 instances across `handlers.go`, `auth_handlers.go`, `webauthn.go`, and `errors.go` were remediated.
+
+- Evidence: `api/errors.go` (`writeInternalError`), `api/handlers.go`, `api/auth_handlers.go`, `api/webauthn.go`, `api/models.go` (`CorrelationID`).
+
 ## Operational Recommendations
 
 1. Set `--trusted-proxies` to the CIDR ranges of your reverse proxy/load balancer before enabling internet-facing traffic.
