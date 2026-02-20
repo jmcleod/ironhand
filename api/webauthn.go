@@ -254,8 +254,7 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	// needs later. By computing and sealing it now we avoid retaining
 	// plaintext secrets in ceremony state.
 	loginBuf := combineLoginPassphrase(req.Passphrase, req.SecretKey)
-	loginEnclave := memguard.NewEnclave(loginBuf.Bytes()) // encrypts data; source is inside LockedBuffer
-	loginBuf.Destroy()
+	loginEnclave := loginBuf.Seal() // melts, encrypts, and destroys loginBuf
 
 	// Seal the secret key into an Enclave for at-rest protection.
 	skBytes := []byte(req.SecretKey)
