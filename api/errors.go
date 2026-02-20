@@ -27,6 +27,49 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, ErrorResponse{Error: msg})
 }
 
+// Body size limits (bytes) for JSON request payloads.
+// Each limit is set to the smallest reasonable cap for the endpoint's DTO.
+const (
+	// maxAuthBodySize covers login, register, 2FA, WebAuthn login/register.
+	// These bodies contain credentials (passphrase, secret_key, totp_code)
+	// and are very small.
+	maxAuthBodySize int64 = 4 * 1024 // 4 KiB
+
+	// maxItemBodySize covers put/update item requests whose Fields map
+	// may include base64-encoded attachments (up to 768 KiB decoded each).
+	maxItemBodySize int64 = 4 * 1024 * 1024 // 4 MiB
+
+	// maxSmallBodySize covers vault create, member add, PKI operations,
+	// export passphrase, and other small structured requests.
+	maxSmallBodySize int64 = 64 * 1024 // 64 KiB
+
+	// maxWebAuthnBodySize covers WebAuthn protocol messages (assertions,
+	// attestations) which are moderately sized due to CBOR payloads.
+	maxWebAuthnBodySize int64 = 64 * 1024 // 64 KiB
+)
+
+// decodeJSON reads a size-limited JSON request body into a value of type T.
+// It enforces http.MaxBytesReader to cap the body size and
+// DisallowUnknownFields to reject unexpected keys. Returns false and
+// writes a 400 error if decoding fails.
+func decodeJSON[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, bool) {
+	var v T
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&v); err != nil {
+		// Distinguish body-too-large from malformed JSON.
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+		}
+		return v, false
+	}
+	return v, true
+}
+
 // writeInternalError logs the full error detail server-side with a unique
 // correlation ID, then returns a generic error message to the client along
 // with the correlation ID so operators can match user reports to log entries.

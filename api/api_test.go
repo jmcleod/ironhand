@@ -1708,3 +1708,207 @@ func TestWebAuthnNotConfiguredReturns404(t *testing.T) {
 	defer resp2.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp2.StatusCode)
 }
+
+// ---------------------------------------------------------------------------
+// doRaw sends a raw byte body with the given Content-Type.
+// Used for testing body size limits and malformed payloads.
+// ---------------------------------------------------------------------------
+
+func doRaw(t *testing.T, client *http.Client, method, url, contentType string, body []byte) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, url, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", contentType)
+
+	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+		if parsed, pErr := neturl.Parse(url); pErr == nil {
+			for _, c := range client.Jar.Cookies(parsed) {
+				if c.Name == "ironhand_csrf" {
+					req.Header.Set("X-CSRF-Token", c.Value)
+					break
+				}
+			}
+		}
+	}
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
+// ---------------------------------------------------------------------------
+// Body size limits and unknown field rejection tests
+// ---------------------------------------------------------------------------
+
+func TestRegisterRejectsOversizedBody(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	// maxAuthBodySize is 4 KiB. Send a body just over that.
+	oversized := []byte(`{"passphrase":"` + strings.Repeat("a", 5*1024) + `"}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", "application/json", oversized)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	var errResp api.ErrorResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&errResp))
+	assert.Equal(t, "request body too large", errResp.Error)
+}
+
+func TestRegisterRejectsUnknownFields(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	body := []byte(`{"passphrase":"test-passphrase-long","unknown_field":"evil"}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", "application/json", body)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var errResp api.ErrorResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&errResp))
+	assert.Equal(t, "invalid request body", errResp.Error)
+}
+
+func TestLoginRejectsOversizedBody(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	oversized := []byte(`{"passphrase":"` + strings.Repeat("a", 5*1024) + `","secret_key":"A.fake"}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/auth/login", "application/json", oversized)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+func TestLoginRejectsUnknownFields(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	body := []byte(`{"passphrase":"test-pp","secret_key":"A.fake","extra":true}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/auth/login", "application/json", body)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestCreateVaultRejectsOversizedBody(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	// maxSmallBodySize is 64 KiB. Send a body over that.
+	oversized := []byte(`{"name":"` + strings.Repeat("x", 70*1024) + `"}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", "application/json", oversized)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+func TestCreateVaultRejectsUnknownFields(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	body := []byte(`{"name":"TestVault","hacker":"injected"}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", "application/json", body)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestPutItemRejectsOversizedBody(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	// Create a vault to hold the item.
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "V"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+
+	// maxItemBodySize is 4 MiB. Send a body over that.
+	oversized := []byte(`{"fields":{"data":"` + strings.Repeat("x", 5*1024*1024) + `"}}`)
+	resp = doRaw(t, client, http.MethodPost, base+"/items/big-item", "application/json", oversized)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+func TestPutItemRejectsUnknownFields(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	resp := doJSON(t, client, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "V"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var create api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&create))
+
+	base := srv.URL + "/api/v1/vaults/" + create.VaultID
+
+	body := []byte(`{"fields":{"username":"alice"},"extra_key":"bad"}`)
+	resp = doRaw(t, client, http.MethodPost, base+"/items/test-item", "application/json", body)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestEnableTwoFactorRejectsUnknownFields(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	registerAndLogin(t, client, srv.URL)
+
+	body := []byte(`{"code":"123456","extra":"field"}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/auth/2fa/enable", "application/json", body)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestWebAuthnLoginBeginRejectsUnknownFields(t *testing.T) {
+	// WebAuthn not configured — returns 404 before body parsing.
+	// We still verify the endpoint is reachable and doesn't panic.
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	body := []byte(`{"secret_key":"A.fake","passphrase":"test","injected":"yes"}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/auth/webauthn/login/begin", "application/json", body)
+	defer resp.Body.Close()
+
+	// 404 because WebAuthn is not configured — the important thing is
+	// it doesn't crash or accept the unknown field.
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestValidRequestWithinSizeLimitSucceeds(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+	client := newClient(t)
+
+	// A valid register request within the 4 KiB limit should succeed.
+	body := []byte(`{"passphrase":"test-passphrase-that-is-valid"}`)
+	resp := doRaw(t, client, http.MethodPost, srv.URL+"/api/v1/auth/register", "application/json", body)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+}

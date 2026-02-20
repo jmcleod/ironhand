@@ -117,6 +117,9 @@ func (a *API) FinishWebAuthnRegistration(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, "webauthn not configured")
 		return
 	}
+	// Cap body size before the WebAuthn library reads from r.
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebAuthnBodySize)
+
 	creds := credentialsFromContext(r.Context())
 	if creds == nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")
@@ -189,7 +192,10 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		SecretKey  string `json:"secret_key"`
 		Passphrase string `json:"passphrase"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodySize)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -265,6 +271,9 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "webauthn not configured")
 		return
 	}
+
+	// Cap body size before handing off to the WebAuthn library.
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebAuthnBodySize)
 
 	// Parse the credential assertion to extract the challenge.
 	parsedResponse, err := protocol.ParseCredentialRequestResponseBody(r.Body)

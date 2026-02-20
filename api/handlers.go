@@ -113,9 +113,8 @@ func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req CreateVaultRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[CreateVaultRequest](w, r, maxSmallBodySize)
+	if !ok {
 		return
 	}
 
@@ -237,9 +236,8 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 	}
 	creds := credentialsFromContext(r.Context())
 
-	var req PutItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[PutItemRequest](w, r, maxItemBodySize)
+	if !ok {
 		return
 	}
 
@@ -350,9 +348,8 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	}
 	creds := credentialsFromContext(r.Context())
 
-	var req UpdateItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[UpdateItemRequest](w, r, maxItemBodySize)
+	if !ok {
 		return
 	}
 
@@ -505,9 +502,8 @@ func (a *API) AddMember(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
 
-	var req AddMemberRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[AddMemberRequest](w, r, maxSmallBodySize)
+	if !ok {
 		return
 	}
 
@@ -762,9 +758,8 @@ func (a *API) ExportVault(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
 
-	var req ExportVaultRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[ExportVaultRequest](w, r, maxSmallBodySize)
+	if !ok {
 		return
 	}
 	if req.Passphrase == "" {
@@ -874,7 +869,8 @@ func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
 
-	// Parse multipart form (50 MB limit).
+	// Cap the total request body to 50 MiB, then parse multipart form.
+	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)
 	if err := r.ParseMultipartForm(50 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid multipart form")
 		return
@@ -1013,9 +1009,8 @@ func (a *API) InitCA(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
 
-	var req InitCARequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[InitCARequest](w, r, maxSmallBodySize)
+	if !ok {
 		return
 	}
 	if req.CommonName == "" {
@@ -1143,9 +1138,8 @@ func (a *API) IssueCert(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
 
-	var req IssueCertAPIRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[IssueCertAPIRequest](w, r, maxSmallBodySize)
+	if !ok {
 		return
 	}
 	if req.CommonName == "" {
@@ -1229,8 +1223,11 @@ func (a *API) RevokeCert(w http.ResponseWriter, r *http.Request) {
 	itemID := chi.URLParam(r, "itemID")
 	creds := credentialsFromContext(r.Context())
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxSmallBodySize)
 	var req RevokeCertAPIRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		// Allow empty body (defaults to unspecified reason).
 		req.Reason = "unspecified"
 	}
@@ -1278,9 +1275,8 @@ func (a *API) RenewCert(w http.ResponseWriter, r *http.Request) {
 	itemID := chi.URLParam(r, "itemID")
 	creds := credentialsFromContext(r.Context())
 
-	var req RenewCertAPIRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[RenewCertAPIRequest](w, r, maxSmallBodySize)
+	if !ok {
 		return
 	}
 	if req.ValidityDays <= 0 {
@@ -1367,9 +1363,8 @@ func (a *API) SignCSR(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
 
-	var req SignCSRAPIRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[SignCSRAPIRequest](w, r, maxSmallBodySize)
+	if !ok {
 		return
 	}
 	if req.CSR == "" {

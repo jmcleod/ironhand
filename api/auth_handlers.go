@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,9 +36,8 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[RegisterRequest](w, r, maxAuthBodySize)
+	if !ok {
 		return
 	}
 	if req.Passphrase == "" {
@@ -105,9 +103,8 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 
 // Login handles POST /auth/login.
 func (a *API) Login(w http.ResponseWriter, r *http.Request) {
-	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[LoginRequest](w, r, maxAuthBodySize)
+	if !ok {
 		return
 	}
 	if req.Passphrase == "" {
@@ -281,9 +278,8 @@ func (a *API) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req EnableTwoFactorRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	req, ok := decodeJSON[EnableTwoFactorRequest](w, r, maxAuthBodySize)
+	if !ok {
 		return
 	}
 
