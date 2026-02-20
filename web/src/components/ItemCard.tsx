@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { VaultItem, itemName, itemType, itemUpdatedAt, userFields, SENSITIVE_FIELDS, itemAttachments, formatFileSize } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
-import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Shield, Pencil, History, AlertTriangle, Paperclip, Download } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Copy, Check, KeyRound, StickyNote, CreditCard, Box, Shield, Pencil, History, AlertTriangle, Paperclip, Download, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import EditItemDialog from '@/components/EditItemDialog';
@@ -10,6 +10,7 @@ import TotpCodeDisplay from '@/components/TotpCodeDisplay';
 import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
 import { isValidTOTPSecret } from '@/lib/totp';
 import { assessPasswordStrength } from '@/lib/password-strength';
+import { getItemPrivateKey, ApiError } from '@/lib/api';
 
 interface ItemCardProps {
   item: VaultItem;
@@ -24,6 +25,8 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [privateKeyPEM, setPrivateKeyPEM] = useState<string | null>(null);
+  const [privateKeyLoading, setPrivateKeyLoading] = useState(false);
 
   const type = itemType(item);
   const name = itemName(item);
@@ -83,6 +86,25 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const fetchPrivateKey = async (): Promise<string | null> => {
+    if (privateKeyPEM) return privateKeyPEM;
+    setPrivateKeyLoading(true);
+    try {
+      const pem = await getItemPrivateKey(vaultId, item.id);
+      setPrivateKeyPEM(pem);
+      return pem;
+    } catch (err) {
+      const apiErr = err as ApiError;
+      const msg = apiErr.status === 403
+        ? 'Only the vault owner can access private keys.'
+        : apiErr.message || 'Failed to fetch private key.';
+      toast({ title: 'Private key unavailable', description: msg, variant: 'destructive' });
+      return null;
+    } finally {
+      setPrivateKeyLoading(false);
+    }
   };
 
   const pemFilename = (key: string): string => {
@@ -174,6 +196,23 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
       );
     }
 
+    // Private key field: show fetched PEM or redacted placeholder
+    if (key === 'private_key' && type === 'certificate') {
+      if (privateKeyLoading) {
+        return <span className="text-sm text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Loading...</span>;
+      }
+      if (revealed && privateKeyPEM) {
+        const lines = privateKeyPEM.split('\n');
+        const preview = lines.length > 4 ? lines.slice(0, 3).join('\n') + '\n...' : privateKeyPEM;
+        return (
+          <div className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-all max-h-20 overflow-hidden">
+            {preview}
+          </div>
+        );
+      }
+      return <span className="font-mono text-sm text-muted-foreground">{maskValue('private-key-redacted')}</span>;
+    }
+
     // PEM fields: show truncated preview with copy button
     if ((key === 'certificate' || key === 'chain') && value.startsWith('-----BEGIN')) {
       const lines = value.split('\n');
@@ -247,7 +286,29 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
   };
 
   const isPEMField = (key: string, value: string) =>
-    type === 'certificate' && (key === 'certificate' || key === 'private_key' || key === 'chain') && value.includes('-----BEGIN');
+    type === 'certificate' && (key === 'certificate' || key === 'chain') && value.includes('-----BEGIN');
+
+  const isRedactedPrivateKey = (key: string) =>
+    type === 'certificate' && key === 'private_key';
+
+  const handlePrivateKeyReveal = async () => {
+    if (revealedFields.has('private_key')) {
+      toggleReveal('private_key');
+      return;
+    }
+    const pem = await fetchPrivateKey();
+    if (pem) toggleReveal('private_key');
+  };
+
+  const handlePrivateKeyCopy = async () => {
+    const pem = privateKeyPEM ?? await fetchPrivateKey();
+    if (pem) handleCopy('private_key', pem);
+  };
+
+  const handlePrivateKeyDownload = async () => {
+    const pem = privateKeyPEM ?? await fetchPrivateKey();
+    if (pem) handleDownloadPEM(pemFilename('private_key'), pem);
+  };
 
   const renderField = (key: string, value: string) => {
     // TOTP fields get special rendering with live code generation
@@ -276,6 +337,31 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
                 {copiedField === key ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
               </Button>
             </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Private key for certificates: fetch on-demand from dedicated endpoint
+    if (isRedactedPrivateKey(key)) {
+      return (
+        <div key={key} className="flex items-center gap-2 py-1.5 group">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider min-w-[100px] shrink-0">
+            {formatFieldLabel(key)}
+          </span>
+          <div className="flex-1 min-w-0">
+            {renderFieldValue(key, value)}
+          </div>
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+            <Button variant="ghost" size="icon" onClick={handlePrivateKeyReveal} disabled={privateKeyLoading} className="h-7 w-7">
+              {privateKeyLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : revealedFields.has(key) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </Button>
+            <Button variant="ghost" size="icon" onClick={handlePrivateKeyDownload} disabled={privateKeyLoading} className="h-7 w-7" title={`Download ${pemFilename(key)}`}>
+              <Download className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={handlePrivateKeyCopy} disabled={privateKeyLoading} className="h-7 w-7">
+              {copiedField === key ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+            </Button>
           </div>
         </div>
       );

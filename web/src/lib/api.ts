@@ -414,6 +414,13 @@ export async function getCRL(vaultID: string): Promise<string> {
   return resp.text();
 }
 
+export async function getItemPrivateKey(vaultID: string, itemID: string): Promise<string> {
+  const resp = await request(
+    `/vaults/${encodeURIComponent(vaultID)}/items/${encodeURIComponent(itemID)}/private-key`,
+  );
+  return resp.text();
+}
+
 // ---------------------------------------------------------------------------
 // Pagination helpers
 // ---------------------------------------------------------------------------
