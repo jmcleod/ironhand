@@ -396,8 +396,220 @@ func TestWithTrustedProxies(t *testing.T) {
 		require.NotNil(t, opt)
 	})
 
+	t.Run("bare IPv6 treated as /128", func(t *testing.T) {
+		opt, err := WithTrustedProxies([]string{"::1"})
+		require.NoError(t, err)
+		require.NotNil(t, opt)
+	})
+
 	t.Run("invalid CIDR returns error", func(t *testing.T) {
 		_, err := WithTrustedProxies([]string{"not-a-cidr"})
 		require.Error(t, err)
+	})
+
+	t.Run("mixed valid and invalid returns error", func(t *testing.T) {
+		_, err := WithTrustedProxies([]string{"10.0.0.0/8", "garbage"})
+		require.Error(t, err)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Extended trusted proxy edge cases
+// ---------------------------------------------------------------------------
+
+func TestExtractClientIPWithTrustedProxies_IPv6(t *testing.T) {
+	trustedIPv6 := netip.MustParsePrefix("fd00::/8")
+
+	tests := []struct {
+		name           string
+		remoteAddr     string
+		headers        map[string]string
+		trustedProxies []netip.Prefix
+		want           string
+	}{
+		{
+			name:           "trusted IPv6 proxy honors XFF",
+			remoteAddr:     "[fd00::1]:80",
+			headers:        map[string]string{"X-Forwarded-For": "2001:db8::42"},
+			trustedProxies: []netip.Prefix{trustedIPv6},
+			want:           "2001:db8::42",
+		},
+		{
+			name:           "untrusted IPv6 peer ignores XFF",
+			remoteAddr:     "[2001:db8::99]:80",
+			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
+			trustedProxies: []netip.Prefix{trustedIPv6},
+			want:           "2001:db8::99",
+		},
+		{
+			name:           "trusted IPv6 proxy with Forwarded quoted IPv6",
+			remoteAddr:     "[fd00::1]:80",
+			headers:        map[string]string{"Forwarded": `for="[2001:db8::42]:1234"`},
+			trustedProxies: []netip.Prefix{trustedIPv6},
+			want:           "2001:db8::42",
+		},
+		{
+			name:           "loopback IPv6 trusted",
+			remoteAddr:     "[::1]:80",
+			headers:        map[string]string{"X-Forwarded-For": "198.51.100.25"},
+			trustedProxies: []netip.Prefix{netip.MustParsePrefix("::1/128")},
+			want:           "198.51.100.25",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &http.Request{RemoteAddr: tt.remoteAddr}
+			r.Header = make(http.Header)
+			for k, v := range tt.headers {
+				r.Header.Set(k, v)
+			}
+			got := extractClientIPWithProxies(r, tt.trustedProxies)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExtractClientIPWithTrustedProxies_MultiHopXFF(t *testing.T) {
+	// When there are multiple hops, X-Forwarded-For contains:
+	//   <original-client>, <proxy-1>, <proxy-2>
+	// extractClientIPWithProxies returns the first valid IP (the original client).
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+
+	r := &http.Request{
+		RemoteAddr: "10.0.0.5:80",
+		Header: http.Header{
+			"X-Forwarded-For": []string{"203.0.113.50, 10.0.0.3, 10.0.0.4"},
+		},
+	}
+	got := extractClientIPWithProxies(r, trusted)
+	assert.Equal(t, "203.0.113.50", got, "should extract the original client IP from multi-hop chain")
+}
+
+func TestExtractClientIPWithTrustedProxies_AllHeaderTypes(t *testing.T) {
+	// When trusted, test priority: XFF > Forwarded > X-Real-IP.
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+
+	t.Run("XFF takes priority over Forwarded and X-Real-IP", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.1:80",
+			Header: http.Header{
+				"X-Forwarded-For": []string{"198.51.100.10"},
+				"Forwarded":       []string{"for=198.51.100.20"},
+				"X-Real-Ip":       []string{"198.51.100.30"},
+			},
+		}
+		got := extractClientIPWithProxies(r, trusted)
+		assert.Equal(t, "198.51.100.10", got)
+	})
+
+	t.Run("Forwarded takes priority over X-Real-IP when no XFF", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.1:80",
+			Header: http.Header{
+				"Forwarded": []string{"for=198.51.100.20"},
+				"X-Real-Ip": []string{"198.51.100.30"},
+			},
+		}
+		got := extractClientIPWithProxies(r, trusted)
+		assert.Equal(t, "198.51.100.20", got)
+	})
+
+	t.Run("X-Real-IP used when no XFF or Forwarded", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.1:80",
+			Header: http.Header{
+				"X-Real-Ip": []string{"198.51.100.30"},
+			},
+		}
+		got := extractClientIPWithProxies(r, trusted)
+		assert.Equal(t, "198.51.100.30", got)
+	})
+}
+
+// TestAPIExtractClientIP_MethodWithTrustedProxies tests the API-method-level
+// extractClientIP that reads the trustedProxies from the API struct.
+func TestAPIExtractClientIP_MethodWithTrustedProxies(t *testing.T) {
+	a := &API{
+		trustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+	}
+
+	t.Run("trusted peer uses XFF", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.1:80",
+			Header: http.Header{
+				"X-Forwarded-For": []string{"198.51.100.25"},
+			},
+		}
+		got := a.extractClientIP(r)
+		assert.Equal(t, "198.51.100.25", got)
+	})
+
+	t.Run("untrusted peer ignores XFF", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "192.168.1.1:80",
+			Header: http.Header{
+				"X-Forwarded-For": []string{"198.51.100.25"},
+			},
+		}
+		got := a.extractClientIP(r)
+		assert.Equal(t, "192.168.1.1", got)
+	})
+}
+
+func TestAPIExtractClientIP_MethodWithoutTrustedProxies(t *testing.T) {
+	a := &API{} // trustedProxies is nil — legacy behavior
+
+	r := &http.Request{
+		RemoteAddr: "192.168.1.1:80",
+		Header: http.Header{
+			"X-Forwarded-For": []string{"198.51.100.25"},
+		},
+	}
+	got := a.extractClientIP(r)
+	assert.Equal(t, "198.51.100.25", got, "should trust headers with no proxy config (legacy)")
+}
+
+func TestExtractClientIPWithTrustedProxies_SpoofAttempt(t *testing.T) {
+	// An attacker directly connecting (not through a proxy) tries to spoof
+	// their IP via X-Forwarded-For. With trusted proxies configured, the
+	// header should be ignored.
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+
+	r := &http.Request{
+		RemoteAddr: "203.0.113.99:12345",
+		Header: http.Header{
+			"X-Forwarded-For": []string{"10.0.0.1"}, // trying to look internal
+			"Forwarded":       []string{"for=10.0.0.2"},
+			"X-Real-Ip":       []string{"10.0.0.3"},
+		},
+	}
+	got := extractClientIPWithProxies(r, trusted)
+	assert.Equal(t, "203.0.113.99", got, "should use TCP peer, not spoofed headers")
+}
+
+func TestExtractClientIPWithTrustedProxies_NarrowCIDR(t *testing.T) {
+	// Only a single IP is trusted (the exact load balancer).
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.1/32")}
+
+	t.Run("exact match trusted", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.1:80",
+			Header: http.Header{
+				"X-Forwarded-For": []string{"198.51.100.25"},
+			},
+		}
+		got := extractClientIPWithProxies(r, trusted)
+		assert.Equal(t, "198.51.100.25", got)
+	})
+
+	t.Run("adjacent IP not trusted", func(t *testing.T) {
+		r := &http.Request{
+			RemoteAddr: "10.0.0.2:80",
+			Header: http.Header{
+				"X-Forwarded-For": []string{"198.51.100.25"},
+			},
+		}
+		got := extractClientIPWithProxies(r, trusted)
+		assert.Equal(t, "10.0.0.2", got, "10.0.0.2 is not in 10.0.0.1/32")
 	})
 }
