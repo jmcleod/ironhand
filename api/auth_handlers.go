@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/internal/uuid"
 	"github.com/jmcleod/ironhand/vault"
 )
@@ -40,6 +41,7 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	defer func() { req.Passphrase = "" }() // best-effort: remove string reference
 	if req.Passphrase == "" {
 		writeError(w, http.StatusBadRequest, "passphrase is required")
 		return
@@ -64,12 +66,16 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 	defer creds.Destroy()
 
 	secretKey := creds.SecretKey().String()
-	loginPassphrase := combineLoginPassphrase(req.Passphrase, secretKey)
-	exported, err := vault.ExportCredentials(creds, loginPassphrase)
+	defer func() { secretKey = "" }() // best-effort: remove string reference
+
+	loginBuf := combineLoginPassphrase(req.Passphrase, secretKey)
+	defer loginBuf.Destroy()
+	exported, err := vault.ExportCredentialsBytes(creds, loginBuf.Bytes())
 	if err != nil {
 		writeInternalError(w, "failed to export account credentials", err)
 		return
 	}
+	defer util.WipeBytes(exported)
 	record := accountRecord{
 		SecretKeyID:     creds.SecretKey().ID(),
 		CredentialsBlob: base64.StdEncoding.EncodeToString(exported),
@@ -82,12 +88,16 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	sessionSecret := uuid.New()
-	sessionPassphrase := deriveSessionPassphrase(token, sessionSecret)
-	sessionBlob, err := vault.ExportCredentials(creds, sessionPassphrase)
+	defer func() { sessionSecret = "" }() // best-effort: remove string reference
+
+	sessBuf := deriveSessionPassphrase(token, sessionSecret)
+	defer sessBuf.Destroy()
+	sessionBlob, err := vault.ExportCredentialsBytes(creds, sessBuf.Bytes())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to initialize session")
 		return
 	}
+	defer util.WipeBytes(sessionBlob)
 
 	expiresAt := time.Now().Add(sessionDuration)
 	a.sessions.Put(token, AuthSession{
@@ -110,6 +120,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	defer func() { req.Passphrase = ""; req.SecretKey = "" }() // best-effort: remove string references
 	if req.Passphrase == "" {
 		writeError(w, http.StatusBadRequest, "passphrase is required")
 		return
@@ -177,8 +188,9 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	loginPassphrase := combineLoginPassphrase(req.Passphrase, req.SecretKey)
-	creds, err := vault.ImportCredentials(blob, loginPassphrase)
+	loginBuf := combineLoginPassphrase(req.Passphrase, req.SecretKey)
+	defer loginBuf.Destroy()
+	creds, err := vault.ImportCredentialsBytes(blob, loginBuf.Bytes())
 	if err != nil {
 		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "invalid passphrase",
@@ -190,12 +202,16 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	sessionSecret := uuid.New()
-	sessionPassphrase := deriveSessionPassphrase(token, sessionSecret)
-	sessionBlob, err := vault.ExportCredentials(creds, sessionPassphrase)
+	defer func() { sessionSecret = "" }() // best-effort: remove string reference
+
+	sessBuf := deriveSessionPassphrase(token, sessionSecret)
+	defer sessBuf.Destroy()
+	sessionBlob, err := vault.ExportCredentialsBytes(creds, sessBuf.Bytes())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to initialize session")
 		return
 	}
+	defer util.WipeBytes(sessionBlob)
 
 	// Login succeeded — clear rate-limit state.
 	a.rateLimiter.recordSuccess(accountID)
@@ -223,7 +239,9 @@ func (a *API) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	record, err := a.loadAccountRecord(creds.SecretKey().String())
+	sk := creds.SecretKey().String()
+	defer func() { sk = "" }()
+	record, err := a.loadAccountRecord(sk)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load account")
 		return
@@ -260,6 +278,7 @@ func (a *API) SetupTwoFactor(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to generate 2fa secret")
 		return
 	}
+	defer func() { secret = "" }() // best-effort: remove string reference
 
 	session.PendingTOTPSecret = secret
 	session.PendingTOTPExpiry = time.Now().Add(totpSetupTTL)
@@ -301,6 +320,7 @@ func (a *API) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	secretKey := creds.SecretKey().String()
+	defer func() { secretKey = "" }() // best-effort: remove string reference
 	record, err := a.loadAccountRecord(secretKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load account")

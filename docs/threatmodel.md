@@ -116,9 +116,23 @@ The default Argon2id parameters were `Time=1, Memory=64 MiB`, which — while no
 
 - Evidence: `internal/util/argon2id.go` (`DefaultArgon2idParams`, `Argon2idProfile`, `ValidateArgon2idParams`, minimum constants), `crypto/keys.go` (profile/validation exposure), `vault/credentials.go` (`WithCredentialKDFParams`, `exportKDFParams` → sensitive), `api/handlers.go` (`backupKDFParams` → sensitive), `api/api.go` (`WithKDFProfile`, `kdfParamsForNewVault`), `api/auth_handlers.go` (Register uses configured profile), `cmd/ironhand/cmd/server.go` (`--kdf-profile` flag), `internal/util/util_test.go` (`TestDefaultArgon2idParams_MeetsOWASPMinimums`, `TestArgon2idProfile_*`, `TestValidateArgon2idParams`), `vault/vault_test.go` (`TestVault_BackwardCompat_OldKDFParams`, `TestVault_WithCredentialKDFParams_OverridesDefault`), `api/api_test.go` (`TestWithKDFProfile_*`).
 
+### Sensitive secrets handled as Go strings in auth paths (`was Medium → Addressed`)
+
+Several authentication paths created and passed sensitive secrets as Go `string` values which are immutable and cannot be zeroed. This widened the residual memory exposure window for derived passphrases, ceremony state, and plaintext intermediates. The fix uses memguard (already in use in the `vault/` package) to protect secrets consistently throughout the `api/` layer:
+
+- **Derived secrets in locked memory** — `combineLoginPassphrase` and `deriveSessionPassphrase` now return `*memguard.LockedBuffer` (mlock'd, guard-paged, deterministically wiped via `Destroy()`). All callers use `defer buf.Destroy()`.
+- **Ceremony state encrypted at rest** — `webauthnCeremonyState.SecretKey` and `.LoginPassphrase` changed from plain `string` to `*memguard.Enclave` (encrypted in memory). Secrets sit in the ceremony map for up to 5 minutes but are only decrypted briefly when the ceremony completes.
+- **`[]byte` passphrase variants** — Added `ExportCredentialsBytes`/`ImportCredentialsBytes` in `vault/credentials.go` to accept `[]byte` passphrases from locked buffers without creating intermediate heap-allocated strings.
+- **Missing `[]byte` wipes fixed** — `defer util.WipeBytes(plaintext)` added in ExportVault and ImportVault handlers; TOTP decoded secrets and HMAC sums wiped after use; decrypted session data wiped in persistent session store.
+- **Session store cleanup** — `MemorySessionStore.Delete` now zeros sensitive string fields (CredentialsBlob, PendingTOTPSecret, WebAuthnSessionData) before map removal (best-effort reference removal).
+- **Known limitation** — Go string immutability means JSON-decoded request fields (`req.Passphrase`) and HTTP cookie values cannot be truly wiped. Best-effort reference zeroing (`req.Passphrase = ""`) is applied to shorten the reachability window but cannot guarantee the GC-managed backing array is cleared.
+
+- Evidence: `api/middleware.go` (`combineLoginPassphrase`, `deriveSessionPassphrase` → `*memguard.LockedBuffer`, `credentialsFromSessionCookie` uses `ImportCredentialsBytes`), `api/webauthn.go` (`webauthnCeremonyState` fields → `*memguard.Enclave`), `vault/credentials.go` (`ExportCredentialsBytes`, `ImportCredentialsBytes`), `api/auth_handlers.go` (all handlers use locked buffers + string zeroing), `api/handlers.go` (`defer util.WipeBytes(plaintext)` in Export/Import), `api/totp.go` (wipe decoded secret + HMAC sum), `api/session_store_memory.go` (field zeroing on Delete), `api/session_store_persistent.go` (wipe decrypted data), `vault/credentials_test.go` (`TestExportImportCredentialsBytes_*`), `api/webauthn_test.go` (`TestCeremonyState_SecretsInEnclaves`).
+
 ## Operational Recommendations
 
 1. When deploying behind a reverse proxy, set `--trusted-proxies` to the CIDR ranges of your proxy/load balancer so that rate limiters see real client IPs instead of the proxy's address.
 2. Set `--audit-retention-days` and/or `--audit-max-entries` explicitly in production.
 3. Choose hardware-backed PKI key custody (PKCS#11 or custom KMS backend) for high-assurance CA deployments.
 4. Review the `--kdf-profile` setting. The default `moderate` profile is appropriate for most deployments. Use `sensitive` for environments with high-value secrets where additional derivation latency is acceptable.
+5. For maximum secret protection, deploy with `mlockall(2)` support (e.g., `--rlimit-memlock=unlimited` or `LimitMEMLOCK=infinity` in systemd) so that memguard's locked buffers are never swapped to disk.

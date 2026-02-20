@@ -85,6 +85,7 @@ func (s *PersistentSessionStore) Get(token string) (AuthSession, bool) {
 	if err != nil {
 		return AuthSession{}, false
 	}
+	defer util.WipeBytes(data)
 	var session AuthSession
 	if err := json.Unmarshal(data, &session); err != nil {
 		return AuthSession{}, false
@@ -151,9 +152,11 @@ func (s *PersistentSessionStore) sweepExpired() {
 		}
 		var session AuthSession
 		if err := json.Unmarshal(data, &session); err != nil {
+			util.WipeBytes(data) // wipe immediately; defer would accumulate in loop
 			_ = s.repo.Delete(sessionVaultID, sessionRecordType, token)
 			continue
 		}
+		util.WipeBytes(data) // wipe immediately after unmarshal; defer would accumulate in loop
 		expired := now.After(session.ExpiresAt)
 		idle := s.idleTimeout > 0 && now.Sub(session.LastAccessedAt) > s.idleTimeout
 		if expired || idle {

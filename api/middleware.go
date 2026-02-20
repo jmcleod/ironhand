@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/awnumar/memguard"
+	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/vault"
 )
 
@@ -48,12 +50,14 @@ func (a *API) AuthMiddleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "missing X-Passphrase header")
 			return
 		}
+		defer func() { passphrase = "" }() // best-effort: remove string reference
 
 		blob, err := base64.StdEncoding.DecodeString(credsHeader)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid X-Credentials encoding")
 			return
 		}
+		defer util.WipeBytes(blob)
 
 		creds, err := vault.ImportCredentials(blob, passphrase)
 		if err != nil {
@@ -88,9 +92,11 @@ func (a *API) credentialsFromSessionCookie(r *http.Request) (*vault.Credentials,
 	if err != nil {
 		return nil, false
 	}
+	defer util.WipeBytes(blob)
 
-	passphrase := deriveSessionPassphrase(token, secretCookie.Value)
-	creds, err := vault.ImportCredentials(blob, passphrase)
+	passBuf := deriveSessionPassphrase(token, secretCookie.Value)
+	defer passBuf.Destroy()
+	creds, err := vault.ImportCredentialsBytes(blob, passBuf.Bytes())
 	if err != nil {
 		return nil, false
 	}
@@ -152,19 +158,30 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request, trustedProxies [
 	})
 }
 
-func combineLoginPassphrase(passphrase, secretKey string) string {
-	return passphrase + ":" + secretKey
+// combineLoginPassphrase combines a passphrase and secret key into a single
+// login passphrase stored in a memguard LockedBuffer (mlock'd, wiped on
+// Destroy). The caller must call Destroy() on the returned buffer when done.
+func combineLoginPassphrase(passphrase, secretKey string) *memguard.LockedBuffer {
+	combined := []byte(passphrase + ":" + secretKey)
+	return memguard.NewBufferFromBytes(combined) // NewBufferFromBytes wipes combined
 }
 
 // deriveSessionPassphrase derives a session passphrase from the session ID
 // (stored in the ironhand_session cookie) and the session secret (stored in
-// the ironhand_session_key cookie) using HMAC-SHA256. This ensures that
+// the ironhand_session_key cookie) using HMAC-SHA256. The result is returned
+// in a memguard LockedBuffer (mlock'd, wiped on Destroy). This ensures that
 // neither the server-side session store nor the client cookie alone is
-// sufficient to reconstruct the credentials passphrase.
-func deriveSessionPassphrase(sessionID, sessionSecret string) string {
-	mac := hmac.New(sha256.New, []byte(sessionSecret))
+// sufficient to reconstruct the credentials passphrase. The caller must call
+// Destroy() on the returned buffer when done.
+func deriveSessionPassphrase(sessionID, sessionSecret string) *memguard.LockedBuffer {
+	keyBytes := []byte(sessionSecret)
+	mac := hmac.New(sha256.New, keyBytes)
+	util.WipeBytes(keyBytes)
 	mac.Write([]byte("ironhand:session_passphrase:v1:" + sessionID))
-	return hex.EncodeToString(mac.Sum(nil))
+	raw := mac.Sum(nil)
+	hexBytes := []byte(hex.EncodeToString(raw))
+	util.WipeBytes(raw)
+	return memguard.NewBufferFromBytes(hexBytes) // NewBufferFromBytes wipes hexBytes
 }
 
 // requestIsSecureWithProxies reports whether the original client connection

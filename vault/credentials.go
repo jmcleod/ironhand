@@ -287,13 +287,25 @@ var exportKDFParams = func() util.Argon2idParams {
 // blobs as highly sensitive — store them only in encrypted storage and
 // delete them after import.
 func ExportCredentials(creds *Credentials, passphrase string) ([]byte, error) {
+	normalized := []byte(util.Normalize(passphrase))
+	defer util.WipeBytes(normalized)
+	return ExportCredentialsBytes(creds, normalized)
+}
+
+// ExportCredentialsBytes is like ExportCredentials but accepts the passphrase
+// as []byte, avoiding an intermediate heap-allocated string. Use this when the
+// passphrase originates from a memguard LockedBuffer. The passphrase bytes
+// must already be NFKD-normalized if they may contain Unicode; ASCII-only
+// passphrases (e.g., hex-encoded session passphrases) need no normalization.
+// The caller should wipe the passphrase slice after this function returns.
+func ExportCredentialsBytes(creds *Credentials, passphrase []byte) ([]byte, error) {
 	if creds == nil {
 		return nil, fmt.Errorf("credentials must not be nil")
 	}
 	if creds.destroyed {
 		return nil, fmt.Errorf("credentials have been destroyed")
 	}
-	if passphrase == "" {
+	if len(passphrase) == 0 {
 		return nil, fmt.Errorf("passphrase must not be empty")
 	}
 
@@ -323,7 +335,9 @@ func ExportCredentials(creds *Credentials, passphrase string) ([]byte, error) {
 		return nil, fmt.Errorf("generating export salt: %w", err)
 	}
 
-	key, err := util.DeriveArgon2idKey(util.Normalize(passphrase), salt, exportKDFParams)
+	// The string() conversion in a direct function argument is stack-allocated
+	// in modern Go and avoids a heap copy.
+	key, err := util.DeriveArgon2idKey(string(passphrase), salt, exportKDFParams)
 	if err != nil {
 		return nil, fmt.Errorf("deriving export key: %w", err)
 	}
@@ -345,10 +359,19 @@ func ExportCredentials(creds *Credentials, passphrase string) ([]byte, error) {
 // ImportCredentials decrypts and reconstructs credentials from a blob
 // previously created by ExportCredentials.
 func ImportCredentials(data []byte, passphrase string) (*Credentials, error) {
+	normalized := []byte(util.Normalize(passphrase))
+	defer util.WipeBytes(normalized)
+	return ImportCredentialsBytes(data, normalized)
+}
+
+// ImportCredentialsBytes is like ImportCredentials but accepts the passphrase
+// as []byte. See ExportCredentialsBytes for normalization requirements.
+// The caller should wipe the passphrase slice after this function returns.
+func ImportCredentialsBytes(data []byte, passphrase []byte) (*Credentials, error) {
 	if len(data) < 1+exportSaltLen {
 		return nil, fmt.Errorf("export data too short")
 	}
-	if passphrase == "" {
+	if len(passphrase) == 0 {
 		return nil, fmt.Errorf("passphrase must not be empty")
 	}
 
@@ -359,7 +382,7 @@ func ImportCredentials(data []byte, passphrase string) (*Credentials, error) {
 	salt := data[1 : 1+exportSaltLen]
 	ciphertext := data[1+exportSaltLen:]
 
-	key, err := util.DeriveArgon2idKey(util.Normalize(passphrase), salt, exportKDFParams)
+	key, err := util.DeriveArgon2idKey(string(passphrase), salt, exportKDFParams)
 	if err != nil {
 		return nil, fmt.Errorf("deriving export key: %w", err)
 	}

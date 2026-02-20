@@ -50,6 +50,15 @@ func (s *MemorySessionStore) Put(token string, session AuthSession) {
 
 func (s *MemorySessionStore) Delete(token string) {
 	s.mu.Lock()
+	if session, ok := s.data[token]; ok {
+		// Best-effort: remove references to sensitive string fields.
+		// This does not zero the backing arrays (Go strings are immutable),
+		// but it shortens the window in which references are reachable.
+		session.CredentialsBlob = ""
+		session.PendingTOTPSecret = ""
+		session.WebAuthnSessionData = ""
+		s.data[token] = session
+	}
 	delete(s.data, token)
 	s.mu.Unlock()
 }

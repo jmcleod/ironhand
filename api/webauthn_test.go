@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/awnumar/memguard"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -99,19 +100,30 @@ func TestEvictExpiredCeremonies_EmptyMap(t *testing.T) {
 // Ceremony state: passphrase not stored in raw form
 // ---------------------------------------------------------------------------
 
-func TestCeremonyState_NoRawPassphrase(t *testing.T) {
-	// Verify the struct does NOT have a Passphrase field; it only
-	// has LoginPassphrase (the pre-derived form).
+func TestCeremonyState_SecretsInEnclaves(t *testing.T) {
+	// Verify that ceremony secrets are stored as memguard Enclaves
+	// (encrypted at rest in memory), not as plain strings.
+	skEnclave := memguard.NewEnclave([]byte("sk-12345"))
+	lpEnclave := memguard.NewEnclave([]byte("some-passphrase:sk-12345"))
+
 	state := webauthnCeremonyState{
-		SecretKey:       "sk-12345",
-		LoginPassphrase: "some-passphrase:sk-12345",
+		SecretKey:       skEnclave,
+		LoginPassphrase: lpEnclave,
 		SessionData:     webauthn.SessionData{Challenge: "test-challenge"},
 		ExpiresAt:       time.Now().Add(5 * time.Minute),
 	}
 
-	// LoginPassphrase should be the combined form, not the raw passphrase.
-	assert.Contains(t, state.LoginPassphrase, ":")
-	assert.Equal(t, "some-passphrase:sk-12345", state.LoginPassphrase)
+	// Verify we can open the Enclaves and recover the secrets.
+	skBuf, err := state.SecretKey.Open()
+	require.NoError(t, err)
+	defer skBuf.Destroy()
+	assert.Equal(t, "sk-12345", string(skBuf.Bytes()))
+
+	lpBuf, err := state.LoginPassphrase.Open()
+	require.NoError(t, err)
+	defer lpBuf.Destroy()
+	assert.Contains(t, string(lpBuf.Bytes()), ":")
+	assert.Equal(t, "some-passphrase:sk-12345", string(lpBuf.Bytes()))
 }
 
 // ---------------------------------------------------------------------------
@@ -186,8 +198,8 @@ func TestAbandonedCeremoniesAreEvicted(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		challenge := "abandoned-" + string(rune('a'+i))
 		a.webauthnCeremonies[challenge] = webauthnCeremonyState{
-			SecretKey:       "sk-test",
-			LoginPassphrase: "pass:sk-test",
+			SecretKey:       memguard.NewEnclave([]byte("sk-test")),
+			LoginPassphrase: memguard.NewEnclave([]byte("pass:sk-test")),
 			SessionData:     webauthn.SessionData{Challenge: challenge},
 			// All expired — simulates ceremonies that sat for > 5 minutes.
 			ExpiresAt: time.Now().Add(-time.Duration(i+1) * time.Second),
@@ -199,8 +211,8 @@ func TestAbandonedCeremoniesAreEvicted(t *testing.T) {
 	a.webauthnCeremonyMu.Lock()
 	a.evictExpiredCeremoniesLocked()
 	a.webauthnCeremonies["new-challenge"] = webauthnCeremonyState{
-		SecretKey:       "sk-new",
-		LoginPassphrase: "newpass:sk-new",
+		SecretKey:       memguard.NewEnclave([]byte("sk-new")),
+		LoginPassphrase: memguard.NewEnclave([]byte("newpass:sk-new")),
 		SessionData:     webauthn.SessionData{Challenge: "new-challenge"},
 		ExpiresAt:       time.Now().Add(5 * time.Minute),
 	}

@@ -823,6 +823,7 @@ func (a *API) ExportVault(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	defer util.WipeBytes(plaintext)
 
 	// Encrypt with passphrase.
 	salt, err := util.RandomBytes(16)
@@ -918,6 +919,7 @@ func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "decryption failed: wrong passphrase or corrupt file")
 		return
 	}
+	defer util.WipeBytes(plaintext)
 
 	var payload vaultExportPayload
 	if err := json.Unmarshal(plaintext, &payload); err != nil {

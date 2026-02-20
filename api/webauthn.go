@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/awnumar/memguard"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/internal/uuid"
 	"github.com/jmcleod/ironhand/vault"
 )
@@ -200,6 +202,7 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	defer func() { req.Passphrase = ""; req.SecretKey = "" }() // best-effort: remove string references
 	if req.SecretKey == "" {
 		writeError(w, http.StatusBadRequest, "secret_key is required")
 		return
@@ -245,11 +248,18 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Derive the login passphrase immediately and store only the derived
-	// form. The raw passphrase and secret key are combined into the login
-	// passphrase that ImportCredentials needs later. By computing it now
-	// we avoid retaining the plaintext passphrase in ceremony state.
-	loginPassphrase := combineLoginPassphrase(req.Passphrase, req.SecretKey)
+	// Derive the login passphrase immediately and seal it into a memguard
+	// Enclave (encrypted at rest in memory). The raw passphrase and secret
+	// key are combined into the login passphrase that ImportCredentials
+	// needs later. By computing and sealing it now we avoid retaining
+	// plaintext secrets in ceremony state.
+	loginBuf := combineLoginPassphrase(req.Passphrase, req.SecretKey)
+	loginEnclave := memguard.NewEnclave(loginBuf.Bytes()) // encrypts data; source is inside LockedBuffer
+	loginBuf.Destroy()
+
+	// Seal the secret key into an Enclave for at-rest protection.
+	skBytes := []byte(req.SecretKey)
+	skEnclave := memguard.NewEnclave(skBytes) // encrypts + wipes skBytes
 
 	// Evict expired ceremonies before inserting to bound memory usage.
 	a.webauthnCeremonyMu.Lock()
@@ -270,8 +280,8 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.webauthnCeremonies[sessionData.Challenge] = webauthnCeremonyState{
-		SecretKey:       req.SecretKey,
-		LoginPassphrase: loginPassphrase,
+		SecretKey:       skEnclave,
+		LoginPassphrase: loginEnclave,
 		SessionData:     *sessionData,
 		ExpiresAt:       time.Now().Add(webauthnCeremonyTTL),
 	}
@@ -312,8 +322,18 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Open the secret key Enclave for account lookup and rate limiting.
+	skBuf, err := state.SecretKey.Open()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer skBuf.Destroy()
+	secretKey := string(skBuf.Bytes()) // short-lived string for accountLookupID/loadAccountRecord
+	defer func() { secretKey = "" }()  // best-effort: remove string reference
+
 	// Rate-limit recording helpers.
-	accountID, _ := accountLookupID(state.SecretKey)
+	accountID, _ := accountLookupID(secretKey)
 	clientIP := a.extractClientIP(r)
 	recordLoginFailure := func() {
 		a.globalLimiter.recordFailure()
@@ -323,7 +343,7 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	record, err := a.loadAccountRecord(state.SecretKey)
+	record, err := a.loadAccountRecord(secretKey)
 	if err != nil {
 		recordLoginFailure()
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
@@ -351,7 +371,17 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	creds, err := vault.ImportCredentials(blob, state.LoginPassphrase)
+	defer util.WipeBytes(blob)
+
+	// Open the login passphrase Enclave for credential import.
+	lpBuf, err := state.LoginPassphrase.Open()
+	if err != nil {
+		recordLoginFailure()
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer lpBuf.Destroy()
+	creds, err := vault.ImportCredentialsBytes(blob, lpBuf.Bytes())
 	if err != nil {
 		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "invalid passphrase (webauthn)",
@@ -363,12 +393,16 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 
 	token := uuid.New()
 	sessionSecret := uuid.New()
-	sessionPassphrase := deriveSessionPassphrase(token, sessionSecret)
-	sessionBlob, err := vault.ExportCredentials(creds, sessionPassphrase)
+	defer func() { sessionSecret = "" }() // best-effort: remove string reference
+
+	sessBuf := deriveSessionPassphrase(token, sessionSecret)
+	defer sessBuf.Destroy()
+	sessionBlob, err := vault.ExportCredentialsBytes(creds, sessBuf.Bytes())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to initialize session")
 		return
 	}
+	defer util.WipeBytes(sessionBlob)
 
 	// Login succeeded — clear rate-limit state.
 	a.rateLimiter.recordSuccess(accountID)
@@ -392,26 +426,32 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 // webauthnCeremonyState holds state for an in-progress WebAuthn login ceremony.
 //
 // The raw passphrase is NOT stored. Instead, LoginPassphrase holds the
-// pre-derived login passphrase (passphrase + ":" + secretKey) which is the
-// minimum material needed for ImportCredentials. This minimises the lifetime
-// and exposure of the plaintext passphrase.
+// pre-derived login passphrase (passphrase + ":" + secretKey) sealed inside
+// a memguard Enclave (encrypted at rest in memory). The SecretKey is also
+// stored as an Enclave. Both are only opened briefly when the ceremony
+// completes. This minimises the lifetime and exposure of secret material
+// while ceremonies sit in the map for up to 5 minutes.
 //
 // SessionData is stored as the typed webauthn.SessionData directly,
 // avoiding unnecessary marshal/unmarshal churn.
 type webauthnCeremonyState struct {
-	SecretKey       string
-	LoginPassphrase string
+	SecretKey       *memguard.Enclave
+	LoginPassphrase *memguard.Enclave
 	SessionData     webauthn.SessionData
 	ExpiresAt       time.Time
 }
 
 // evictExpiredCeremoniesLocked removes all expired ceremonies from the map.
 // The caller must hold a.webauthnCeremonyMu.
+//
+// Enclaves store data encrypted at rest; the GC reclaims them safely — no
+// explicit Destroy is needed for *memguard.Enclave.
 func (a *API) evictExpiredCeremoniesLocked() {
 	now := time.Now()
 	for k, v := range a.webauthnCeremonies {
 		if now.After(v.ExpiresAt) {
 			delete(a.webauthnCeremonies, k)
+			_ = v // Enclaves hold only ciphertext; GC-safe.
 		}
 	}
 }

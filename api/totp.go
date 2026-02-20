@@ -29,6 +29,7 @@ func generateTOTPSecret() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer util.WipeBytes(raw)
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw), nil
 }
 
@@ -71,6 +72,7 @@ func totpCodeAt(secret string, at time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer util.WipeBytes(decoded)
 
 	counter := uint64(at.Unix() / totpPeriod)
 	var msg [8]byte
@@ -79,6 +81,7 @@ func totpCodeAt(secret string, at time.Time) (string, error) {
 	mac := hmac.New(sha1.New, decoded)
 	_, _ = mac.Write(msg[:])
 	sum := mac.Sum(nil)
+	defer util.WipeBytes(sum)
 	offset := sum[len(sum)-1] & 0x0f
 	binCode := (int(sum[offset])&0x7f)<<24 |
 		(int(sum[offset+1])&0xff)<<16 |
