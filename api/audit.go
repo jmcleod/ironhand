@@ -55,6 +55,7 @@ const (
 type auditLogger struct {
 	logger  *slog.Logger
 	metrics *metricsCollector
+	webhook *auditWebhook // nil when not configured
 }
 
 func newAuditLogger(logger *slog.Logger) *auditLogger {
@@ -80,6 +81,20 @@ func (al *auditLogger) log(event AuditEvent, r *http.Request, attrs ...slog.Attr
 	al.logger.LogAttrs(r.Context(), slog.LevelInfo, "audit", baseAttrs...)
 	if al.metrics != nil {
 		al.metrics.recordEvent(event)
+	}
+	if al.webhook != nil {
+		attrs := make(map[string]string)
+		for _, a := range baseAttrs {
+			if a.Key != "event" && a.Key != "remote_addr" && a.Key != "timestamp" {
+				attrs[a.Key] = a.Value.String()
+			}
+		}
+		al.webhook.enqueue(webhookEvent{
+			Event:      string(event),
+			RemoteAddr: r.RemoteAddr,
+			Timestamp:  time.Now().UTC().Format(time.RFC3339),
+			Attrs:      attrs,
+		})
 	}
 }
 

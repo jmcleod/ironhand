@@ -47,6 +47,8 @@ var (
 	kdfProfile         string
 	auditRetentionDays int
 	auditMaxEntries    int
+	auditWebhookURL    string
+	auditWebhookHeader string
 	trustedProxies     []string
 )
 
@@ -158,6 +160,10 @@ var serverCmd = &cobra.Command{
 			apiOpts = append(apiOpts, api.WithKeyStore(keyStore))
 			fmt.Printf("Using PKCS#11 key store (module: %s, token: %s)\n", pkcs11Module, pkcs11Token)
 		}
+		if auditWebhookURL != "" {
+			apiOpts = append(apiOpts, api.WithAuditWebhook(auditWebhookURL, auditWebhookHeader))
+			fmt.Printf("Audit webhook: %s\n", auditWebhookURL)
+		}
 		switch sessionStorage {
 		case "memory":
 			// Default — MemorySessionStore is created automatically by api.New().
@@ -252,6 +258,7 @@ var serverCmd = &cobra.Command{
 		select {
 		case sig := <-quit:
 			fmt.Printf("\nReceived %s, shutting down...\n", sig)
+			a.Close() // drain audit webhook queue before stopping HTTP
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := server.Shutdown(ctx); err != nil {
@@ -259,6 +266,7 @@ var serverCmd = &cobra.Command{
 			}
 			return nil
 		case err := <-done:
+			a.Close()
 			return err
 		}
 	},
@@ -286,6 +294,8 @@ func init() {
 	serverCmd.Flags().StringVar(&kdfProfile, "kdf-profile", "moderate", "Argon2id KDF profile for new accounts: interactive, moderate (default), sensitive")
 	serverCmd.Flags().IntVar(&auditRetentionDays, "audit-retention-days", 0, "Automatically prune per-vault audit entries older than this many days (0 disables)")
 	serverCmd.Flags().IntVar(&auditMaxEntries, "audit-max-entries", 0, "Automatically keep only the newest N per-vault audit entries (0 disables)")
+	serverCmd.Flags().StringVar(&auditWebhookURL, "audit-webhook-url", "", "HTTP(S) URL to POST audit events to (SIEM/webhook integration)")
+	serverCmd.Flags().StringVar(&auditWebhookHeader, "audit-webhook-header", "", "Auth header for audit webhook in 'Header: Value' format (e.g., 'Authorization: Bearer xxx')")
 	serverCmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxies", nil, "CIDR ranges of trusted reverse proxies (e.g., 10.0.0.0/8,172.16.0.0/12); proxy headers are ignored unless this is set")
 }
 

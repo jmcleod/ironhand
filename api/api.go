@@ -46,7 +46,8 @@ type API struct {
 	auditMu                    vaultMutex           // serialises audit appends per vault
 	auditMaxAge                time.Duration
 	auditMaxEntries            int
-	auditAppendsSinceRetention atomic.Int64 // counts appends since last retention check
+	auditAppendsSinceRetention atomic.Int64  // counts appends since last retention check
+	webhook                    *auditWebhook // nil when not configured
 }
 
 // DefaultIdleTimeout is the default session idle timeout (30 minutes).
@@ -124,6 +125,18 @@ func WithAuditRetention(maxAge time.Duration, maxEntries int) Option {
 	return func(a *API) {
 		a.auditMaxAge = maxAge
 		a.auditMaxEntries = maxEntries
+	}
+}
+
+// WithAuditWebhook configures an HTTP endpoint to receive all audit events
+// as JSON POST requests. Events are dispatched asynchronously via a bounded
+// queue (capacity 1024). Dropped events (queue full) are logged as warnings.
+//
+// The optional authHeader is sent with each request in "Header: Value"
+// format (e.g., "Authorization: Bearer xxx").
+func WithAuditWebhook(url, authHeader string) Option {
+	return func(a *API) {
+		a.webhook = newAuditWebhook(url, authHeader)
 	}
 }
 
@@ -218,8 +231,19 @@ func New(repo storage.Repository, epochCache vault.EpochCache, opts ...Option) *
 		})
 	}
 	a.audit.metrics = a.metrics
+	if a.webhook != nil {
+		a.audit.webhook = a.webhook
+	}
 	a.invites = newInviteStore()
 	return a
+}
+
+// Close releases resources held by the API instance.
+// Must be called on server shutdown to drain the audit webhook queue.
+func (a *API) Close() {
+	if a.webhook != nil {
+		a.webhook.close()
+	}
 }
 
 // Router returns a chi.Router with all API routes mounted.
