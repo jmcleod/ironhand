@@ -17,7 +17,7 @@ import IssueCertDialog from '@/components/IssueCertDialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { searchItems } from '@/lib/search';
+import { searchItemsLocal } from '@/lib/search';
 import { getItem as apiGetItem, getCAInfo, getCACert, getCRL } from '@/lib/api';
 
 const TYPE_FILTERS: { value: ItemType | 'all'; label: string; icon?: React.ReactNode }[] = [
@@ -107,7 +107,7 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
 
   const filteredItems = useMemo(() => {
     if (!isFilterActive) return vault.items;
-    return searchItems([vault], debouncedQuery, typeFilter).map((r) => r.item);
+    return searchItemsLocal([vault], debouncedQuery, typeFilter).map((r) => r.item);
   }, [vault, debouncedQuery, typeFilter, isFilterActive]);
 
   useEffect(() => {

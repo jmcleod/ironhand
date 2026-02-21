@@ -50,6 +50,7 @@ type accountRecord struct {
 	WebAuthnCredentials    []webauthn.Credential             `json:"webauthn_credentials,omitempty"`
 	WebAuthnCredentialMeta map[string]WebAuthnCredentialMeta `json:"webauthn_credential_meta,omitempty"`
 	RecoveryCodes          []HashedRecoveryCode              `json:"recovery_codes,omitempty"`
+	PasskeyPolicy          string                            `json:"passkey_policy,omitempty"`    // "optional" or "required"; empty = "required"
 	VaultCredentials       map[string]string                 `json:"vault_credentials,omitempty"` // vaultID → base64(AES(serialized creds))
 }
 

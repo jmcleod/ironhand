@@ -3,8 +3,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
-import { exportVault } from '@/lib/api';
+import { exportVault, isStepUpRequired } from '@/lib/api';
 import { Eye, EyeOff } from 'lucide-react';
+import StepUpAuthDialog from '@/components/StepUpAuthDialog';
 
 interface ExportVaultDialogProps {
   open: boolean;
@@ -19,6 +20,8 @@ export default function ExportVaultDialog({ open, onOpenChange, vaultId, vaultNa
   const [confirm, setConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const [stepUpMethods, setStepUpMethods] = useState<string[]>([]);
 
   const canExport = passphrase.length > 0 && passphrase === confirm;
 
@@ -42,7 +45,12 @@ export default function ExportVaultDialog({ open, onOpenChange, vaultId, vaultNa
       setConfirm('');
       onOpenChange(false);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Export failed.';
+      if (isStepUpRequired(err)) {
+        setStepUpMethods(err.methods);
+        setStepUpOpen(true);
+        return;
+      }
+      const msg = (err as { message?: string })?.message ?? 'Export failed.';
       toast({ title: 'Export failed', description: msg, variant: 'destructive' });
     } finally {
       setExporting(false);
@@ -50,6 +58,7 @@ export default function ExportVaultDialog({ open, onOpenChange, vaultId, vaultNa
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setPassphrase(''); setConfirm(''); } }}>
       <DialogContent className="bg-card border-border">
         <DialogHeader>
@@ -103,5 +112,12 @@ export default function ExportVaultDialog({ open, onOpenChange, vaultId, vaultNa
         </div>
       </DialogContent>
     </Dialog>
+    <StepUpAuthDialog
+      open={stepUpOpen}
+      onOpenChange={setStepUpOpen}
+      methods={stepUpMethods}
+      onVerified={() => handleExport()}
+    />
+    </>
   );
 }

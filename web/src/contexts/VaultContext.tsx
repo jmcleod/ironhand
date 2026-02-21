@@ -3,7 +3,9 @@ import { startRegistration, startAuthentication } from '@simplewebauthn/browser'
 import {
   createVault as apiCreateVault,
   deleteItem as apiDeleteItem,
+  disableTwoFactor as apiDisableTwoFactor,
   deleteVault as apiDeleteVault,
+  getAuthSettings as apiGetAuthSettings,
   getItem as apiGetItem,
   listAllItems as apiListItems,
   listAllVaults as apiListVaults,
@@ -34,6 +36,7 @@ import {
   cancelInvite as apiCancelInvite,
   getInviteInfo as apiGetInviteInfo,
   acceptInvite as apiAcceptInvite,
+  updateAuthSettings as apiUpdateAuthSettings,
   type ApiError,
   type PasskeySummary,
   type MemberSummary,
@@ -51,6 +54,7 @@ interface AccountState {
   webauthnEnabled: boolean;
   webauthnCredentialCount: number;
   recoveryCodesUnused: number;
+  passkeyPolicy: string;
 }
 
 interface VaultContextType {
@@ -68,8 +72,11 @@ interface VaultContextType {
   generateRecoveryCodes: () => Promise<string[]>;
   setupTwoFactor: () => Promise<{ secret: string; otpauthURL: string; expiresAt: string }>;
   enableTwoFactor: (code: string) => Promise<boolean>;
+  disableTwoFactor: (code: string) => Promise<boolean>;
+  updatePasskeyPolicy: (policy: string) => Promise<void>;
   lock: () => Promise<void>;
   refresh: () => Promise<void>;
+  refreshVault: (vaultID: string) => Promise<void>;
   createVault: (name: string, description: string) => Promise<void>;
   deleteVault: (vaultId: string) => Promise<void>;
   addItem: (vaultId: string, name: string, type: ItemType, fields: Record<string, string>) => Promise<void>;
@@ -94,6 +101,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const [webauthnEnabled, setWebauthnEnabled] = useState(false);
   const [webauthnCredentialCount, setWebauthnCredentialCount] = useState(0);
   const [recoveryCodesUnused, setRecoveryCodesUnused] = useState(0);
+  const [passkeyPolicy, setPasskeyPolicy] = useState('required');
   const [justRegistered, setJustRegistered] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -112,6 +120,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
           fields: {
             [FIELD_NAME]: item.name || item.item_id,
             [FIELD_TYPE]: (item.type as ItemType) || 'custom',
+            [FIELD_UPDATED]: item.updated_at || '',
           },
         });
       }
@@ -128,16 +137,50 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         isCA: caInfo?.is_ca ?? false,
       });
     }
-    const [tfStatus, waStatus, rcStatus] = await Promise.all([
+    const [tfStatus, waStatus, rcStatus, authSettings] = await Promise.all([
       apiTwoFactorStatus().catch(() => ({ enabled: false })),
       apiWebAuthnStatus().catch(() => ({ enabled: false, credential_count: 0 })),
       apiRecoveryCodesStatus().catch(() => ({ has_codes: false, codes_total: 0, codes_unused: 0 })),
+      apiGetAuthSettings().catch(() => ({ passkey_policy: 'required', totp_enabled: false })),
     ]);
     setVaults(nextVaults);
     setTwoFactorEnabled(tfStatus.enabled);
     setWebauthnEnabled(waStatus.enabled);
     setWebauthnCredentialCount(waStatus.credential_count);
     setRecoveryCodesUnused(rcStatus.codes_unused);
+    setPasskeyPolicy(authSettings.passkey_policy);
+  }, []);
+
+  // Targeted single-vault refresh: re-fetches items, members, and CA info
+  // for just one vault without touching others.
+  const refreshVault = useCallback(async (vaultID: string) => {
+    const [listed, caInfo, members] = await Promise.all([
+      apiListItems(vaultID).catch(() => []),
+      apiGetCAInfo(vaultID).catch(() => null),
+      apiListMembers(vaultID).catch(() => []),
+    ]);
+    const items: VaultItem[] = listed.map((item) => ({
+      id: item.item_id,
+      fields: {
+        [FIELD_NAME]: item.name || item.item_id,
+        [FIELD_TYPE]: (item.type as ItemType) || 'custom',
+        [FIELD_UPDATED]: item.updated_at || '',
+      },
+    }));
+    setVaults((prev) =>
+      prev.map((v) =>
+        v.id === vaultID
+          ? {
+              ...v,
+              items,
+              members,
+              itemCount: items.length,
+              isCA: caInfo?.is_ca ?? false,
+              updatedAt: new Date().toISOString(),
+            }
+          : v,
+      ),
+    );
   }, []);
 
   const enroll = useCallback(async (passphrase: string) => {
@@ -247,6 +290,17 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     return out.enabled;
   }, []);
 
+  const disableTwoFactor = useCallback(async (code: string) => {
+    const out = await apiDisableTwoFactor(code);
+    setTwoFactorEnabled(out.enabled);
+    return !out.enabled; // returns true when successfully disabled
+  }, []);
+
+  const updatePasskeyPolicy = useCallback(async (policy: string) => {
+    const out = await apiUpdateAuthSettings({ passkey_policy: policy });
+    setPasskeyPolicy(out.passkey_policy);
+  }, []);
+
   const lock = useCallback(async () => {
     await apiLogout().catch(() => undefined);
     setIsUnlocked(false);
@@ -255,6 +309,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setWebauthnEnabled(false);
     setWebauthnCredentialCount(0);
     setRecoveryCodesUnused(0);
+    setPasskeyPolicy('required');
     setJustRegistered(false);
   }, []);
 
@@ -286,17 +341,17 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         [FIELD_UPDATED]: now,
       };
       await apiPutItem(vaultID, itemID, fields);
-      await refresh();
+      await refreshVault(vaultID);
     },
-    [refresh],
+    [refreshVault],
   );
 
   const removeItem = useCallback(
     async (vaultID: string, itemID: string) => {
       await apiDeleteItem(vaultID, itemID);
-      await refresh();
+      await refreshVault(vaultID);
     },
-    [refresh],
+    [refreshVault],
   );
 
   const updateItem = useCallback(
@@ -320,9 +375,9 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         }
       }
       await apiUpdateItem(vaultID, itemID, merged);
-      await refresh();
+      await refreshVault(vaultID);
     },
-    [refresh],
+    [refreshVault],
   );
 
   const listMembers = useCallback(async (vaultID: string) => {
@@ -332,9 +387,9 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const changeMemberRole = useCallback(
     async (vaultID: string, memberID: string, role: string) => {
       await apiChangeMemberRole(vaultID, memberID, role);
-      await refresh();
+      await refreshVault(vaultID);
     },
-    [refresh],
+    [refreshVault],
   );
 
   const createInvite = useCallback(
@@ -371,14 +426,14 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const revokeMember = useCallback(
     async (vaultID: string, memberID: string) => {
       await apiRevokeMember(vaultID, memberID);
-      await refresh();
+      await refreshVault(vaultID);
     },
-    [refresh],
+    [refreshVault],
   );
 
   const account = useMemo<AccountState | null>(
-    () => ({ vaults, twoFactorEnabled, webauthnEnabled, webauthnCredentialCount, recoveryCodesUnused }),
-    [twoFactorEnabled, vaults, webauthnEnabled, webauthnCredentialCount, recoveryCodesUnused],
+    () => ({ vaults, twoFactorEnabled, webauthnEnabled, webauthnCredentialCount, recoveryCodesUnused, passkeyPolicy }),
+    [twoFactorEnabled, vaults, webauthnEnabled, webauthnCredentialCount, recoveryCodesUnused, passkeyPolicy],
   );
   const isEnrolled = justRegistered;
 
@@ -412,8 +467,11 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         generateRecoveryCodes,
         setupTwoFactor,
         enableTwoFactor,
+        disableTwoFactor,
+        updatePasskeyPolicy,
         lock,
         refresh,
+        refreshVault,
         createVault,
         deleteVault,
         addItem,

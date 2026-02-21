@@ -11,7 +11,7 @@ import ThemeSwitcher from '@/components/ThemeSwitcher';
 import PasswordGeneratorDialog from '@/components/PasswordGeneratorDialog';
 import TwoFactorDialog from '@/components/TwoFactorDialog';
 import PasskeyDialog from '@/components/PasskeyDialog';
-import { searchItems, groupResultsByVault } from '@/lib/search';
+import { searchItemsLocal, groupResultsByVault } from '@/lib/search';
 import { ItemType } from '@/types/vault';
 import logo from '@/assets/logo.png';
 
@@ -44,7 +44,7 @@ export default function DashboardPage() {
 
   const searchResults = useMemo(() => {
     if (!account || !isSearchActive) return [];
-    return searchItems(account.vaults, debouncedQuery, typeFilter);
+    return searchItemsLocal(account.vaults, debouncedQuery, typeFilter);
   }, [account, debouncedQuery, typeFilter, isSearchActive]);
 
   const groupedResults = useMemo(

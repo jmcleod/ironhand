@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { searchItems, groupResultsByVault } from './search';
+import { searchItemsLocal, groupResultsByVault } from './search';
 import { Vault, VaultItem } from '@/types/vault';
 
 function makeItem(id: string, fields: Record<string, string>): VaultItem {
@@ -62,55 +62,55 @@ const vault1 = makeVault('vault-1', 'Personal', [loginItem, noteItem]);
 const vault2 = makeVault('vault-2', 'Work', [cardItem, customItem]);
 const allVaults = [vault1, vault2];
 
-describe('searchItems', () => {
+describe('searchItemsLocal', () => {
   it('returns all items when query is empty and filter is all', () => {
-    const results = searchItems(allVaults, '', 'all');
+    const results = searchItemsLocal(allVaults, '', 'all');
     expect(results).toHaveLength(4);
   });
 
   it('matches item by name (case-insensitive)', () => {
-    const results = searchItems(allVaults, 'github', 'all');
+    const results = searchItemsLocal(allVaults, 'github', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-1');
   });
 
   it('matches item by name with mixed case', () => {
-    const results = searchItems(allVaults, 'MEETING', 'all');
+    const results = searchItemsLocal(allVaults, 'MEETING', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-2');
   });
 
   it('matches item by field value (username)', () => {
-    const results = searchItems(allVaults, 'alice@example', 'all');
+    const results = searchItemsLocal(allVaults, 'alice@example', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-1');
   });
 
   it('matches item by field value (url)', () => {
-    const results = searchItems(allVaults, 'github.com', 'all');
+    const results = searchItemsLocal(allVaults, 'github.com', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-1');
   });
 
   it('matches item by field value (note content)', () => {
-    const results = searchItems(allVaults, 'quarterly', 'all');
+    const results = searchItemsLocal(allVaults, 'quarterly', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-2');
   });
 
   it('matches item by custom field value', () => {
-    const results = searchItems(allVaults, 'stripe', 'all');
+    const results = searchItemsLocal(allVaults, 'stripe', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-4');
   });
 
   it('does NOT match by sensitive field value (password)', () => {
-    const results = searchItems(allVaults, 'super-secret', 'all');
+    const results = searchItemsLocal(allVaults, 'super-secret', 'all');
     expect(results).toHaveLength(0);
   });
 
   it('does NOT match by sensitive field value (cvv)', () => {
-    const results = searchItems(allVaults, '123', 'all');
+    const results = searchItemsLocal(allVaults, '123', 'all');
     // Should NOT match card item via cvv.
     // May match other items if "123" appears in non-sensitive fields (e.g. "sk_test_abc123").
     const cardMatch = results.find(r => r.item.id === 'item-3');
@@ -118,37 +118,37 @@ describe('searchItems', () => {
   });
 
   it('does NOT match by sensitive field value (card_number)', () => {
-    const results = searchItems(allVaults, '4111111111', 'all');
+    const results = searchItemsLocal(allVaults, '4111111111', 'all');
     expect(results).toHaveLength(0);
   });
 
   it('matches item type label', () => {
-    const results = searchItems(allVaults, 'login', 'all');
+    const results = searchItemsLocal(allVaults, 'login', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-1');
   });
 
   it('filters by item type', () => {
-    const results = searchItems(allVaults, '', 'note');
+    const results = searchItemsLocal(allVaults, '', 'note');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-2');
   });
 
   it('combines text query with type filter', () => {
     // Search for "alice" but filter to card type — should not match login
-    const results = searchItems(allVaults, 'alice', 'card');
+    const results = searchItemsLocal(allVaults, 'alice', 'card');
     // "Alice Smith" is the cardholder — should match card
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-3');
   });
 
   it('returns empty array when no matches', () => {
-    const results = searchItems(allVaults, 'xyznonexistent', 'all');
+    const results = searchItemsLocal(allVaults, 'xyznonexistent', 'all');
     expect(results).toHaveLength(0);
   });
 
   it('returns results across multiple vaults', () => {
-    const results = searchItems(allVaults, 'alice', 'all');
+    const results = searchItemsLocal(allVaults, 'alice', 'all');
     // "alice@example.com" in vault1, "Alice Smith" in vault2
     expect(results).toHaveLength(2);
     const vaultIds = results.map(r => r.vault.id);
@@ -157,24 +157,24 @@ describe('searchItems', () => {
   });
 
   it('trims whitespace from query', () => {
-    const results = searchItems(allVaults, '  github  ', 'all');
+    const results = searchItemsLocal(allVaults, '  github  ', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-1');
   });
 
   it('handles empty vaults array', () => {
-    const results = searchItems([], 'test', 'all');
+    const results = searchItemsLocal([], 'test', 'all');
     expect(results).toHaveLength(0);
   });
 
   it('handles vault with no items', () => {
     const emptyVault = makeVault('empty', 'Empty', []);
-    const results = searchItems([emptyVault], 'test', 'all');
+    const results = searchItemsLocal([emptyVault], 'test', 'all');
     expect(results).toHaveLength(0);
   });
 });
 
-describe('searchItems with attachments', () => {
+describe('searchItemsLocal with attachments', () => {
   const attachmentItem = makeItem('item-att', {
     _name: 'SSH Keys',
     _type: 'custom',
@@ -187,24 +187,24 @@ describe('searchItems with attachments', () => {
   const attVault = makeVault('vault-att', 'Keys', [attachmentItem]);
 
   it('does NOT match by attachment binary content', () => {
-    const results = searchItems([attVault], 'base64binary', 'all');
+    const results = searchItemsLocal([attVault], 'base64binary', 'all');
     expect(results).toHaveLength(0);
   });
 
   it('matches item with attachment by name', () => {
-    const results = searchItems([attVault], 'SSH Keys', 'all');
+    const results = searchItemsLocal([attVault], 'SSH Keys', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-att');
   });
 
   it('matches item with attachment by user field', () => {
-    const results = searchItems([attVault], 'server key', 'all');
+    const results = searchItemsLocal([attVault], 'server key', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-att');
   });
 
   it('matches item by attachment filename', () => {
-    const results = searchItems([attVault], 'id_rsa', 'all');
+    const results = searchItemsLocal([attVault], 'id_rsa', 'all');
     expect(results).toHaveLength(1);
     expect(results[0].item.id).toBe('item-att');
   });
@@ -212,14 +212,14 @@ describe('searchItems with attachments', () => {
   it('does NOT match by attachment metadata JSON content', () => {
     // Searching for "octet-stream" should not match — meta values are not searched,
     // only filenames are.
-    const results = searchItems([attVault], 'octet-stream', 'all');
+    const results = searchItemsLocal([attVault], 'octet-stream', 'all');
     expect(results).toHaveLength(0);
   });
 });
 
 describe('groupResultsByVault', () => {
   it('groups results by vault', () => {
-    const results = searchItems(allVaults, '', 'all');
+    const results = searchItemsLocal(allVaults, '', 'all');
     const grouped = groupResultsByVault(results);
     expect(grouped).toHaveLength(2);
     expect(grouped[0][0].id).toBe('vault-1');
@@ -234,7 +234,7 @@ describe('groupResultsByVault', () => {
   });
 
   it('handles results from a single vault', () => {
-    const results = searchItems(allVaults, 'github', 'all');
+    const results = searchItemsLocal(allVaults, 'github', 'all');
     const grouped = groupResultsByVault(results);
     expect(grouped).toHaveLength(1);
     expect(grouped[0][0].id).toBe('vault-1');

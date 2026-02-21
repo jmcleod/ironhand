@@ -264,7 +264,8 @@ func saveCAState(ctx context.Context, session *vault.Session, state *CAState) er
 	if err != nil {
 		return fmt.Errorf("encoding CA state: %w", err)
 	}
-	return session.Update(ctx, caStateItemID, vault.Fields{"state": data})
+	_, err = session.Update(ctx, caStateItemID, vault.Fields{"state": data})
+	return err
 }
 
 func loadCACert(ctx context.Context, session *vault.Session) (*x509.Certificate, error) {
@@ -335,7 +336,8 @@ func saveRevocations(ctx context.Context, session *vault.Session, entries []Revo
 	if err != nil {
 		return fmt.Errorf("encoding revocations: %w", err)
 	}
-	return session.Update(ctx, caRevocationsItemID, vault.Fields{"revocations": data})
+	_, err = session.Update(ctx, caRevocationsItemID, vault.Fields{"revocations": data})
+	return err
 }
 
 func encodeCertPEM(derBytes []byte) string {
@@ -599,7 +601,8 @@ func RevokeCertificate(ctx context.Context, session *vault.Session, itemID strin
 	// Update item status.
 	fields[FieldStatus] = []byte(StatusRevoked)
 	fields[fieldUpdated] = []byte(time.Now().UTC().Format(time.RFC3339))
-	return session.Update(ctx, itemID, fields)
+	_, err = session.Update(ctx, itemID, fields)
+	return err
 }
 
 // RenewCertificate re-issues a certificate with the same parameters but a
@@ -658,7 +661,7 @@ func RenewCertificate(ctx context.Context, session *vault.Session, itemID string
 	}
 	newFields[FieldPreviousItemID] = []byte(itemID)
 	newFields[fieldUpdated] = []byte(time.Now().UTC().Format(time.RFC3339))
-	if err := session.Update(ctx, newItemID, newFields); err != nil {
+	if _, err := session.Update(ctx, newItemID, newFields); err != nil {
 		return "", err
 	}
 
@@ -763,7 +766,7 @@ func LoadCRL(ctx context.Context, session *vault.Session) ([]byte, error) {
 // It attempts an Update first (for existing vaults) and falls back to Put
 // for vaults that were initialised before the cached-CRL item existed.
 func storeCRL(ctx context.Context, session *vault.Session, crlPEM []byte) error {
-	err := session.Update(ctx, caCRLItemID, vault.Fields{"crl": crlPEM})
+	_, err := session.Update(ctx, caCRLItemID, vault.Fields{"crl": crlPEM})
 	if err != nil && errors.Is(err, storage.ErrNotFound) {
 		return session.Put(ctx, caCRLItemID, vault.Fields{"crl": crlPEM})
 	}

@@ -16,7 +16,9 @@ const (
 	AuditRegister               AuditEvent = "register"
 	AuditLogout                 AuditEvent = "logout"
 	AuditTwoFactorEnabled       AuditEvent = "2fa_enabled"
+	AuditTwoFactorDisabled      AuditEvent = "2fa_disabled"
 	AuditTwoFactorSetup         AuditEvent = "2fa_setup"
+	AuditAuthSettingsChanged    AuditEvent = "auth_settings_changed"
 	AuditVaultCreated           AuditEvent = "vault_created"
 	AuditVaultDeleted           AuditEvent = "vault_deleted"
 	AuditMemberAdded            AuditEvent = "member_added"
@@ -45,6 +47,8 @@ const (
 	AuditInviteCreated          AuditEvent = "invite_created"
 	AuditInviteAccepted         AuditEvent = "invite_accepted"
 	AuditInviteCanceled         AuditEvent = "invite_canceled"
+	AuditStepUpTOTP             AuditEvent = "step_up_totp"
+	AuditStepUpPasskey          AuditEvent = "step_up_passkey"
 )
 
 // auditLogger wraps slog.Logger for structured security audit logging.

@@ -16,7 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Clock, Copy, Check, Link, Loader2, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import type { MemberInfo } from '@/types/vault';
-import type { InviteSummary, CreateInviteResult } from '@/lib/api';
+import { isStepUpRequired, type InviteSummary, type CreateInviteResult } from '@/lib/api';
+import StepUpAuthDialog from '@/components/StepUpAuthDialog';
 
 interface ShareDialogProps {
   open: boolean;
@@ -55,6 +56,9 @@ export default function ShareDialog({ open, onOpenChange, vaultId, members }: Sh
   const [copied, setCopied] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [revokeLoading, setRevokeLoading] = useState(false);
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const [stepUpMethods, setStepUpMethods] = useState<string[]>([]);
+  const [stepUpRetry, setStepUpRetry] = useState<(() => void) | null>(null);
 
   const fetchInvites = useCallback(async () => {
     setInviteLoading(true);
@@ -88,7 +92,13 @@ export default function ShareDialog({ open, onOpenChange, vaultId, members }: Sh
       await fetchInvites();
       toast({ title: 'Invite Created', description: 'Share the link and passphrase with the invitee.' });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to create invite.';
+      if (isStepUpRequired(err)) {
+        setStepUpMethods(err.methods);
+        setStepUpRetry(() => () => handleCreateInvite());
+        setStepUpOpen(true);
+        return;
+      }
+      const msg = (err as { message?: string })?.message ?? 'Failed to create invite.';
       toast({ title: 'Invite Failed', description: msg, variant: 'destructive' });
     } finally {
       setCreatingInvite(false);
@@ -117,7 +127,13 @@ export default function ShareDialog({ open, onOpenChange, vaultId, members }: Sh
       await changeMemberRole(vaultId, memberID, role);
       await refresh();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to change role.';
+      if (isStepUpRequired(err)) {
+        setStepUpMethods(err.methods);
+        setStepUpRetry(() => () => handleChangeMemberRole(memberID, role));
+        setStepUpOpen(true);
+        return;
+      }
+      const msg = (err as { message?: string })?.message ?? 'Failed to change role.';
       toast({ title: 'Role Change Failed', description: msg, variant: 'destructive' });
     }
   };
@@ -129,7 +145,13 @@ export default function ShareDialog({ open, onOpenChange, vaultId, members }: Sh
       await revokeMember(vaultId, revokeTarget);
       toast({ title: 'Member Revoked' });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to revoke member.';
+      if (isStepUpRequired(err)) {
+        setStepUpMethods(err.methods);
+        setStepUpRetry(() => () => handleRevoke());
+        setStepUpOpen(true);
+        return;
+      }
+      const msg = (err as { message?: string })?.message ?? 'Failed to revoke member.';
       toast({ title: 'Revoke Failed', description: msg, variant: 'destructive' });
     } finally {
       setRevokeLoading(false);
@@ -330,6 +352,18 @@ export default function ShareDialog({ open, onOpenChange, vaultId, members }: Sh
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <StepUpAuthDialog
+        open={stepUpOpen}
+        onOpenChange={setStepUpOpen}
+        methods={stepUpMethods}
+        onVerified={() => {
+          if (stepUpRetry) {
+            stepUpRetry();
+            setStepUpRetry(null);
+          }
+        }}
+      />
     </>
   );
 }

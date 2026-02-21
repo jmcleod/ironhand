@@ -253,6 +253,7 @@ func (a *API) Router() chi.Router {
 	r.With(a.AuthMiddleware).Get("/auth/2fa", a.TwoFactorStatus)
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/2fa/setup", a.SetupTwoFactor)
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/2fa/enable", a.EnableTwoFactor)
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/2fa/disable", a.DisableTwoFactor)
 
 	// WebAuthn routes (registration + status require auth; login does not).
 	r.With(a.AuthMiddleware).Get("/auth/webauthn/status", a.WebAuthnStatus)
@@ -268,12 +269,24 @@ func (a *API) Router() chi.Router {
 	r.With(a.AuthMiddleware).Get("/auth/recovery-codes", a.RecoveryCodesStatus)
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/recovery-codes", a.GenerateRecoveryCodes)
 
+	// Auth settings routes.
+	r.With(a.AuthMiddleware).Get("/auth/settings", a.GetAuthSettings)
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Put("/auth/settings", a.UpdateAuthSettings)
+
+	// Step-up authentication routes.
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/step-up", a.StepUpTOTP)
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/step-up/passkey/begin", a.BeginStepUpPasskey)
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/step-up/passkey/finish", a.FinishStepUpPasskey)
+
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/vaults", a.CreateVault)
 	r.With(a.AuthMiddleware).Get("/vaults", a.ListVaults)
 
 	// Invite routes (outside vault group — auth required, no vault membership check).
 	r.With(a.AuthMiddleware).Get("/invites/{token}", a.GetInviteInfo)
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/invites/{token}/accept", a.AcceptInvite)
+
+	// Cross-vault search.
+	r.With(a.AuthMiddleware).Get("/search", a.SearchItems)
 
 	// All other vault routes require auth middleware.
 	r.Route("/vaults/{vaultID}", func(r chi.Router) {
@@ -282,6 +295,7 @@ func (a *API) Router() chi.Router {
 		r.Delete("/", a.DeleteVault)
 		r.Post("/open", a.OpenVault)
 		r.Get("/items", a.ListItems)
+		r.Get("/items/versions", a.ListItemVersions)
 		r.Post("/items/{itemID}", a.PutItem)
 		r.Get("/items/{itemID}", a.GetItem)
 		r.Put("/items/{itemID}", a.UpdateItem)

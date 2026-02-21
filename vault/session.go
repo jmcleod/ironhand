@@ -181,40 +181,95 @@ func (s *Session) Get(ctx context.Context, itemID string) (Fields, error) {
 	return result, nil
 }
 
-// Update re-encrypts and stores an existing item, using CAS to detect conflicts.
-// All fields are replaced atomically. The previous version is preserved as an
-// ITEM_HISTORY record so it can be retrieved later via GetHistory/GetHistoryVersion.
-func (s *Session) Update(ctx context.Context, itemID string, fields Fields) error {
+// GetWithVersion retrieves and decrypts an item, returning all fields and
+// the current item version. This is identical to Get but also returns the
+// ItemVersion from the stored item envelope.
+func (s *Session) GetWithVersion(ctx context.Context, itemID string) (Fields, uint64, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, 0, err
 	}
 	if err := s.checkClosed(); err != nil {
-		return err
+		return nil, 0, err
 	}
 
 	recBuf, err := s.recordKey.Open()
 	if err != nil {
-		return fmt.Errorf("opening record key enclave: %w", err)
+		return nil, 0, fmt.Errorf("opening record key enclave: %w", err)
 	}
 	defer recBuf.Destroy()
 
 	kekBuf, err := s.kek.Open()
 	if err != nil {
-		return fmt.Errorf("opening KEK enclave: %w", err)
+		return nil, 0, fmt.Errorf("opening KEK enclave: %w", err)
+	}
+	defer kekBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
+		return nil, 0, err
+	}
+
+	itm, err := loadItem(s.vault.id, s.vault.repo, recBuf.Bytes(), itemID, s.epoch)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Unwrap DEK
+	aadDEK := icrypto.AADDEKWrap(s.vault.id, itm.ItemID, itm.WrappedEpoch, 1)
+	dek, err := util.DecryptAESWithAAD(itm.WrappedDEK, kekBuf.Bytes(), aadDEK)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to unwrap DEK: %w", err)
+	}
+	defer util.WipeBytes(dek)
+
+	// Decrypt each field
+	result := make(Fields, len(itm.Fields))
+	for name, f := range itm.Fields {
+		aad := icrypto.AADFieldContent(s.vault.id, itm.ItemID, name, itm.ItemVersion, itm.WrappedEpoch, 1)
+		plaintext, err := util.DecryptAESWithAAD(f.Ciphertext, dek, aad)
+		if err != nil {
+			return nil, 0, fmt.Errorf("decrypting field %q: %w", name, err)
+		}
+		result[name] = plaintext
+	}
+
+	return result, itm.ItemVersion, nil
+}
+
+// Update re-encrypts and stores an existing item, using CAS to detect conflicts.
+// All fields are replaced atomically. The previous version is preserved as an
+// ITEM_HISTORY record so it can be retrieved later via GetHistory/GetHistoryVersion.
+// Returns the new item version and any error.
+func (s *Session) Update(ctx context.Context, itemID string, fields Fields) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return 0, err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return 0, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	kekBuf, err := s.kek.Open()
+	if err != nil {
+		return 0, fmt.Errorf("opening KEK enclave: %w", err)
 	}
 	defer kekBuf.Destroy()
 
 	if _, err := s.authorize(ctx, accessWrite, recBuf.Bytes()); err != nil {
-		return err
+		return 0, err
 	}
 
 	existing, err := loadItem(s.vault.id, s.vault.repo, recBuf.Bytes(), itemID, s.epoch)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if err := validateFields(fields); err != nil {
-		return err
+		return 0, err
 	}
 
 	// --- Snapshot the existing item into ITEM_HISTORY before overwriting ---
@@ -230,16 +285,16 @@ func (s *Session) Update(ctx context.Context, itemID string, fields Fields) erro
 	}
 	histEnvelope, err := sealItemHistory(s.vault.id, recBuf.Bytes(), hist, s.epoch)
 	if err != nil {
-		return fmt.Errorf("sealing history record: %w", err)
+		return 0, fmt.Errorf("sealing history record: %w", err)
 	}
 	if err := s.vault.repo.Put(s.vault.id, recordTypeItemHistory, historyRecordID, histEnvelope); err != nil {
-		return fmt.Errorf("storing history record: %w", err)
+		return 0, fmt.Errorf("storing history record: %w", err)
 	}
 
 	// --- Proceed with normal update ---
 	dek, err := util.NewAESKey()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer util.WipeBytes(dek)
 
@@ -251,7 +306,7 @@ func (s *Session) Update(ctx context.Context, itemID string, fields Fields) erro
 		aad := icrypto.AADFieldContent(s.vault.id, itemID, name, newVersion, s.epoch, 1)
 		ct, err := util.EncryptAESWithAAD(plaintext, dek, aad)
 		if err != nil {
-			return fmt.Errorf("encrypting field %q: %w", name, err)
+			return 0, fmt.Errorf("encrypting field %q: %w", name, err)
 		}
 		encFields[name] = field{Ciphertext: ct}
 	}
@@ -260,7 +315,7 @@ func (s *Session) Update(ctx context.Context, itemID string, fields Fields) erro
 	aadDEK := icrypto.AADDEKWrap(s.vault.id, itemID, s.epoch, 1)
 	wrappedDEK, err := util.EncryptAESWithAAD(dek, kekBuf.Bytes(), aadDEK)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	itm := item{
@@ -274,9 +329,12 @@ func (s *Session) Update(ctx context.Context, itemID string, fields Fields) erro
 
 	envelope, err := sealItem(s.vault.id, recBuf.Bytes(), itm, s.epoch)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return s.vault.repo.PutCAS(s.vault.id, "ITEM", itm.ItemID, existing.ItemVersion, envelope)
+	if err := s.vault.repo.PutCAS(s.vault.id, "ITEM", itm.ItemID, existing.ItemVersion, envelope); err != nil {
+		return 0, err
+	}
+	return newVersion, nil
 }
 
 // GetHistory returns a list of history entries for the given item, sorted newest-first.

@@ -18,7 +18,7 @@ export interface SearchResult {
  *
  * Returns a flat array of {vault, item} results.
  */
-export function searchItems(
+export function searchItemsLocal(
   vaults: Vault[],
   query: string,
   typeFilter: ItemType | 'all' = 'all',

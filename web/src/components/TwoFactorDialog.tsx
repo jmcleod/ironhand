@@ -12,13 +12,15 @@ interface TwoFactorDialogProps {
 }
 
 export default function TwoFactorDialog({ open, onOpenChange }: TwoFactorDialogProps) {
-  const { account, setupTwoFactor, enableTwoFactor } = useVault();
+  const { account, setupTwoFactor, enableTwoFactor, disableTwoFactor } = useVault();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [secret, setSecret] = useState('');
   const [otpauthURL, setOtpauthURL] = useState('');
   const [code, setCode] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
+  const [disableCode, setDisableCode] = useState('');
+  const [disabling, setDisabling] = useState(false);
 
   const reset = () => {
     setLoading(false);
@@ -26,6 +28,8 @@ export default function TwoFactorDialog({ open, onOpenChange }: TwoFactorDialogP
     setOtpauthURL('');
     setCode('');
     setExpiresAt('');
+    setDisableCode('');
+    setDisabling(false);
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -74,8 +78,39 @@ export default function TwoFactorDialog({ open, onOpenChange }: TwoFactorDialogP
           </DialogTitle>
         </DialogHeader>
         {account?.twoFactorEnabled ? (
-          <div className="text-sm text-muted-foreground mt-2">
-            2FA is enabled for this account.
+          <div className="space-y-4 mt-2">
+            <p className="text-sm text-muted-foreground">
+              2FA is enabled for this account. To disable it, enter a current one-time code from your authenticator app.
+            </p>
+            <Input
+              value={disableCode}
+              onChange={e => setDisableCode(e.target.value)}
+              placeholder="Enter 6-digit one-time code"
+              inputMode="numeric"
+              className="bg-muted border-border font-mono"
+            />
+            <Button
+              variant="destructive"
+              className="w-full"
+              disabled={disabling || disableCode.trim().length === 0}
+              onClick={async () => {
+                setDisabling(true);
+                try {
+                  const ok = await disableTwoFactor(disableCode.trim());
+                  if (ok) {
+                    toast({ title: '2FA Disabled', description: 'Two-factor authentication has been turned off.' });
+                    handleOpenChange(false);
+                  }
+                } catch (err) {
+                  const message = err instanceof Error ? err.message : (err as { message?: string })?.message ?? 'Invalid one-time code';
+                  toast({ title: 'Disable Failed', description: message, variant: 'destructive' });
+                } finally {
+                  setDisabling(false);
+                }
+              }}
+            >
+              {disabling ? 'Disabling...' : 'Disable 2FA'}
+            </Button>
           </div>
         ) : !secret ? (
           <div className="space-y-4 mt-2">

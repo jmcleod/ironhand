@@ -25,19 +25,32 @@ export interface PaginatedResponse<T> {
 export type ApiError = {
   status: number;
   message: string;
+  methods?: string[]; // populated when error is "step_up_required"
 };
 
 async function readError(resp: Response): Promise<never> {
   let message = `Request failed (${resp.status})`;
+  let methods: string[] | undefined;
   try {
     const data = await resp.json();
     if (typeof data?.error === 'string') {
       message = data.error;
     }
+    if (Array.isArray(data?.methods)) {
+      methods = data.methods;
+    }
   } catch {
     // ignore parse errors
   }
-  throw { status: resp.status, message } as ApiError;
+  const err: ApiError = { status: resp.status, message };
+  if (methods) err.methods = methods;
+  throw err;
+}
+
+/** Check whether an error is a step-up authentication requirement. */
+export function isStepUpRequired(err: unknown): err is ApiError & { methods: string[] } {
+  const apiErr = err as ApiError;
+  return apiErr?.status === 403 && apiErr?.message === 'step_up_required' && Array.isArray(apiErr?.methods);
 }
 
 function getCsrfToken(): string | null {
@@ -136,6 +149,38 @@ export async function enableTwoFactor(code: string): Promise<{ enabled: boolean 
   return (await resp.json()) as { enabled: boolean };
 }
 
+export async function disableTwoFactor(code: string): Promise<{ enabled: boolean }> {
+  const resp = await request('/auth/2fa/disable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  return (await resp.json()) as { enabled: boolean };
+}
+
+// ---------------------------------------------------------------------------
+// Auth Settings
+// ---------------------------------------------------------------------------
+
+export interface AuthSettings {
+  passkey_policy: string;
+  totp_enabled: boolean;
+}
+
+export async function getAuthSettings(): Promise<AuthSettings> {
+  const resp = await request('/auth/settings');
+  return (await resp.json()) as AuthSettings;
+}
+
+export async function updateAuthSettings(settings: { passkey_policy: string }): Promise<AuthSettings> {
+  const resp = await request('/auth/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  return (await resp.json()) as AuthSettings;
+}
+
 export async function listVaults(params?: PaginationParams): Promise<PaginatedResponse<VaultSummary>> {
   const qs = paginationQuery(params);
   const resp = await request(`/vaults${qs}`);
@@ -175,11 +220,21 @@ export interface ItemSummary {
   item_id: string;
   name?: string;
   type?: string;
+  version: number;
+  updated_at?: string;
+  preview?: Record<string, string>;
 }
 
-export async function listItems(vaultID: string, params?: PaginationParams): Promise<PaginatedResponse<ItemSummary>> {
-  const qs = paginationQuery(params);
-  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/items${qs}`);
+export async function listItems(
+  vaultID: string,
+  params?: PaginationParams & { include?: string },
+): Promise<PaginatedResponse<ItemSummary>> {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  if (params?.offset != null) qs.set('offset', String(params.offset));
+  if (params?.include) qs.set('include', params.include);
+  const qsStr = qs.toString();
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/items${qsStr ? `?${qsStr}` : ''}`);
   const data = (await resp.json()) as { items: ItemSummary[] } & PaginationMeta;
   return {
     data: data.items ?? [],
@@ -190,6 +245,43 @@ export async function listItems(vaultID: string, params?: PaginationParams): Pro
 /** Fetch all items for a vault across all pages. Used by VaultContext for client-side search. */
 export async function listAllItems(vaultID: string): Promise<ItemSummary[]> {
   return fetchAllPages((offset) => listItems(vaultID, { limit: 200, offset }));
+}
+
+/** Fetch the version manifest for a vault (cheap — no item decryption). */
+export async function listItemVersions(vaultID: string): Promise<{ versions: Record<string, number>; epoch: number }> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/items/versions`);
+  return (await resp.json()) as { versions: Record<string, number>; epoch: number };
+}
+
+// ---------------------------------------------------------------------------
+// Server-Side Search
+// ---------------------------------------------------------------------------
+
+export interface SearchResultItem {
+  vault_id: string;
+  vault_name: string;
+  item_id: string;
+  name: string;
+  type: string;
+  matched_field?: string;
+}
+
+export async function searchItems(
+  params: { q?: string; type?: string; vault_id?: string } & PaginationParams,
+): Promise<PaginatedResponse<SearchResultItem>> {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.type) qs.set('type', params.type);
+  if (params.vault_id) qs.set('vault_id', params.vault_id);
+  if (params.limit != null) qs.set('limit', String(params.limit));
+  if (params.offset != null) qs.set('offset', String(params.offset));
+  const qsStr = qs.toString();
+  const resp = await request(`/search${qsStr ? `?${qsStr}` : ''}`);
+  const data = (await resp.json()) as { results: SearchResultItem[] } & PaginationMeta;
+  return {
+    data: data.results ?? [],
+    pagination: { total_count: data.total_count, limit: data.limit, offset: data.offset, has_more: data.has_more },
+  };
 }
 
 export async function getItem(vaultID: string, itemID: string): Promise<Record<string, string>> {
@@ -652,4 +744,37 @@ export async function acceptInvite(
     body: JSON.stringify({ passphrase }),
   });
   return resp.json() as Promise<AcceptInviteResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Step-Up Authentication
+// ---------------------------------------------------------------------------
+
+export interface StepUpResult {
+  verified: boolean;
+  method: string;
+  expires_at: string;
+}
+
+export async function stepUpTOTP(code: string): Promise<StepUpResult> {
+  const resp = await request('/auth/step-up', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  return (await resp.json()) as StepUpResult;
+}
+
+export async function beginStepUpPasskey(): Promise<unknown> {
+  const resp = await request('/auth/step-up/passkey/begin', { method: 'POST' });
+  return resp.json();
+}
+
+export async function finishStepUpPasskey(credential: unknown): Promise<StepUpResult> {
+  const resp = await request('/auth/step-up/passkey/finish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(credential),
+  });
+  return (await resp.json()) as StepUpResult;
 }

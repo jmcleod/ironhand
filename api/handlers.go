@@ -206,9 +206,11 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 	start, end, pgMeta := paginateSlice(len(items), limit, offset)
 	page := items[start:end]
 
+	includePreview := r.URL.Query().Get("include") == "preview"
+
 	summaries := make([]ItemSummary, 0, len(page))
 	for _, itemID := range page {
-		fields, err := session.Get(r.Context(), itemID)
+		fields, version, err := session.GetWithVersion(r.Context(), itemID)
 		if err != nil {
 			continue
 		}
@@ -220,11 +222,17 @@ func (a *API) ListItems(w http.ResponseWriter, r *http.Request) {
 		if itemType == "" {
 			itemType = "custom"
 		}
-		summaries = append(summaries, ItemSummary{
-			ItemID: itemID,
-			Name:   name,
-			Type:   itemType,
-		})
+		summary := ItemSummary{
+			ItemID:    itemID,
+			Name:      name,
+			Type:      itemType,
+			Version:   version,
+			UpdatedAt: string(fields["_updated"]),
+		}
+		if includePreview {
+			summary.Preview = buildPreview(fields)
+		}
+		summaries = append(summaries, summary)
 	}
 
 	writeJSON(w, http.StatusOK, ListItemsResponse{Items: summaries, PaginationMeta: pgMeta})
@@ -266,7 +274,7 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 	a.audit.logEvent(AuditItemCreated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))
-	writeJSON(w, http.StatusCreated, struct{}{})
+	writeJSON(w, http.StatusCreated, MutationResponse{ItemID: itemID, Version: 1})
 }
 
 // GetItem handles GET /vaults/{vaultID}/items/{itemID}.
@@ -307,6 +315,10 @@ func (a *API) GetItemPrivateKey(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	itemID := chi.URLParam(r, "itemID")
 	creds := credentialsFromContext(r.Context())
+
+	if !a.requireStepUp(w, r) {
+		return
+	}
 
 	session, err := a.openSession(r.Context(), vaultID, creds)
 	if err != nil {
@@ -369,7 +381,8 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid item fields")
 		return
 	}
-	if err := session.Update(r.Context(), itemID, fields); err != nil {
+	newVersion, err := session.Update(r.Context(), itemID, fields)
+	if err != nil {
 		mapError(w, err)
 		return
 	}
@@ -378,7 +391,7 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	a.audit.logEvent(AuditItemUpdated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))
-	writeJSON(w, http.StatusOK, struct{}{})
+	writeJSON(w, http.StatusOK, MutationResponse{ItemID: itemID, Version: newVersion})
 }
 
 // DeleteItem handles DELETE /vaults/{vaultID}/items/{itemID}.
@@ -569,6 +582,10 @@ func (a *API) RevokeMember(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	memberID := chi.URLParam(r, "memberID")
 	creds := credentialsFromContext(r.Context())
+
+	if !a.requireStepUp(w, r) {
+		return
+	}
 
 	session, err := a.openSession(r.Context(), vaultID, creds)
 	if err != nil {
@@ -773,6 +790,10 @@ func (a *API) ExportAuditLog(w http.ResponseWriter, r *http.Request) {
 func (a *API) ExportVault(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
+
+	if !a.requireStepUp(w, r) {
+		return
+	}
 
 	req, ok := decodeJSON[ExportVaultRequest](w, r, maxSmallBodySize)
 	if !ok {
@@ -1530,6 +1551,10 @@ func (a *API) ChangeMemberRole(w http.ResponseWriter, r *http.Request) {
 	memberID := chi.URLParam(r, "memberID")
 	creds := credentialsFromContext(r.Context())
 
+	if !a.requireStepUp(w, r) {
+		return
+	}
+
 	req, ok := decodeJSON[ChangeMemberRoleRequest](w, r, maxSmallBodySize)
 	if !ok {
 		return
@@ -1566,6 +1591,10 @@ func (a *API) ChangeMemberRole(w http.ResponseWriter, r *http.Request) {
 func (a *API) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
+
+	if !a.requireStepUp(w, r) {
+		return
+	}
 
 	req, ok := decodeJSON[CreateInviteRequest](w, r, maxSmallBodySize)
 	if !ok {
@@ -1843,4 +1872,246 @@ func (a *API) loadVaultCredentials(accountCreds *vault.Credentials, vaultID stri
 	defer util.WipeBytes(plaintext)
 
 	return vault.DeserializeCredentials(plaintext)
+}
+
+// ---------------------------------------------------------------------------
+// Server-Side Search and Version Manifest
+// ---------------------------------------------------------------------------
+
+// searchExcludedFields are fields whose values must never be matched during
+// server-side search. Mirrors the SENSITIVE_FIELDS set on the frontend.
+var searchExcludedFields = map[string]bool{
+	"password":    true,
+	"cvv":         true,
+	"card_number": true,
+	"totp":        true,
+	"private_key": true,
+}
+
+// buildPreview returns a map of non-sensitive, non-attachment, non-metadata
+// user fields suitable for client-side search. Values longer than 200 bytes
+// are truncated.
+func buildPreview(fields vault.Fields) map[string]string {
+	preview := make(map[string]string)
+	for k, v := range fields {
+		if strings.HasPrefix(k, "_") {
+			// Expose attachment filenames for search.
+			if vault.IsAttachmentMetaField(k) {
+				fn := vault.AttachmentFilename(k)
+				if fn != "" {
+					preview["_file:"+fn] = fn
+				}
+			}
+			continue
+		}
+		if searchExcludedFields[k] {
+			continue
+		}
+		if vault.IsAttachmentField(k) {
+			continue
+		}
+		s := string(v)
+		if len(s) > 200 {
+			s = s[:200]
+		}
+		preview[k] = s
+	}
+	return preview
+}
+
+// matchesQuery tests whether an item's decrypted fields contain the given
+// search query. Returns true and the name of the first matching field, or
+// false if no match is found. Sensitive fields and binary attachments are
+// excluded from matching.
+func matchesQuery(fields vault.Fields, query string) (bool, string) {
+	q := strings.ToLower(query)
+
+	// Match against item name.
+	if strings.Contains(strings.ToLower(string(fields["_name"])), q) {
+		return true, "_name"
+	}
+	// Match against item type.
+	if strings.Contains(strings.ToLower(string(fields["_type"])), q) {
+		return true, "_type"
+	}
+	// Match against non-sensitive user fields.
+	for k, v := range fields {
+		if strings.HasPrefix(k, "_") {
+			// Check attachment filenames.
+			if vault.IsAttachmentMetaField(k) {
+				fn := vault.AttachmentFilename(k)
+				if strings.Contains(strings.ToLower(fn), q) {
+					return true, "attachment:" + fn
+				}
+			}
+			continue
+		}
+		if searchExcludedFields[k] {
+			continue
+		}
+		if vault.IsAttachmentField(k) {
+			continue
+		}
+		if strings.Contains(strings.ToLower(string(v)), q) {
+			return true, k
+		}
+	}
+	return false, ""
+}
+
+// ListItemVersions handles GET /vaults/{vaultID}/items/versions.
+// Returns a lightweight manifest of item IDs and their current versions
+// by reading Envelope.Version from storage (no item decryption required).
+func (a *API) ListItemVersions(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	// session.List() performs authorization and returns item IDs.
+	items, err := session.List(r.Context())
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	versions := make(map[string]uint64, len(items))
+	for _, itemID := range items {
+		if isReservedItemID(itemID) {
+			continue
+		}
+		// Read the envelope directly from storage — Version is unencrypted
+		// metadata, so no decryption is needed.
+		env, err := a.repo.Get(vaultID, "ITEM", itemID)
+		if err != nil {
+			continue
+		}
+		versions[itemID] = env.Version
+	}
+
+	writeJSON(w, http.StatusOK, ItemVersionsResponse{
+		Versions: versions,
+		Epoch:    session.Epoch(),
+	})
+}
+
+// SearchItems handles GET /search.
+// Searches decrypted item fields across one or all vaults. Query parameters:
+//   - q: text search query (case-insensitive substring)
+//   - type: filter by item type (login, note, card, certificate, custom)
+//   - vault_id: restrict to a single vault (optional)
+//   - limit, offset: pagination
+func (a *API) SearchItems(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	typeFilter := strings.TrimSpace(r.URL.Query().Get("type"))
+	vaultIDParam := strings.TrimSpace(r.URL.Query().Get("vault_id"))
+	limit, offset := parsePagination(r)
+
+	if query == "" && typeFilter == "" {
+		writeJSON(w, http.StatusOK, SearchResponse{
+			Results:        []SearchResultItem{},
+			PaginationMeta: PaginationMeta{TotalCount: 0, Limit: limit, Offset: offset},
+		})
+		return
+	}
+
+	// Determine which vaults to search.
+	var vaultIDs []string
+	if vaultIDParam != "" {
+		vaultIDs = []string{vaultIDParam}
+	} else {
+		idx, err := a.loadVaultIndex(creds.SecretKey().String())
+		if err != nil {
+			slog.Warn("search: failed to load vault index", "error", err)
+		}
+		vaultIDs = idx.VaultIDs
+	}
+
+	var allResults []SearchResultItem
+	for _, vid := range vaultIDs {
+		session, err := a.openSession(r.Context(), vid, creds)
+		if err != nil {
+			continue
+		}
+
+		// Read vault name from metadata.
+		var vaultName string
+		metaFields, err := session.Get(r.Context(), vaultMetadataItemID)
+		if err == nil {
+			vaultName = decodeVaultMetadata(metaFields).Name
+		}
+		if vaultName == "" {
+			vaultName = vid
+		}
+
+		items, err := session.List(r.Context())
+		if err != nil {
+			session.Close()
+			continue
+		}
+
+		for _, itemID := range items {
+			if isReservedItemID(itemID) {
+				continue
+			}
+			fields, err := session.Get(r.Context(), itemID)
+			if err != nil {
+				continue
+			}
+
+			name := string(fields["_name"])
+			if name == "" {
+				name = itemID
+			}
+			itemType := string(fields["_type"])
+			if itemType == "" {
+				itemType = "custom"
+			}
+
+			// Apply type filter.
+			if typeFilter != "" && typeFilter != "all" && itemType != typeFilter {
+				continue
+			}
+
+			// Apply text query.
+			var matchedField string
+			if query != "" {
+				matched, mf := matchesQuery(fields, query)
+				if !matched {
+					continue
+				}
+				matchedField = mf
+			}
+
+			allResults = append(allResults, SearchResultItem{
+				VaultID:      vid,
+				VaultName:    vaultName,
+				ItemID:       itemID,
+				Name:         name,
+				Type:         itemType,
+				MatchedField: matchedField,
+			})
+		}
+		session.Close()
+	}
+
+	// Paginate.
+	start, end, pgMeta := paginateSlice(len(allResults), limit, offset)
+	page := allResults
+	if start < end {
+		page = allResults[start:end]
+	} else {
+		page = nil
+	}
+	if page == nil {
+		page = []SearchResultItem{}
+	}
+
+	writeJSON(w, http.StatusOK, SearchResponse{Results: page, PaginationMeta: pgMeta})
 }

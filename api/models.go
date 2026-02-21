@@ -48,6 +48,40 @@ type TwoFactorStatusResponse struct {
 	Enabled bool `json:"enabled"`
 }
 
+// DisableTwoFactorRequest is the JSON body for POST /auth/2fa/disable.
+type DisableTwoFactorRequest struct {
+	Code string `json:"code"`
+}
+
+// AuthSettingsResponse is returned from GET /auth/settings and PUT /auth/settings.
+type AuthSettingsResponse struct {
+	PasskeyPolicy string `json:"passkey_policy"`
+	TOTPEnabled   bool   `json:"totp_enabled"`
+}
+
+// UpdateAuthSettingsRequest is the JSON body for PUT /auth/settings.
+type UpdateAuthSettingsRequest struct {
+	PasskeyPolicy string `json:"passkey_policy"`
+}
+
+// StepUpTOTPRequest is the JSON body for POST /auth/step-up.
+type StepUpTOTPRequest struct {
+	Code string `json:"code"`
+}
+
+// StepUpResponse is returned from step-up verification endpoints.
+type StepUpResponse struct {
+	Verified  bool   `json:"verified"`
+	Method    string `json:"method"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// StepUpRequiredResponse is returned when a sensitive action requires step-up auth.
+type StepUpRequiredResponse struct {
+	Error   string   `json:"error"`   // "step_up_required"
+	Methods []string `json:"methods"` // ["totp"], ["passkey"], or ["totp", "passkey"]
+}
+
 // OpenVaultResponse is returned from POST /vaults/{vaultID}/open.
 type OpenVaultResponse struct {
 	VaultID  string `json:"vault_id"`
@@ -78,9 +112,18 @@ type ListItemsResponse struct {
 
 // ItemSummary is returned in vault item listings.
 type ItemSummary struct {
-	ItemID string `json:"item_id"`
-	Name   string `json:"name,omitempty"`
-	Type   string `json:"type,omitempty"`
+	ItemID    string            `json:"item_id"`
+	Name      string            `json:"name,omitempty"`
+	Type      string            `json:"type,omitempty"`
+	Version   uint64            `json:"version"`
+	UpdatedAt string            `json:"updated_at,omitempty"`
+	Preview   map[string]string `json:"preview,omitempty"`
+}
+
+// MutationResponse is returned from item create and update operations.
+type MutationResponse struct {
+	ItemID  string `json:"item_id"`
+	Version uint64 `json:"version,omitempty"`
 }
 
 // PutItemRequest is the JSON body for POST /vaults/{vaultID}/items/{itemID}.
@@ -396,4 +439,36 @@ type AcceptInviteRequest struct {
 type AcceptInviteResponse struct {
 	VaultID  string `json:"vault_id"`
 	MemberID string `json:"member_id"`
+}
+
+// ---------------------------------------------------------------------------
+// Item Version Manifest
+// ---------------------------------------------------------------------------
+
+// ItemVersionsResponse is returned from GET /vaults/{vaultID}/items/versions.
+// Provides a lightweight manifest of item IDs and their current versions
+// without decrypting any content (reads Envelope.Version directly).
+type ItemVersionsResponse struct {
+	Versions map[string]uint64 `json:"versions"`
+	Epoch    uint64            `json:"epoch"`
+}
+
+// ---------------------------------------------------------------------------
+// Server-Side Search
+// ---------------------------------------------------------------------------
+
+// SearchResultItem is one entry in a search response.
+type SearchResultItem struct {
+	VaultID      string `json:"vault_id"`
+	VaultName    string `json:"vault_name"`
+	ItemID       string `json:"item_id"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	MatchedField string `json:"matched_field,omitempty"`
+}
+
+// SearchResponse is returned from GET /search.
+type SearchResponse struct {
+	Results []SearchResultItem `json:"results"`
+	PaginationMeta
 }

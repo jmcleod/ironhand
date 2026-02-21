@@ -39,7 +39,7 @@ function relativeTime(iso: string): string {
 }
 
 export default function PasskeyDialog({ open, onOpenChange }: PasskeyDialogProps) {
-  const { account, registerPasskey, listPasskeys, labelPasskey, deletePasskey, generateRecoveryCodes } = useVault();
+  const { account, registerPasskey, listPasskeys, labelPasskey, deletePasskey, generateRecoveryCodes, updatePasskeyPolicy } = useVault();
   const { toast } = useToast();
 
   const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
@@ -49,6 +49,8 @@ export default function PasskeyDialog({ open, onOpenChange }: PasskeyDialogProps
   const [editLabel, setEditLabel] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<PasskeySummary | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+
+  const [policyUpdating, setPolicyUpdating] = useState(false);
 
   // Recovery codes state
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
@@ -257,6 +259,40 @@ export default function PasskeyDialog({ open, onOpenChange }: PasskeyDialogProps
                     {registerLoading ? 'Registering...' : 'Register New Passkey'}
                   </Button>
                 </div>
+
+                {/* Passkey login policy */}
+                {passkeys.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium">Login Policy</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Controls whether passkeys are required for login or optional alongside password+TOTP.
+                    </p>
+                    <select
+                      className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+                      value={account?.passkeyPolicy ?? 'required'}
+                      disabled={policyUpdating}
+                      onChange={async (e) => {
+                        setPolicyUpdating(true);
+                        try {
+                          await updatePasskeyPolicy(e.target.value);
+                          toast({
+                            title: 'Policy Updated',
+                            description: e.target.value === 'required'
+                              ? 'Passkeys are now required for login.'
+                              : 'Password+TOTP login is now allowed alongside passkeys.',
+                          });
+                        } catch {
+                          toast({ title: 'Failed to update policy', variant: 'destructive' });
+                        } finally {
+                          setPolicyUpdating(false);
+                        }
+                      }}
+                    >
+                      <option value="required">Required — passkeys mandatory for login</option>
+                      <option value="optional">Optional — password+TOTP login allowed</option>
+                    </select>
+                  </div>
+                )}
 
                 {/* Divider */}
                 <div className="relative">

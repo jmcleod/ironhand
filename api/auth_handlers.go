@@ -173,29 +173,39 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce passkey login when WebAuthn credentials are registered.
-	// Password-based login is only permitted with a valid recovery code.
+	// Enforce passkey login based on the account's passkey policy.
+	// When policy is "required" (or unset, the default), password-based
+	// login is only permitted with a valid recovery code.
+	// When policy is "optional", password+TOTP login is allowed even
+	// with passkeys registered.
 	var recoveryCodeUsedIdx = -1
 	if len(record.WebAuthnCredentials) > 0 {
-		if req.RecoveryCode == "" {
-			// No recovery code provided — passkey is required.
-			a.audit.logFailure(AuditLoginFailure, r, "passkey required, password login rejected",
-				slog.String("account_id", record.SecretKeyID))
-			writeError(w, http.StatusForbidden, "passkey_required")
-			return
+		policy := record.PasskeyPolicy
+		if policy == "" {
+			policy = "required"
 		}
-		idx, valid := validateRecoveryCode(record.RecoveryCodes, req.RecoveryCode)
-		if !valid {
-			recordLoginFailure()
-			a.audit.logFailure(AuditLoginFailure, r, "invalid recovery code",
-				slog.String("account_id", record.SecretKeyID))
-			writeError(w, http.StatusUnauthorized, "invalid credentials")
-			return
+		if policy == "required" {
+			if req.RecoveryCode == "" {
+				// No recovery code provided — passkey is required.
+				a.audit.logFailure(AuditLoginFailure, r, "passkey required, password login rejected",
+					slog.String("account_id", record.SecretKeyID))
+				writeError(w, http.StatusForbidden, "passkey_required")
+				return
+			}
+			idx, valid := validateRecoveryCode(record.RecoveryCodes, req.RecoveryCode)
+			if !valid {
+				recordLoginFailure()
+				a.audit.logFailure(AuditLoginFailure, r, "invalid recovery code",
+					slog.String("account_id", record.SecretKeyID))
+				writeError(w, http.StatusUnauthorized, "invalid credentials")
+				return
+			}
+			// Mark the code as used BEFORE passphrase validation to prevent
+			// brute-force reuse if the passphrase check fails.
+			record.RecoveryCodes[idx].Used = true
+			recoveryCodeUsedIdx = idx
 		}
-		// Mark the code as used BEFORE passphrase validation to prevent
-		// brute-force reuse if the passphrase check fails.
-		record.RecoveryCodes[idx].Used = true
-		recoveryCodeUsedIdx = idx
+		// "optional": skip enforcement, fall through to TOTP/passphrase checks
 	}
 
 	if record.TOTPEnabled && !verifyTOTPCode(record.TOTPSecret, req.TOTPCode, time.Now()) {
@@ -380,6 +390,46 @@ func (a *API) EnableTwoFactor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, TwoFactorStatusResponse{Enabled: true})
 }
 
+// DisableTwoFactor handles POST /auth/2fa/disable.
+func (a *API) DisableTwoFactor(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	req, ok := decodeJSON[DisableTwoFactorRequest](w, r, maxAuthBodySize)
+	if !ok {
+		return
+	}
+
+	secretKey := creds.SecretKey().String()
+	defer func() { secretKey = "" }()
+	record, err := a.loadAccountRecord(secretKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+	if !record.TOTPEnabled {
+		writeError(w, http.StatusBadRequest, "2fa is not enabled")
+		return
+	}
+	if !verifyTOTPCode(record.TOTPSecret, req.Code, time.Now()) {
+		writeError(w, http.StatusUnauthorized, "invalid one-time code")
+		return
+	}
+
+	record.TOTPEnabled = false
+	record.TOTPSecret = ""
+	if err := a.updateAccountRecord(secretKey, *record); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to disable 2fa")
+		return
+	}
+
+	a.audit.logEvent(AuditTwoFactorDisabled, r, record.SecretKeyID)
+	writeJSON(w, http.StatusOK, TwoFactorStatusResponse{Enabled: false})
+}
+
 func (a *API) sessionFromRequest(r *http.Request) (string, AuthSession, bool) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil || cookie.Value == "" {
@@ -391,6 +441,68 @@ func (a *API) sessionFromRequest(r *http.Request) (string, AuthSession, bool) {
 		return "", AuthSession{}, false
 	}
 	return token, session, true
+}
+
+// GetAuthSettings handles GET /auth/settings.
+func (a *API) GetAuthSettings(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sk := creds.SecretKey().String()
+	defer func() { sk = "" }()
+	record, err := a.loadAccountRecord(sk)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+	policy := record.PasskeyPolicy
+	if policy == "" {
+		policy = "required"
+	}
+	writeJSON(w, http.StatusOK, AuthSettingsResponse{
+		PasskeyPolicy: policy,
+		TOTPEnabled:   record.TOTPEnabled,
+	})
+}
+
+// UpdateAuthSettings handles PUT /auth/settings.
+func (a *API) UpdateAuthSettings(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	req, ok := decodeJSON[UpdateAuthSettingsRequest](w, r, maxAuthBodySize)
+	if !ok {
+		return
+	}
+	if req.PasskeyPolicy != "optional" && req.PasskeyPolicy != "required" {
+		writeError(w, http.StatusBadRequest, "passkey_policy must be \"optional\" or \"required\"")
+		return
+	}
+
+	sk := creds.SecretKey().String()
+	defer func() { sk = "" }()
+	record, err := a.loadAccountRecord(sk)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+	record.PasskeyPolicy = req.PasskeyPolicy
+	if err := a.updateAccountRecord(sk, *record); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save settings")
+		return
+	}
+
+	a.audit.logEvent(AuditAuthSettingsChanged, r, record.SecretKeyID,
+		slog.String("passkey_policy", req.PasskeyPolicy))
+	writeJSON(w, http.StatusOK, AuthSettingsResponse{
+		PasskeyPolicy: req.PasskeyPolicy,
+		TOTPEnabled:   record.TOTPEnabled,
+	})
 }
 
 // RecoveryCodesStatus handles GET /auth/recovery-codes.

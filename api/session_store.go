@@ -30,4 +30,6 @@ type AuthSession struct {
 	PendingTOTPExpiry     time.Time `json:"pending_totp_expiry,omitempty"`
 	WebAuthnSessionData   string    `json:"webauthn_session_data,omitempty"`
 	WebAuthnSessionExpiry time.Time `json:"webauthn_session_expiry,omitempty"`
+	StepUpVerifiedAt      time.Time `json:"step_up_verified_at,omitempty"`
+	StepUpMethod          string    `json:"step_up_method,omitempty"` // "totp" or "passkey"
 }

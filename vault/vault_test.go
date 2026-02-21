@@ -122,7 +122,7 @@ func TestVault_Update(t *testing.T) {
 	err := session.Put(ctx, "item-1", Fields{"password": []byte("version-1")})
 	require.NoError(t, err)
 
-	err = session.Update(ctx, "item-1", Fields{"password": []byte("version-2"), "username": []byte("admin")})
+	_, err = session.Update(ctx, "item-1", Fields{"password": []byte("version-2"), "username": []byte("admin")})
 	require.NoError(t, err)
 
 	result, err := session.Get(ctx, "item-1")
@@ -139,7 +139,7 @@ func TestVault_UpdateReplacesAllFields(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update with only field "c" — fields "a" and "b" should be gone
-	err = session.Update(ctx, "item-1", Fields{"c": []byte("3")})
+	_, err = session.Update(ctx, "item-1", Fields{"c": []byte("3")})
 	require.NoError(t, err)
 
 	result, err := session.Get(ctx, "item-1")
@@ -163,7 +163,7 @@ func TestVault_ConcurrentUpdate(t *testing.T) {
 	for range n {
 		go func() {
 			defer wg.Done()
-			if err := session.Update(ctx, "item-1", Fields{"data": []byte("updated")}); err != nil {
+			if _, err := session.Update(ctx, "item-1", Fields{"data": []byte("updated")}); err != nil {
 				errs <- err
 			}
 		}()
@@ -447,7 +447,7 @@ func TestVault_UpdateCreatesHistory(t *testing.T) {
 	err := session.Put(ctx, "item-1", Fields{"password": []byte("original")})
 	require.NoError(t, err)
 
-	err = session.Update(ctx, "item-1", Fields{"password": []byte("updated")})
+	_, err = session.Update(ctx, "item-1", Fields{"password": []byte("updated")})
 	require.NoError(t, err)
 
 	history, err := session.GetHistory(ctx, "item-1")
@@ -465,7 +465,7 @@ func TestVault_GetHistoryVersion(t *testing.T) {
 	err := session.Put(ctx, "item-1", Fields{"password": []byte("original"), "username": []byte("alice")})
 	require.NoError(t, err)
 
-	err = session.Update(ctx, "item-1", Fields{"password": []byte("updated"), "username": []byte("bob")})
+	_, err = session.Update(ctx, "item-1", Fields{"password": []byte("updated"), "username": []byte("bob")})
 	require.NoError(t, err)
 
 	fields, err := session.GetHistoryVersion(ctx, "item-1", 1)
@@ -482,7 +482,7 @@ func TestVault_MultipleUpdatesHistory(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 2; i <= 4; i++ {
-		err = session.Update(ctx, "item-1", Fields{"val": []byte(fmt.Sprintf("v%d", i))})
+		_, err = session.Update(ctx, "item-1", Fields{"val": []byte(fmt.Sprintf("v%d", i))})
 		require.NoError(t, err)
 	}
 
@@ -508,7 +508,7 @@ func TestVault_HistoryPreservesFields(t *testing.T) {
 	err := session.Put(ctx, "item-1", original)
 	require.NoError(t, err)
 
-	err = session.Update(ctx, "item-1", Fields{"username": []byte("bob"), "password": []byte("newpass")})
+	_, err = session.Update(ctx, "item-1", Fields{"username": []byte("bob"), "password": []byte("newpass")})
 	require.NoError(t, err)
 
 	// Historical version should have exact original fields
@@ -535,7 +535,7 @@ func TestVault_HistoryAfterEpochRotation(t *testing.T) {
 	err = session.Put(ctx, "item-1", Fields{"data": []byte("original")})
 	require.NoError(t, err)
 
-	err = session.Update(ctx, "item-1", Fields{"data": []byte("updated")})
+	_, err = session.Update(ctx, "item-1", Fields{"data": []byte("updated")})
 	require.NoError(t, err)
 
 	// Verify history exists before rotation

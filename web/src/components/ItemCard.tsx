@@ -10,7 +10,8 @@ import TotpCodeDisplay from '@/components/TotpCodeDisplay';
 import PasswordStrengthIndicator from '@/components/PasswordStrengthIndicator';
 import { isValidTOTPSecret } from '@/lib/totp';
 import { assessPasswordStrength } from '@/lib/password-strength';
-import { getItemPrivateKey, ApiError } from '@/lib/api';
+import { getItemPrivateKey, isStepUpRequired, type ApiError } from '@/lib/api';
+import StepUpAuthDialog from '@/components/StepUpAuthDialog';
 
 interface ItemCardProps {
   item: VaultItem;
@@ -27,6 +28,9 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
   const [historyOpen, setHistoryOpen] = useState(false);
   const [privateKeyPEM, setPrivateKeyPEM] = useState<string | null>(null);
   const [privateKeyLoading, setPrivateKeyLoading] = useState(false);
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const [stepUpMethods, setStepUpMethods] = useState<string[]>([]);
+  const [stepUpCallback, setStepUpCallback] = useState<(() => void) | null>(null);
 
   const type = itemType(item);
   const name = itemName(item);
@@ -96,6 +100,11 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
       setPrivateKeyPEM(pem);
       return pem;
     } catch (err) {
+      if (isStepUpRequired(err)) {
+        setStepUpMethods(err.methods);
+        setStepUpOpen(true);
+        return null;
+      }
       const apiErr = err as ApiError;
       const msg = apiErr.status === 403
         ? 'Only the vault owner can access private keys.'
@@ -474,6 +483,24 @@ export default function ItemCard({ item, vaultId, onRequestEdit }: ItemCardProps
         <EditItemDialog open={editOpen} onOpenChange={setEditOpen} vaultId={vaultId} item={item} />
       )}
       <ItemHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} vaultId={vaultId} item={item} />
+      <StepUpAuthDialog
+        open={stepUpOpen}
+        onOpenChange={setStepUpOpen}
+        methods={stepUpMethods}
+        onVerified={() => {
+          if (stepUpCallback) {
+            stepUpCallback();
+            setStepUpCallback(null);
+          } else {
+            // Default: retry fetchPrivateKey after step-up
+            fetchPrivateKey().then((pem) => {
+              if (pem && !revealedFields.has('private_key')) {
+                toggleReveal('private_key');
+              }
+            });
+          }
+        }}
+      />
     </>
   );
 }
