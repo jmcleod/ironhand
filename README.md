@@ -10,15 +10,23 @@ A secure, encrypted vault library for Go with member-based access control, epoch
 - **Epoch-based key rotation** — adding or revoking members rotates the vault KEK and re-wraps all items atomically
 - **Rollback detection** — persistent epoch cache detects storage rollback attacks
 - **Credential export/import** — single encrypted blob for portable vault access
+- **Vault export/import** — full vault backup encrypted with a user-provided passphrase; requires owner access and step-up authentication
 - **Pluggable storage** — in-memory (testing), BBolt (default), or PostgreSQL backends
 - **Built-in Certificate Authority** — turn any vault into a CA, issue/revoke/renew X.509 certificates, generate CRLs, and sign CSRs; optional PKCS#11 HSM backend for hardware-protected CA keys
-- **WebAuthn/Passkey MFA** — phishing-resistant second factor using browser passkeys (replaces TOTP as the recommended MFA method)
+- **WebAuthn/Passkey MFA** — phishing-resistant second factor using browser passkeys (replaces TOTP as the recommended MFA method); passkey management (list, label, delete) with safety checks
+- **TOTP MFA** — time-based one-time passwords as an alternative second factor; can be enabled and disabled
+- **Step-up authentication** — time-limited re-authentication (5-minute TTL) via TOTP or passkey for sensitive operations like vault export
+- **Recovery codes** — one-time-use backup codes for account recovery when MFA devices are unavailable
+- **Passkey policy** — configurable per-account policy (`optional` or `required`) controlling whether passkey authentication is mandatory
+- **Vault sharing** — invite-based vault sharing with configurable member roles; time-limited invite tokens
+- **Cross-vault search** — search items across all vaults by name, type, or content (sensitive fields excluded from results)
 - **CSRF protection** — double-submit cookie pattern on all mutating endpoints
-- **Security headers** — CSP, HSTS, X-Frame-Options, and Permissions-Policy on every response
+- **Security headers** — CSP with per-request nonces, HSTS, X-Frame-Options, and Permissions-Policy on every response
 - **Rate limiting** — per-account, per-IP, and global login throttling with exponential backoff
 - **Session management** — 24-hour absolute expiry with 30-minute idle timeout; optional persistent session storage
 - **Private key redaction** — certificate private keys returned as `[REDACTED]` via the standard API; dedicated owner-only endpoint for retrieval
-- **Encrypted audit trail** — AES-256-GCM encrypted audit entries with tamper-evident hash chains
+- **Encrypted audit trail** — AES-256-GCM encrypted audit entries with tamper-evident hash chains; offline verification CLI
+- **Audit webhook** — forward audit events in real-time to external SIEM/webhook endpoints
 - **Anomaly detection** — automated alerting for login failure spikes and bulk data exports
 
 ## Documentation
@@ -27,6 +35,7 @@ Detailed documentation is available in the [`docs/`](docs/) directory:
 
 - **[Design](docs/design.md)** — Architecture, vault lifecycle, sessions, membership, storage backends, REST API, PKI, and audit system
 - **[Encryption](docs/encryption.md)** — Cryptographic schemes: MUK derivation, key hierarchy, AES-256-GCM, AAD construction, field-level encryption, epoch rotation, and credential export
+- **[Threat Model](docs/threatmodel.md)** — Current and resolved security issues, operational recommendations
 
 ## Quick Start
 
@@ -157,19 +166,26 @@ IronHand protects against:
 - **Storage rollback** — epoch cache detects if storage is reverted to a prior state
 - **Record swapping** — AAD binds ciphertext to its identity, preventing substitution
 - **Brute-force** — Argon2id with configurable memory-hard parameters
+- **Phishing** — WebAuthn/passkey MFA with configurable policy (optional or required)
+- **MFA lockout** — one-time recovery codes for account access when MFA devices are unavailable
+- **Privilege escalation** — step-up authentication (5-minute TTL) required for sensitive operations like vault export
 - **CSRF attacks** — double-submit cookie token required on all mutating endpoints
 - **Clickjacking** — X-Frame-Options: DENY and CSP frame-ancestors 'none'
+- **XSS** — Content Security Policy with per-request cryptographic nonces; no `unsafe-inline`
 - **Credential leakage** — header-based auth disabled by default; private keys redacted in API responses
 - **Session fixation** — CSRF token rotated on login; idle timeout invalidates stale sessions
 - **Session store compromise** — persistent session encryption key wrapped with external key; session passphrase split across server and client cookie via HMAC-SHA256
 - **IP spoofing via proxy headers** — proxy headers ignored by default; `--trusted-proxies` must be explicitly set to trust forwarded headers from known CIDR ranges
 - **Cache-based data leakage** — all API responses set `Cache-Control: no-store` to prevent browsers and proxies from persisting sensitive data to disk
+- **Audit tampering** — tamper-evident SHA-256 hash chains with offline verification tooling and optional SIEM webhook forwarding
 
 IronHand does **not** protect against:
 
 - Compromise of a running process (memory dumps)
 - Side-channel attacks on the host
 - Denial of service at the storage layer
+
+See [docs/threatmodel.md](docs/threatmodel.md) for the full threat model with mitigations and resolved issues.
 
 ## Security
 
@@ -230,7 +246,9 @@ ironhand server --session-storage persistent --session-key-file session.key
 
 The server will refuse to start if `--session-storage=persistent` is selected without a wrapping key. The session passphrase is derived from a split-secret scheme using both a server-side session ID and a client-held cookie, ensuring that neither a session store compromise nor a stolen cookie alone can reconstruct vault credentials.
 
-### Audit Retention
+### Audit
+
+#### Retention
 
 Per-vault audit retention can be enforced automatically with:
 
@@ -238,6 +256,38 @@ Per-vault audit retention can be enforced automatically with:
 - `--audit-max-entries N` — keep only the newest `N` entries per vault
 
 Both settings are optional and disabled by default (`0`). When pruning occurs, retained entries are re-anchored to a fresh genesis hash so the exported audit chain remains verifiable.
+
+#### Webhook Forwarding
+
+Audit events can be forwarded in real-time to an external SIEM or webhook endpoint:
+
+```sh
+ironhand server --audit-webhook-url https://siem.example.com/ingest \
+    --audit-webhook-header "Authorization: Bearer my-token"
+```
+
+Events are dispatched asynchronously via a bounded queue (capacity 1024). If the queue is full, events are dropped with a warning log. The dispatcher retries once on 5xx errors; 4xx errors are not retried.
+
+#### Offline Verification
+
+Exported audit chains can be verified offline using the CLI:
+
+```sh
+# Verify an exported audit log
+ironhand audit verify /path/to/audit-export.json
+
+# Machine-readable JSON output
+ironhand audit verify --json /path/to/audit-export.json
+```
+
+Verification checks:
+1. **Genesis anchor** — first entry links to the zero hash
+2. **Chain continuity** — each entry's `prev_hash` matches `SHA-256(prevID || prevHash || prevCreatedAt)`
+3. **No duplicate IDs** — all entry IDs are unique
+4. **Monotonic timestamps** — `created_at` values are non-decreasing
+5. **Consistent vault IDs** — all entries match the top-level `vault_id`
+
+Exit codes: `0` = valid, `1` = invalid, `2` = file/parse error.
 
 ### Header-Based Authentication
 
@@ -426,22 +476,62 @@ The `pki` package provides programmatic access to CA operations:
 The service provides a REST API exposed by default on port `8443`.
 
 - **Auth**:
-  - `POST /api/v1/auth/register` (passphrase -> returns secret key + sets session cookie)
-  - `POST /api/v1/auth/login` (passphrase + secret key + optional `totp_code` -> sets session cookie; `totp_code` required when 2FA enabled)
-  - `POST /api/v1/auth/logout`
-  - `GET /api/v1/auth/2fa` (session auth; returns 2FA status)
-  - `POST /api/v1/auth/2fa/setup` (session auth; returns temporary TOTP secret)
-  - `POST /api/v1/auth/2fa/enable` (session auth; verifies code and enables 2FA)
-  - `GET /api/v1/auth/webauthn/status` (session auth; returns passkey status and credential count)
-  - `POST /api/v1/auth/webauthn/register/begin` (session auth; starts passkey registration ceremony)
-  - `POST /api/v1/auth/webauthn/register/finish` (session auth; completes passkey registration)
-  - `POST /api/v1/auth/webauthn/login/begin` (secret key + passphrase; starts passkey login ceremony)
-  - `POST /api/v1/auth/webauthn/login/finish` (completes passkey login; sets session cookie)
+  - `POST /api/v1/auth/register` — register (passphrase → secret key + session cookie)
+  - `POST /api/v1/auth/login` — login (passphrase + secret key + optional `totp_code` / `recovery_code` → session cookie)
+  - `POST /api/v1/auth/logout` — logout (clear session)
+  - `GET /api/v1/auth/2fa` — get 2FA status
+  - `POST /api/v1/auth/2fa/setup` — begin TOTP setup (returns temporary secret + QR URI)
+  - `POST /api/v1/auth/2fa/enable` — verify TOTP code and enable 2FA
+  - `POST /api/v1/auth/2fa/disable` — disable TOTP 2FA (requires valid code)
+  - `GET /api/v1/auth/settings` — get auth settings (passkey policy, TOTP status)
+  - `PUT /api/v1/auth/settings` — update auth settings (passkey policy: `optional` or `required`)
+  - `GET /api/v1/auth/recovery-codes` — get recovery code status (count of unused codes)
+  - `POST /api/v1/auth/recovery-codes` — generate new recovery codes (replaces existing)
+  - `POST /api/v1/auth/step-up` — step-up authentication via TOTP (5-minute TTL)
+  - `POST /api/v1/auth/step-up/passkey/begin` — begin step-up via passkey
+  - `POST /api/v1/auth/step-up/passkey/finish` — complete step-up via passkey
+- **WebAuthn/Passkeys**:
+  - `GET /api/v1/auth/webauthn/status` — passkey status and credential count
+  - `POST /api/v1/auth/webauthn/register/begin` — start passkey registration ceremony
+  - `POST /api/v1/auth/webauthn/register/finish` — complete passkey registration
+  - `POST /api/v1/auth/webauthn/login/begin` — start passkey login ceremony
+  - `POST /api/v1/auth/webauthn/login/finish` — complete passkey login (sets session cookie)
+  - `GET /api/v1/auth/webauthn/credentials` — list registered passkeys (label, created, last used)
+  - `PUT /api/v1/auth/webauthn/credentials/{credentialID}` — update passkey label
+  - `DELETE /api/v1/auth/webauthn/credentials/{credentialID}` — delete passkey (prevents deleting last passkey without recovery codes)
 - **Vaults**:
-  - `POST /api/v1/vaults` (authenticated, server-generated vault ID)
-  - `GET /api/v1/vaults`
-  - `DELETE /api/v1/vaults/{vaultID}`
-  - `GET /api/v1/vaults/{vaultID}/audit` (audit trail of item access/changes; optional `item_id` query filter)
+  - `POST /api/v1/vaults` — create a vault (server-generated ID)
+  - `GET /api/v1/vaults` — list vaults (paginated)
+  - `DELETE /api/v1/vaults/{vaultID}` — delete a vault
+  - `POST /api/v1/vaults/{vaultID}/open` — open vault session
+- **Items**:
+  - `POST /api/v1/vaults/{vaultID}/items/{itemID}` — create item
+  - `GET /api/v1/vaults/{vaultID}/items/{itemID}` — get item
+  - `PUT /api/v1/vaults/{vaultID}/items/{itemID}` — update item
+  - `DELETE /api/v1/vaults/{vaultID}/items/{itemID}` — delete item
+  - `GET /api/v1/vaults/{vaultID}/items` — list items (paginated)
+  - `GET /api/v1/vaults/{vaultID}/items/versions` — item version manifest (lightweight, no decryption)
+  - `GET /api/v1/vaults/{vaultID}/items/{itemID}/history` — list item history
+  - `GET /api/v1/vaults/{vaultID}/items/{itemID}/history/{version}` — get specific version
+  - `GET /api/v1/vaults/{vaultID}/items/{itemID}/private-key` — get private key (owner only)
+- **Members & Sharing**:
+  - `GET /api/v1/vaults/{vaultID}/members` — list members
+  - `POST /api/v1/vaults/{vaultID}/members` — add member
+  - `PUT /api/v1/vaults/{vaultID}/members/{memberID}` — change member role
+  - `DELETE /api/v1/vaults/{vaultID}/members/{memberID}` — revoke member
+  - `POST /api/v1/vaults/{vaultID}/invites` — create invite (with role)
+  - `GET /api/v1/vaults/{vaultID}/invites` — list active invites
+  - `DELETE /api/v1/vaults/{vaultID}/invites/{token}` — cancel invite
+  - `GET /api/v1/invites/{token}` — get invite info (no vault auth required)
+  - `POST /api/v1/invites/{token}/accept` — accept invite
+- **Export/Import**:
+  - `POST /api/v1/vaults/{vaultID}/export` — export vault (owner + step-up required)
+  - `POST /api/v1/vaults/{vaultID}/import` — import vault data (multipart, 50 MiB limit)
+- **Audit**:
+  - `GET /api/v1/vaults/{vaultID}/audit` — audit trail (paginated; optional `item_id` filter)
+  - `GET /api/v1/vaults/{vaultID}/audit/export` — export tamper-evident audit log with HMAC signature
+- **Search**:
+  - `GET /api/v1/search` — cross-vault item search (query: `q`, `type`, `vault_id`, `limit`, `offset`)
 - **OpenAPI Spec**: `/api/v1/openapi.yaml`
 - **Swagger UI**: `/api/v1/docs`
 - **Redoc**: `/api/v1/redoc`

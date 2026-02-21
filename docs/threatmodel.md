@@ -11,7 +11,7 @@ Current potential issues identified from the active implementation and deploymen
 Audit retention controls exist but default to disabled (`--audit-retention-days=0`, `--audit-max-entries=0`).
 
 - Impact: deployments that keep defaults may accumulate unbounded audit history, creating governance/compliance and storage-management risk.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/cmd/ironhand/cmd/server.go`, `/Users/jmcleod/Development/Personal/ironhand/api/audit_store.go`.
+- Evidence: `cmd/ironhand/cmd/server.go`, `api/audit_store.go`.
 - Mitigation: set environment-appropriate retention policy in deployment baselines.
 
 ### 2) PKI backend portability (`Low`)
@@ -19,10 +19,42 @@ Audit retention controls exist but default to disabled (`--audit-retention-days=
 PKCS#11 is implemented for hardware-backed key custody, but cloud KMS backends (AWS/GCP/Azure) are not included in-tree.
 
 - Impact: environments without PKCS#11 may run software key custody unless they implement custom keystore integration.
-- Evidence: `/Users/jmcleod/Development/Personal/ironhand/pki/keystore.go`, `/Users/jmcleod/Development/Personal/ironhand/pki/keystore_pkcs11.go`.
+- Evidence: `pki/keystore.go`, `pki/keystore_pkcs11.go`.
 - Mitigation: add cloud KMS keystore adapters or provide deployment guidance for external integration.
 
+### 3) Audit webhook delivery is best-effort (`Low`)
+
+The audit webhook dispatcher uses a bounded in-memory queue (capacity 1024) with non-blocking enqueue. Events are dropped when the queue is full or when the receiver is slow.
+
+- Impact: audit events may be lost during high-throughput bursts or receiver outages; no persistent retry or dead-letter queue.
+- Evidence: `api/audit_webhook.go` (`enqueue` with `select/default`).
+- Mitigation: monitor the warning logs for dropped events; deploy a reliable message broker or persistent queue in front of the SIEM endpoint for mission-critical audit delivery.
+
 ## Resolved Since Prior Review
+
+### Missing step-up authentication for sensitive operations (`was Medium → Addressed`)
+
+Sensitive operations like vault export previously required only a standard session cookie, meaning a session hijack granted full export access. Step-up authentication now requires a time-limited re-authentication (5-minute TTL) via TOTP or passkey before performing these operations. The server returns `403 {"error": "step_up_required", "methods": ["totp", "passkey"]}` when step-up is needed. `StepUpVerifiedAt` and `StepUpMethod` are tracked in the session.
+
+- Evidence: `api/step_up.go` (`requireStepUp` middleware, `StepUpTOTP`, `BeginStepUpPasskey`, `FinishStepUpPasskey`), `api/handlers.go` (step-up required on `ExportVault`).
+
+### No MFA disable capability (`was Low → Addressed`)
+
+TOTP 2FA could be enabled but not disabled, requiring administrative intervention if a user lost their TOTP device. A `POST /auth/2fa/disable` endpoint now allows users to disable TOTP by providing a valid code, with the event audit-logged as `two_factor_disabled`.
+
+- Evidence: `api/auth_handlers.go` (`DisableTwoFactor`), `api/audit.go` (`AuditTwoFactorDisabled`).
+
+### No account recovery mechanism (`was Medium → Addressed`)
+
+Users with a lost MFA device had no recovery path. One-time recovery codes can now be generated via `POST /auth/recovery-codes` and used during login as a `recovery_code` parameter. Codes are stored as SHA-256 hashes and each can be used only once. A safety check prevents deleting the last registered passkey if no unused recovery codes exist.
+
+- Evidence: `api/auth_handlers.go` (`GenerateRecoveryCodes`, `RecoveryCodesStatus`), `api/accounts.go` (`HashedRecoveryCode`, `countUnusedRecoveryCodes`).
+
+### No passkey lifecycle management (`was Low → Addressed`)
+
+Registered passkeys could not be listed, labeled, or deleted — users had no visibility into their credential inventory. Full CRUD is now available: list passkeys with metadata (label, created, last used, backup state), update labels, and delete individual credentials.
+
+- Evidence: `api/webauthn.go` (`ListPasskeys`, `LabelPasskey`, `DeletePasskey`), `api/models.go` (`PasskeySummary`, `ListPasskeysResponse`).
 
 ### Client IP trust boundary (`was Low → Addressed`)
 
@@ -150,3 +182,7 @@ The fix adds offset-based pagination with server-side caps:
 3. Choose hardware-backed PKI key custody (PKCS#11 or custom KMS backend) for high-assurance CA deployments.
 4. Review the `--kdf-profile` setting. The default `moderate` profile is appropriate for most deployments. Use `sensitive` for environments with high-value secrets where additional derivation latency is acceptable.
 5. For maximum secret protection, deploy with `mlockall(2)` support (e.g., `--rlimit-memlock=unlimited` or `LimitMEMLOCK=infinity` in systemd) so that memguard's locked buffers are never swapped to disk.
+6. Forward audit events to a SIEM via `--audit-webhook-url` for centralised monitoring. The webhook is best-effort; deploy a reliable message broker in front of the SIEM if guaranteed delivery is required.
+7. Periodically verify exported audit chains offline using `ironhand audit verify` to confirm tamper-evidence integrity.
+8. Encourage users to generate recovery codes (`POST /auth/recovery-codes`) after enabling MFA to prevent lockout scenarios.
+9. Review the passkey policy setting per account. The default `required` policy enforces passkey login when passkeys are registered; set to `optional` if TOTP-only login should remain available.

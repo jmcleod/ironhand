@@ -31,7 +31,15 @@ IronHand is a secure, encrypted vault library written in Go. It provides member-
 
 | Package | Purpose |
 |---|---|
-| `cmd/ironhand/` | Cobra-based CLI with `server` subcommand |
+| `cmd/ironhand/` | Cobra-based CLI with `server` and `audit` subcommands |
+
+Available commands:
+
+| Command | Description |
+|---|---|
+| `ironhand server` | Start the HTTPS server |
+| `ironhand audit verify <file>` | Verify an exported audit chain offline (exit 0=valid, 1=invalid, 2=error) |
+| `ironhand audit verify --json <file>` | Same, with machine-readable JSON output |
 
 ## Vault Lifecycle
 
@@ -358,6 +366,8 @@ ironhand server [flags]
 | `--kdf-profile` | `moderate` | Argon2id KDF profile for new accounts: `interactive`, `moderate`, `sensitive` |
 | `--audit-retention-days` | `0` | Automatically prune audit entries older than N days (`0` disables) |
 | `--audit-max-entries` | `0` | Automatically keep only newest N audit entries per vault (`0` disables) |
+| `--audit-webhook-url` | | HTTP(S) URL to POST audit events to (SIEM/webhook) |
+| `--audit-webhook-header` | | Auth header for webhook in `Header: Value` format |
 | `--trusted-proxies` | | Comma-separated CIDR ranges of trusted reverse proxies |
 
 If no TLS certificate is provided, the server generates a self-signed certificate at startup.
@@ -383,14 +393,22 @@ type API struct {
     rateLimiter        *loginRateLimiter
     ipLimiter          *ipRateLimiter
     globalLimiter      *globalRateLimiter
+    regIPLimiter       *registrationIPLimiter
+    regGlobalLimiter   *registrationGlobalLimiter
     audit              *auditLogger
     metrics            *metricsCollector
     headerAuthEnabled  bool
     idleTimeout        time.Duration
     keyStore           pki.KeyStore
     webauthn           *webauthn.WebAuthn
+    invites            *inviteStore
+    trustedProxies     []netip.Prefix
+    kdfParams          *util.Argon2idParams
+    webhook            *auditWebhook
 }
 ```
+
+The API is configured via functional options. `Close()` must be called on shutdown to drain the audit webhook queue.
 
 ### Endpoint Summary
 
@@ -398,27 +416,44 @@ type API struct {
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/register` | Register (passphrase -> secret key + session cookie) |
-| `POST` | `/api/v1/auth/login` | Login (passphrase + secret key -> session cookie) |
+| `POST` | `/api/v1/auth/register` | Register (passphrase → secret key + session cookie) |
+| `POST` | `/api/v1/auth/login` | Login (passphrase + secret key + optional `totp_code` / `recovery_code` → session cookie) |
 | `POST` | `/api/v1/auth/logout` | Logout (clear session) |
 | `GET` | `/api/v1/auth/2fa` | Get 2FA status |
-| `POST` | `/api/v1/auth/2fa/setup` | Begin TOTP setup |
-| `POST` | `/api/v1/auth/2fa/enable` | Verify code and enable 2FA |
-| `GET` | `/api/v1/auth/webauthn/status` | Get passkey status and credential count |
+| `POST` | `/api/v1/auth/2fa/setup` | Begin TOTP setup (returns secret + QR URI) |
+| `POST` | `/api/v1/auth/2fa/enable` | Verify TOTP code and enable 2FA |
+| `POST` | `/api/v1/auth/2fa/disable` | Disable TOTP 2FA (requires valid code) |
+| `GET` | `/api/v1/auth/settings` | Get auth settings (passkey policy, TOTP status) |
+| `PUT` | `/api/v1/auth/settings` | Update auth settings (passkey policy: `optional` or `required`) |
+| `GET` | `/api/v1/auth/recovery-codes` | Recovery code status (count of unused codes) |
+| `POST` | `/api/v1/auth/recovery-codes` | Generate new recovery codes (replaces existing) |
+| `POST` | `/api/v1/auth/step-up` | Step-up authentication via TOTP (5-minute TTL) |
+| `POST` | `/api/v1/auth/step-up/passkey/begin` | Begin step-up via passkey assertion |
+| `POST` | `/api/v1/auth/step-up/passkey/finish` | Complete step-up via passkey |
+
+#### WebAuthn / Passkeys
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/auth/webauthn/status` | Passkey status and credential count |
 | `POST` | `/api/v1/auth/webauthn/register/begin` | Start passkey registration ceremony |
 | `POST` | `/api/v1/auth/webauthn/register/finish` | Complete passkey registration |
 | `POST` | `/api/v1/auth/webauthn/login/begin` | Start passkey login ceremony |
 | `POST` | `/api/v1/auth/webauthn/login/finish` | Complete passkey login (creates session) |
+| `GET` | `/api/v1/auth/webauthn/credentials` | List registered passkeys (label, created, last used) |
+| `PUT` | `/api/v1/auth/webauthn/credentials/{credentialID}` | Update passkey label |
+| `DELETE` | `/api/v1/auth/webauthn/credentials/{credentialID}` | Delete passkey (safety: prevents deleting last passkey without recovery codes) |
 
 #### Vaults
 
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/vaults` | Create a vault |
-| `GET` | `/api/v1/vaults` | List vaults |
+| `GET` | `/api/v1/vaults` | List vaults (paginated) |
 | `DELETE` | `/api/v1/vaults/{vaultID}` | Delete a vault |
-| `GET` | `/api/v1/vaults/{vaultID}/audit` | Audit trail |
-| `GET` | `/api/v1/vaults/{vaultID}/audit/export` | Export tamper-evident audit log |
+| `POST` | `/api/v1/vaults/{vaultID}/open` | Open vault session |
+| `GET` | `/api/v1/vaults/{vaultID}/audit` | Audit trail (paginated; optional `item_id` filter) |
+| `GET` | `/api/v1/vaults/{vaultID}/audit/export` | Export tamper-evident audit log with HMAC signature |
 
 #### Items
 
@@ -428,7 +463,8 @@ type API struct {
 | `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}` | Get item |
 | `PUT` | `/api/v1/vaults/{vaultID}/items/{itemID}` | Update item |
 | `DELETE` | `/api/v1/vaults/{vaultID}/items/{itemID}` | Delete item |
-| `GET` | `/api/v1/vaults/{vaultID}/items` | List items |
+| `GET` | `/api/v1/vaults/{vaultID}/items` | List items (paginated) |
+| `GET` | `/api/v1/vaults/{vaultID}/items/versions` | Item version manifest (no decryption) |
 | `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}/history` | List history |
 | `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}/history/{version}` | Get version |
 | `GET` | `/api/v1/vaults/{vaultID}/items/{itemID}/private-key` | Get private key (owner only) |
@@ -437,15 +473,33 @@ type API struct {
 
 | Method | Path | Description |
 |---|---|---|
+| `GET` | `/api/v1/vaults/{vaultID}/members` | List members |
 | `POST` | `/api/v1/vaults/{vaultID}/members` | Add member |
+| `PUT` | `/api/v1/vaults/{vaultID}/members/{memberID}` | Change member role |
 | `DELETE` | `/api/v1/vaults/{vaultID}/members/{memberID}` | Revoke member |
+
+#### Invites (Vault Sharing)
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/vaults/{vaultID}/invites` | Create invite (with role) |
+| `GET` | `/api/v1/vaults/{vaultID}/invites` | List active invites |
+| `DELETE` | `/api/v1/vaults/{vaultID}/invites/{token}` | Cancel invite |
+| `GET` | `/api/v1/invites/{token}` | Get invite info (no vault membership required) |
+| `POST` | `/api/v1/invites/{token}/accept` | Accept invite |
 
 #### Export/Import
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/vaults/{vaultID}/export` | Export vault data |
-| `POST` | `/api/v1/vaults/{vaultID}/import` | Import vault data |
+| `POST` | `/api/v1/vaults/{vaultID}/export` | Export vault (owner + step-up required; encrypted with user passphrase) |
+| `POST` | `/api/v1/vaults/{vaultID}/import` | Import vault data (multipart form; 50 MiB limit) |
+
+#### Search
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/search` | Cross-vault item search (`q`, `type`, `vault_id`, `limit`, `offset`) |
 
 #### PKI (Certificate Authority)
 
@@ -486,6 +540,8 @@ type AuthSession struct {
     PendingTOTPExpiry     time.Time
     WebAuthnSessionData   string
     WebAuthnSessionExpiry time.Time
+    StepUpVerifiedAt      time.Time   // when step-up was last completed
+    StepUpMethod          string      // "totp" or "passkey"
 }
 ```
 
@@ -541,6 +597,86 @@ WebAuthn provides phishing-resistant second-factor authentication. The passphras
 - **Registration** — Authenticated users register passkeys via a two-step ceremony (`/register/begin` → browser prompt → `/register/finish`)
 - **Login** — Users provide their secret key and passphrase, then complete the WebAuthn assertion (`/login/begin` → browser prompt → `/login/finish`)
 - **Configuration** — WebAuthn is auto-configured on server startup using `--webauthn-rp-id`, `--webauthn-rp-origin`, and `--webauthn-rp-name`
+
+### Step-Up Authentication
+
+Sensitive operations (e.g., vault export) require a time-limited re-authentication before proceeding. The `requireStepUp` middleware checks whether the session has a valid step-up verification within the 5-minute TTL window.
+
+**Supported methods:**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| TOTP | `POST /api/v1/auth/step-up` | Verify a TOTP code for step-up |
+| Passkey | `POST /api/v1/auth/step-up/passkey/begin` + `/finish` | WebAuthn assertion for step-up |
+
+On success, `StepUpVerifiedAt` is set to the current time and `StepUpMethod` is set to `"totp"` or `"passkey"`. Subsequent requests to step-up-protected endpoints succeed if the verification is within the TTL.
+
+If step-up is required but not present, the API returns:
+
+```json
+{"error": "step_up_required", "methods": ["totp", "passkey"]}
+```
+
+with HTTP status `403`.
+
+### Recovery Codes
+
+Recovery codes provide a fallback mechanism when a user's MFA device is unavailable:
+
+- **Generation** — `POST /api/v1/auth/recovery-codes` generates a batch of one-time codes. Generating new codes replaces all existing codes.
+- **Status** — `GET /api/v1/auth/recovery-codes` returns the count of total and unused codes.
+- **Login usage** — During login, pass `recovery_code` instead of `totp_code` to authenticate with a recovery code. Each code can only be used once.
+- **Storage** — Codes are stored as `SHA-256` hashes; plaintext codes are only returned at generation time.
+
+### Passkey Policy
+
+Each account has a configurable passkey policy that controls whether passkey authentication is mandatory:
+
+| Policy | Behavior |
+|---|---|
+| `required` (default) | WebAuthn login is required when passkeys are registered |
+| `optional` | Users may choose between TOTP and passkey login |
+
+The policy is managed via:
+- `GET /api/v1/auth/settings` — returns `passkey_policy` and `totp_enabled`
+- `PUT /api/v1/auth/settings` — updates `passkey_policy`
+
+### Passkey Management
+
+Registered passkeys can be listed, labeled, and deleted:
+
+- `GET /api/v1/auth/webauthn/credentials` — lists all passkeys with metadata (label, created, last used, backup state)
+- `PUT /api/v1/auth/webauthn/credentials/{credentialID}` — updates the passkey label (max 64 characters)
+- `DELETE /api/v1/auth/webauthn/credentials/{credentialID}` — deletes a passkey
+
+**Safety check:** Deleting the last registered passkey is blocked if the account has no unused recovery codes, preventing MFA lockout.
+
+### Vault Sharing (Invites)
+
+Vault owners can share vaults with other users via time-limited invite tokens:
+
+1. **Create invite** — `POST /vaults/{vaultID}/invites` with a target role (`reader`, `writer`, or `owner`)
+2. **List invites** — `GET /vaults/{vaultID}/invites` lists active (unexpired) invites
+3. **Cancel invite** — `DELETE /vaults/{vaultID}/invites/{token}` revokes an invite
+4. **View invite** — `GET /invites/{token}` returns invite details (no vault membership required)
+5. **Accept invite** — `POST /invites/{token}/accept` joins the vault with the invited role
+
+### Cross-Vault Search
+
+`GET /api/v1/search` searches items across all accessible vaults:
+
+| Parameter | Description |
+|---|---|
+| `q` | Search text (matches name, type, and non-sensitive fields) |
+| `type` | Filter by item type |
+| `vault_id` | Limit search to a single vault |
+| `limit` / `offset` | Pagination |
+
+Sensitive fields (`password`, `cvv`, `card_number`, `totp`, `private_key`) are excluded from search results. Attachment filenames are searchable.
+
+### Item Version Manifest
+
+`GET /api/v1/vaults/{vaultID}/items/versions` returns a lightweight map of item IDs to their current version numbers plus the vault epoch. This endpoint reads `Envelope.Version` directly from storage without decrypting item content, making it suitable for synchronisation and change detection.
 
 ### Rate Limiting
 
@@ -659,16 +795,43 @@ The API layer logs security-relevant events:
 
 | Category | Events |
 |---|---|
-| Authentication | `login_success`, `login_failure`, `login_rate_limited`, `register`, `logout` |
-| 2FA | `two_factor_setup`, `two_factor_enabled` |
-| WebAuthn | `webauthn_registered`, `webauthn_login_success` |
+| Authentication | `login_success`, `login_failure`, `login_rate_limited`, `register`, `register_rate_limited`, `logout` |
+| 2FA | `two_factor_setup`, `two_factor_enabled`, `two_factor_disabled` |
+| Auth Settings | `auth_settings_changed` |
+| Step-Up | `step_up_totp`, `step_up_passkey` |
+| Recovery | `recovery_codes_generated`, `recovery_code_used` |
+| WebAuthn | `webauthn_registered`, `webauthn_login_success`, `webauthn_deleted`, `webauthn_labeled` |
+| WebAuthn Limits | `ceremony_cap_exceeded` |
 | Vault | `vault_created`, `vault_deleted` |
-| Membership | `member_added`, `member_revoked` |
+| Membership | `member_added`, `member_revoked`, `member_role_changed` |
+| Invites | `invite_created`, `invite_accepted`, `invite_canceled` |
 | Items | `item_created`, `item_updated`, `item_deleted` |
-| Credentials | `credentials_exported`, `vault_exported`, `vault_imported` |
+| Credentials | `vault_exported`, `vault_imported` |
 | PKI | `ca_initialized`, `cert_issued`, `cert_revoked`, `cert_renewed`, `crl_generated`, `csr_signed`, `private_key_accessed` |
 
 Audit entries include timestamp, client IP, account ID (secret key ID, not the raw key), and event-specific context. They are written as structured JSON via `log/slog` and stored as AES-256-GCM encrypted records under the `AUDIT` record type. Each entry contains a `prev_hash` field forming a tamper-evident hash chain (SHA-256). The audit entry and chain tip are written atomically via `repo.Batch()`. Exported audit logs include an HMAC-SHA256 signature for forensic integrity verification.
+
+### Audit Webhook
+
+When `--audit-webhook-url` is configured, all audit events are also dispatched to an external HTTP endpoint in real-time:
+
+- **Payload**: JSON with `event`, `account_id`, `remote_addr`, `timestamp`, and `attrs` (event-specific key-value pairs)
+- **Queue**: Bounded channel (capacity 1024); events are dropped (with warning log) if the queue is full
+- **Retry**: 1 retry with 1-second delay on 5xx responses; no retry on 4xx
+- **Auth**: Optional header via `--audit-webhook-header` in `Header: Value` format (e.g., `Authorization: Bearer xxx`)
+- **Shutdown**: `Close()` drains the queue before the server exits
+
+### Audit Chain Verification
+
+Exported audit logs can be verified offline using the `ironhand audit verify` CLI command. The verification checks:
+
+1. **Genesis anchor** — first entry's `prev_hash` is 64 zero characters
+2. **Chain continuity** — `SHA-256(entryID || prevHash || createdAt)` links each entry to its predecessor
+3. **No duplicate IDs** — all entry IDs are unique
+4. **Monotonic timestamps** — `created_at` values are non-decreasing
+5. **Consistent vault IDs** — all entries' `vault_id` matches the top-level field
+
+The HMAC-SHA256 signature in the export cannot be verified offline (requires the vault record key) — an informational note is printed.
 
 ## Web UI
 
@@ -817,4 +980,6 @@ When `--pki-keystore=pkcs11` is set, all CA and certificate private keys are gen
 | KDF profile | `--kdf-profile` | | `moderate` |
 | Audit retention (days) | `--audit-retention-days` | | `0` (disabled) |
 | Audit max entries | `--audit-max-entries` | | `0` (disabled) |
+| Audit webhook URL | `--audit-webhook-url` | | (disabled) |
+| Audit webhook header | `--audit-webhook-header` | | |
 | Trusted proxies | `--trusted-proxies` | | (trust none) |
