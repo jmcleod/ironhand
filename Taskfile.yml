@@ -1,0 +1,252 @@
+# https://taskfile.dev
+
+version: "3"
+
+vars:
+  BIN_DIR: ./bin
+  BINARY: "{{.BIN_DIR}}/ironhand"
+  WEB_DIR: ./web
+  DOCKER_IMAGE: ironhand
+  POSTGRES_TEST_DSN: "postgres://ironhand:testpass@localhost:5433/ironhand_test?sslmode=disable"
+
+tasks:
+  # ─── Default ────────────────────────────────────────────────────────
+
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list-all
+
+  # ─── Go Server ──────────────────────────────────────────────────────
+
+  build:
+    desc: Build the Go server binary
+    cmds:
+      - go build -o {{.BINARY}} ./cmd/ironhand
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BINARY}}"
+
+  build:pkcs11:
+    desc: Build with PKCS#11 HSM support (requires CGo)
+    cmds:
+      - go build -tags pkcs11 -o {{.BINARY}} ./cmd/ironhand
+
+  run:
+    desc: Build and run the server on port 8443
+    deps: [build]
+    cmds:
+      - "{{.BINARY}} server --port 8443"
+
+  test:
+    desc: Run all Go tests
+    cmds:
+      - go test ./... -count=1
+
+  test:verbose:
+    desc: Run all Go tests with verbose output
+    cmds:
+      - go test ./... -count=1 -v
+
+  test:race:
+    desc: Run all Go tests with race detector
+    cmds:
+      - go test ./... -count=1 -race
+
+  test:cover:
+    desc: Run Go tests with coverage report
+    cmds:
+      - go test ./... -count=1 -coverprofile=coverage.out
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report written to coverage.html"
+
+  test:postgres:
+    desc: Run PostgreSQL integration tests (starts test container)
+    cmds:
+      - docker compose -f docker-compose.test.yml up -d --wait
+      - defer: docker compose -f docker-compose.test.yml down
+      - >-
+        IRONHAND_TEST_POSTGRES_DSN="{{.POSTGRES_TEST_DSN}}"
+        go test ./storage/postgres/... -count=1 -v
+
+  test:pkcs11:
+    desc: Run PKCS#11 tests (requires SoftHSM2)
+    preconditions:
+      - sh: command -v softhsm2-util
+        msg: "SoftHSM2 is required. Install with: brew install softhsm (macOS) or apt install softhsm2 (Linux)"
+    cmds:
+      - >-
+        SOFTHSM2_MODULE={{.PKCS11_MODULE}}
+        SOFTHSM2_TOKEN_LABEL=ironhand-test
+        SOFTHSM2_PIN=1234
+        go test -tags pkcs11 ./pki/ -v -run TestPKCS11
+    vars:
+      PKCS11_MODULE:
+        sh: |
+          if [ -f /opt/homebrew/lib/softhsm/libsofthsm2.so ]; then
+            echo /opt/homebrew/lib/softhsm/libsofthsm2.so
+          elif [ -f /usr/local/lib/softhsm/libsofthsm2.so ]; then
+            echo /usr/local/lib/softhsm/libsofthsm2.so
+          elif [ -f /usr/lib/softhsm/libsofthsm2.so ]; then
+            echo /usr/lib/softhsm/libsofthsm2.so
+          else
+            echo libsofthsm2.so
+          fi
+
+  vet:
+    desc: Run Go static analysis
+    cmds:
+      - go vet ./...
+
+  lint:go:
+    desc: Run Go linters (requires golangci-lint)
+    preconditions:
+      - sh: command -v golangci-lint
+        msg: "golangci-lint is required. Install from https://golangci-lint.run/welcome/install/"
+    cmds:
+      - golangci-lint run ./...
+
+  # ─── Web UI ─────────────────────────────────────────────────────────
+
+  web:install:
+    desc: Install Web UI dependencies
+    dir: "{{.WEB_DIR}}"
+    cmds:
+      - npm install
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+
+  web:dev:
+    desc: Start the Web UI development server
+    dir: "{{.WEB_DIR}}"
+    deps: [web:install]
+    cmds:
+      - npm run dev
+
+  web:build:
+    desc: Build the Web UI for production
+    dir: "{{.WEB_DIR}}"
+    deps: [web:install]
+    cmds:
+      - npm run build
+    sources:
+      - src/**/*
+      - index.html
+      - vite.config.ts
+      - tsconfig*.json
+      - tailwind.config.ts
+      - postcss.config.js
+    generates:
+      - dist/**/*
+
+  web:test:
+    desc: Run Web UI tests
+    dir: "{{.WEB_DIR}}"
+    deps: [web:install]
+    cmds:
+      - npm run test
+
+  web:test:watch:
+    desc: Run Web UI tests in watch mode
+    dir: "{{.WEB_DIR}}"
+    deps: [web:install]
+    cmds:
+      - npm run test:watch
+
+  web:lint:
+    desc: Lint the Web UI
+    dir: "{{.WEB_DIR}}"
+    deps: [web:install]
+    cmds:
+      - npm run lint
+
+  web:preview:
+    desc: Preview the Web UI production build
+    dir: "{{.WEB_DIR}}"
+    deps: [web:build]
+    cmds:
+      - npm run preview
+
+  # ─── Docker ─────────────────────────────────────────────────────────
+
+  docker:build:
+    desc: Build the Docker image
+    cmds:
+      - docker build -t {{.DOCKER_IMAGE}} .
+
+  docker:up:
+    desc: Start IronHand + PostgreSQL via Docker Compose
+    cmds:
+      - docker compose up -d --build
+
+  docker:down:
+    desc: Stop Docker Compose services
+    cmds:
+      - docker compose down
+
+  docker:logs:
+    desc: Tail Docker Compose logs
+    cmds:
+      - docker compose logs -f
+
+  docker:clean:
+    desc: Stop services and remove volumes
+    cmds:
+      - docker compose down -v
+
+  # ─── Development Workflow ───────────────────────────────────────────
+
+  dev:
+    desc: Start both Go server and Web UI dev server (parallel)
+    deps: [build]
+    cmds:
+      - task --parallel run web:dev
+
+  check:
+    desc: Run all checks (vet, lint, test)
+    cmds:
+      - task: vet
+      - task: lint:go
+      - task: web:lint
+      - task: test
+      - task: web:test
+
+  ci:
+    desc: Full CI pipeline (build, vet, test, web build+test)
+    cmds:
+      - task: vet
+      - task: test
+      - task: web:build
+      - task: web:test
+      - task: build
+      - echo "CI pipeline passed"
+
+  # ─── Cleanup ────────────────────────────────────────────────────────
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf {{.BIN_DIR}}
+      - rm -f coverage.out coverage.html
+
+  clean:all:
+    desc: Remove build artifacts, web dist, and node_modules
+    deps: [clean]
+    cmds:
+      - rm -rf {{.WEB_DIR}}/dist
+      - rm -rf {{.WEB_DIR}}/node_modules
+
+  # ─── Audit Verification ────────────────────────────────────────────
+
+  audit:verify:
+    desc: Verify an exported audit chain (pass FILE=path/to/export.json)
+    cmds:
+      - go run ./cmd/ironhand audit verify {{.FILE}}
+    requires:
+      vars: [FILE]

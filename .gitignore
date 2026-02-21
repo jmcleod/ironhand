@@ -24,6 +24,8 @@ go.work
 # Project-specific
 .gocache/
 build/
+bin/
+/.task
 
 # Web artifacts
 web/dist/
