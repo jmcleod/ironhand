@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>IronHand — Encrypted vault + built-in PKI, open source</title>
+    <meta name="description" content="IronHand is an open-source encrypted vault for secrets and sensitive data with member access control, epoch-based key rotation, rollback detection, audit trails, WebAuthn/TOTP MFA with step-up authentication, vault sharing, and a built-in Certificate Authority." />
+
+    <meta property="og:title" content="IronHand — Encrypted vault + built-in PKI" />
+    <meta property="og:description" content="Open-source encrypted vault for teams. AES-256-GCM encryption, member revocation, WebAuthn + TOTP MFA, step-up auth, vault sharing, and built-in CA. MIT licensed." />
+    <meta property="og:type" content="website" />
+
+    <link rel="icon" href="./favicon.ico" sizes="any" />
+    <link rel="icon" href="./favicon.png" type="image/png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+
+<!-- ============================================================
+     Navigation
+     ============================================================ -->
+
+<header class="nav">
+    <div class="container nav-inner">
+        <a class="brand" href="#top" aria-label="IronHand home">
+            <img class="brand-logo" src="./logo.png" alt="" aria-hidden="true" />
+            <span class="brand-name">IronHand</span>
+        </a>
+
+        <nav class="nav-links" aria-label="Primary">
+            <a href="#features">Features</a>
+            <a href="#auth">Authentication</a>
+            <a href="#how">How it works</a>
+            <a href="#use-cases">Use cases</a>
+            <a href="#getting-started">Get started</a>
+            <a href="#security">Security</a>
+            <a href="#faq">FAQ</a>
+        </nav>
+
+        <div class="nav-cta">
+            <a class="btn btn-ghost btn-small" href="https://github.com/jmcleod/ironhand" target="_blank" rel="noreferrer">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.464-1.11-1.464-.908-.62.069-.607.069-.607 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.268 2.75 1.026A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.026 2.747-1.026.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+                GitHub
+            </a>
+            <a class="btn btn-solid btn-small" href="#getting-started">Get started</a>
+        </div>
+
+        <button class="nav-toggle" aria-label="Menu" onclick="document.getElementById('mobile-menu').classList.toggle('open')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+        </button>
+    </div>
+</header>
+
+<div id="mobile-menu" class="mobile-menu" aria-label="Mobile navigation">
+    <a href="#features" onclick="document.getElementById('mobile-menu').classList.remove('open')">Features</a>
+    <a href="#auth" onclick="document.getElementById('mobile-menu').classList.remove('open')">Authentication</a>
+    <a href="#how" onclick="document.getElementById('mobile-menu').classList.remove('open')">How it works</a>
+    <a href="#use-cases" onclick="document.getElementById('mobile-menu').classList.remove('open')">Use cases</a>
+    <a href="#getting-started" onclick="document.getElementById('mobile-menu').classList.remove('open')">Get started</a>
+    <a href="#security" onclick="document.getElementById('mobile-menu').classList.remove('open')">Security</a>
+    <a href="#faq" onclick="document.getElementById('mobile-menu').classList.remove('open')">FAQ</a>
+    <a href="https://github.com/jmcleod/ironhand" target="_blank" rel="noreferrer" onclick="document.getElementById('mobile-menu').classList.remove('open')">GitHub</a>
+</div>
+
+<!-- ============================================================
+     Hero
+     ============================================================ -->
+
+<main id="top">
+    <section class="hero">
+        <div class="container hero-inner">
+            <div class="hero-copy">
+                <p class="kicker">Open-source &bull; MIT-licensed &bull; Zero-knowledge</p>
+                <h1>Encrypted vault + built-in PKI, designed for real revocation.</h1>
+                <p class="lede">
+                    IronHand is a secure encrypted vault for secrets and sensitive material with member-based access control,
+                    epoch-based key rotation, rollback detection, multi-factor authentication, and a built-in Certificate Authority.
+                </p>
+
+                <div class="hero-actions">
+                    <a class="btn btn-solid" href="#getting-started">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                        Get started
+                    </a>
+                    <a class="btn btn-ghost" href="https://github.com/jmcleod/ironhand/blob/master/docs/design.md" target="_blank" rel="noreferrer">Read the design docs</a>
+                </div>
+
+                <div class="hero-badges" aria-label="Key capabilities">
+                    <span class="badge">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+                        AES-256-GCM
+                    </span>
+                    <span class="badge">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+                        Member revocation
+                    </span>
+                    <span class="badge">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        WebAuthn + TOTP MFA
+                    </span>
+                    <span class="badge">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                        BBolt or PostgreSQL
+                    </span>
+                    <span class="badge">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                        Built-in CA + PKCS#11
+                    </span>
+                </div>
+            </div>
+
+            <div class="hero-panel" role="region" aria-label="Quick commands">
+                <div class="panel">
+                    <div class="panel-head">
+                        <span class="panel-title">Quick start</span>
+                        <span class="panel-sub">Run locally with HTTPS</span>
+                    </div>
+
+                    <pre class="code"><code>git clone https://github.com/jmcleod/ironhand
+cd ironhand
+go run ./cmd/ironhand server
+
+# UI:   https://localhost:8443/
+# API:  https://localhost:8443/api/v1/</code></pre>
+
+                    <div class="panel-row">
+                        <a class="btn btn-small btn-ghost" href="https://github.com/jmcleod/ironhand/blob/master/README.md" target="_blank" rel="noreferrer">README</a>
+                        <a class="btn btn-small btn-ghost" href="https://github.com/jmcleod/ironhand/blob/master/docs/encryption.md" target="_blank" rel="noreferrer">Encryption</a>
+                        <a class="btn btn-small btn-ghost" href="https://github.com/jmcleod/ironhand/blob/master/docs/design.md" target="_blank" rel="noreferrer">Architecture</a>
+                    </div>
+
+                    <p class="fineprint">
+                        Self-signed TLS is generated automatically for local development.
+                        For production, provide your own TLS cert/key or terminate TLS upstream.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         Highlights
+         ============================================================ -->
+
+    <section class="section" style="padding-top:40px; border-top:none;">
+        <div class="container">
+            <div class="highlight-grid">
+                <div class="highlight-card">
+                    <div class="highlight-number">AES-256</div>
+                    <div class="highlight-label">Encryption with authenticated data binding</div>
+                </div>
+                <div class="highlight-card">
+                    <div class="highlight-number">Zero-knowledge</div>
+                    <div class="highlight-label">Server never sees plaintext data or keys</div>
+                </div>
+                <div class="highlight-card">
+                    <div class="highlight-number">MIT</div>
+                    <div class="highlight-label">Fully open source, free forever</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         Features
+         ============================================================ -->
+
+    <section id="features" class="section">
+        <div class="container">
+            <h2>Core features</h2>
+            <p class="section-lede">
+                Security-focused defaults, strong cryptographic design, and operational features that matter when the vault is on the critical path.
+            </p>
+
+            <div class="grid">
+                <article class="card">
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+                    </div>
+                    <h3>Encrypted data at rest</h3>
+                    <p>AES-256-GCM with AAD binding prevents record swapping and cross-vault replay attacks.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon warm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+                    </div>
+                    <h3>Member access control</h3>
+                    <p>Owner, writer, and reader roles with per-member key wrapping. Invite members via time-limited, passphrase-protected links.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+                    </div>
+                    <h3>Epoch-based key rotation</h3>
+                    <p>Adding or revoking members rotates the vault KEK and re-wraps all item keys atomically in a single transaction.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    </div>
+                    <h3>Rollback detection</h3>
+                    <p>Epoch cache detects storage rollback attacks, preventing "undo" of revocations at the storage layer.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon warm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    </div>
+                    <h3>Encrypted audit trail</h3>
+                    <p>Tamper-evident hash-chained audit entries. Every action is logged and exportable for compliance and forensics.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                    </div>
+                    <h3>Pluggable storage</h3>
+                    <p>In-memory for tests, BBolt for single-instance deployments, and PostgreSQL for multi-instance HA.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    </div>
+                    <h3>Built-in Certificate Authority</h3>
+                    <p>Turn any vault into a CA: issue, renew, and revoke certificates. CRL publishing, CSR signing, and optional PKCS#11 HSM backend.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon warm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    </div>
+                    <h3>Encrypted vault export</h3>
+                    <p>Export full vault backups encrypted with a passphrase. Portable, offline-readable backup files for disaster recovery.</p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         Authentication & MFA
+         ============================================================ -->
+
+    <section id="auth" class="section section-alt">
+        <div class="container">
+            <h2>Authentication &amp; MFA</h2>
+            <p class="section-lede">
+                Layered authentication with phishing-resistant passkeys, time-based one-time passwords, recovery codes, and step-up re-authentication for sensitive operations.
+            </p>
+
+            <div class="ui-features">
+                <div class="ui-feature">
+                    <div class="ui-feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4"/></svg>
+                    </div>
+                    <div>
+                        <h4>WebAuthn / passkeys</h4>
+                        <p>Phishing-resistant FIDO2 authentication. Register multiple passkeys with labels and usage tracking.</p>
+                    </div>
+                </div>
+
+                <div class="ui-feature">
+                    <div class="ui-feature-icon warm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+                    </div>
+                    <div>
+                        <h4>TOTP two-factor</h4>
+                        <p>Standard 6-digit TOTP codes compatible with any authenticator app. Enable or disable at any time.</p>
+                    </div>
+                </div>
+
+                <div class="ui-feature">
+                    <div class="ui-feature-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    </div>
+                    <div>
+                        <h4>Step-up re-authentication</h4>
+                        <p>Sensitive operations (export, revoke, role changes, private key reveal) require re-authentication with a 5-minute window.</p>
+                    </div>
+                </div>
+
+                <div class="ui-feature">
+                    <div class="ui-feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+                    </div>
+                    <div>
+                        <h4>Passkey policies</h4>
+                        <p>Choose between "required" (passkeys mandatory, password login blocked) or "optional" (password + TOTP still allowed).</p>
+                    </div>
+                </div>
+
+                <div class="ui-feature">
+                    <div class="ui-feature-icon warm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M12 12h.01"/><path d="M17 12h.01"/><path d="M7 12h.01"/></svg>
+                    </div>
+                    <div>
+                        <h4>Recovery codes</h4>
+                        <p>Single-use break-glass codes for account recovery. Generated once and stored as SHA-256 hashes — plaintext never persisted.</p>
+                    </div>
+                </div>
+
+                <div class="ui-feature">
+                    <div class="ui-feature-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+                    </div>
+                    <div>
+                        <h4>Vault sharing &amp; invites</h4>
+                        <p>Invite members via time-limited links with embedded passphrases (never sent to server). Role assignment at invite time.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         How it works
+         ============================================================ -->
+
+    <section id="how" class="section">
+        <div class="container">
+            <h2>How it works</h2>
+            <div class="two-col">
+                <div>
+                    <h3>Layered keys with explicit binding</h3>
+                    <p style="color:var(--muted);line-height:1.6;">
+                        IronHand uses a layered key hierarchy: credentials derive a Master Unlock Key (MUK), which derives a per-vault
+                        record key for sealing storage records. A per-epoch KEK wraps per-item DEKs, and fields are encrypted independently.
+                    </p>
+
+                    <ul class="bullets">
+                        <li><strong>Two-secret MUK derivation</strong> — passphrase + secret key, combined via HKDF</li>
+                        <li><strong>X25519 member wrapping</strong> — KEK distribution uses asymmetric key agreement</li>
+                        <li><strong>Per-field encryption</strong> — compartmentalised data protection</li>
+                        <li><strong>Atomic epoch rotation</strong> — real revocation in a single transaction</li>
+                        <li><strong>AAD binding</strong> — vault ID, item ID, and epoch bound to every ciphertext</li>
+                    </ul>
+
+                    <p class="mini-cta">
+                        Deep dive:
+                        <a href="https://github.com/jmcleod/ironhand/blob/master/docs/encryption.md" target="_blank" rel="noreferrer">encryption details</a>
+                        &amp;
+                        <a href="https://github.com/jmcleod/ironhand/blob/master/docs/design.md" target="_blank" rel="noreferrer">system design</a>.
+                    </p>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">
+                        <span class="panel-title">Encryption Scheme</span>
+                    </div>
+                    <img class="encryption-img" src="encryption.png" alt="IronHand encryption key hierarchy diagram showing MUK derivation, KEK wrapping, and per-item DEK encryption" loading="lazy" />
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         Web UI
+         ============================================================ -->
+
+    <section class="section section-alt">
+        <div class="container">
+            <h2>Full-featured web UI</h2>
+            <p class="section-lede">
+                A modern React frontend ships with IronHand. Manage vaults, items, members, certificates, and authentication settings from the browser.
+            </p>
+
+            <div class="grid">
+                <article class="card">
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    </div>
+                    <h3>Vault dashboard</h3>
+                    <p>Create, list, and manage vaults. View members, pending invites, and audit history at a glance.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon warm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </div>
+                    <h3>Item management</h3>
+                    <p>Add, edit, and organise secrets with custom fields. Reveal private keys on demand with step-up verification.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+                    </div>
+                    <h3>Sharing &amp; invites</h3>
+                    <p>Create time-limited invite links with role selection. Manage members, change roles, and revoke access.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.32 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                    </div>
+                    <h3>Account settings</h3>
+                    <p>Configure passkey policies, enable/disable TOTP, manage recovery codes, and register WebAuthn credentials.</p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         Use cases
+         ============================================================ -->
+
+    <section id="use-cases" class="section">
+        <div class="container">
+            <h2>Use cases</h2>
+            <p class="section-lede">
+                From team secret management to internal PKI and embedded encryption libraries.
+            </p>
+
+            <div class="grid">
+                <article class="card">
+                    <div class="card-icon warm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+                    </div>
+                    <h3>Secrets vault for teams</h3>
+                    <p>Store secrets, passphrases, configs, certificates, and attachments — with member revocation that actually sticks through epoch rotation.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    </div>
+                    <h3>Internal PKI</h3>
+                    <p>Run a private CA for mTLS, internal services, dev/test, and labs. CA material stored as encrypted vault items with full lifecycle management.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                    </div>
+                    <h3>Embedded in Go services</h3>
+                    <p>Use as a library when you want strong crypto + storage abstraction without adopting a larger vault platform. Clean Go API.</p>
+                </article>
+
+                <article class="card">
+                    <div class="card-icon warm">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                    </div>
+                    <h3>Multi-instance service</h3>
+                    <p>Run behind a load balancer using PostgreSQL storage and persistent sessions for operational continuity and high availability.</p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         Getting started
+         ============================================================ -->
+
+    <section id="getting-started" class="section section-alt">
+        <div class="container">
+            <h2>Getting started</h2>
+            <p class="section-lede">
+                Clone, build, and run — or point at PostgreSQL for a production deployment.
+            </p>
+
+            <div class="two-col">
+                <div class="panel">
+                    <div class="panel-head">
+                        <span class="panel-title">Run locally</span>
+                        <span class="panel-sub">BBolt (default)</span>
+                    </div>
+                    <pre class="code"><code>git clone https://github.com/jmcleod/ironhand
+cd ironhand
+go run ./cmd/ironhand server
+
+# UI:  https://localhost:8443/
+# API: https://localhost:8443/api/v1/</code></pre>
+                    <p class="fineprint">Self-signed TLS is auto-generated if you don't provide cert/key.</p>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-head">
+                        <span class="panel-title">PostgreSQL backend</span>
+                        <span class="panel-sub">Multi-instance</span>
+                    </div>
+                    <pre class="code"><code>docker compose up -d postgres
+
+go run ./cmd/ironhand server \
+  --storage postgres \
+  --postgres-dsn "postgres://ironhand:ironhand@localhost:5432/ironhand?sslmode=disable"</code></pre>
+                    <p class="fineprint">Use PostgreSQL for multi-instance deployments behind a load balancer.</p>
+                </div>
+            </div>
+
+            <div style="margin-top:24px;">
+                <div class="panel">
+                    <div class="panel-head">
+                        <span class="panel-title">Documentation &amp; API</span>
+                    </div>
+                    <ul class="links">
+                        <li><a href="https://github.com/jmcleod/ironhand/blob/master/README.md" target="_blank" rel="noreferrer">README &amp; quickstart guide</a></li>
+                        <li><a href="https://github.com/jmcleod/ironhand/blob/master/docs/design.md" target="_blank" rel="noreferrer">System design &amp; architecture</a></li>
+                        <li><a href="https://github.com/jmcleod/ironhand/blob/master/docs/encryption.md" target="_blank" rel="noreferrer">Encryption specification</a></li>
+                        <li><a href="https://localhost:8443/api/v1/docs" target="_blank" rel="noreferrer">Swagger UI (when server is running)</a></li>
+                        <li><a href="https://localhost:8443/api/v1/redoc" target="_blank" rel="noreferrer">Redoc API reference (when server is running)</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         Security
+         ============================================================ -->
+
+    <section id="security" class="section">
+        <div class="container">
+            <h2>Security posture</h2>
+            <p class="section-lede">
+                Designed to be safe by default, with defence in depth across the entire stack.
+            </p>
+
+            <div class="two-col">
+                <div>
+                    <h3>Hardened defaults</h3>
+                    <ul class="bullets">
+                        <li>Cookie-based sessions with <strong>CSRF protection</strong> on all mutating endpoints</li>
+                        <li>Security headers: CSP, HSTS, X-Frame-Options, Permissions-Policy</li>
+                        <li><strong>Rate limiting</strong> per-account, per-IP, and global with exponential backoff</li>
+                        <li>Proxy headers ignored unless <strong>trusted proxy CIDRs</strong> are configured</li>
+                        <li>Encrypted audit trail with <strong>tamper-evident hash chaining</strong></li>
+                        <li><strong>Step-up re-authentication</strong> for sensitive operations (5-minute TTL)</li>
+                        <li><strong>Recovery codes</strong> stored as SHA-256 hashes, single-use</li>
+                    </ul>
+                </div>
+                <div class="card callout">
+                    <h3>Threat model</h3>
+                    <p>
+                        IronHand protects data at rest and detects rollback/swap attacks in the storage layer.
+                        The MUK is derived from two independent secrets (passphrase + secret key) to resist single-factor compromise.
+                    </p>
+                    <p style="color:var(--muted);margin-top:10px;font-size:14.5px;">
+                        It does not protect against runtime compromise (memory dumps), host side-channels, or storage-layer DoS.
+                    </p>
+                    <p class="mini-cta">
+                        Read: <a href="https://github.com/jmcleod/ironhand/blob/master/README.md#threat-model" target="_blank" rel="noreferrer">full threat model</a>.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         FAQ
+         ============================================================ -->
+
+    <section id="faq" class="section section-alt">
+        <div class="container">
+            <h2>Frequently asked questions</h2>
+
+            <div class="faq">
+                <details>
+                    <summary>Can I run IronHand as a multi-instance service?</summary>
+                    <p>
+                        Yes. Use the PostgreSQL backend and configure trusted proxy CIDRs behind your reverse proxy or load balancer.
+                        Sessions are stored server-side and shared across instances.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>How does member revocation work?</summary>
+                    <p>
+                        Revocation triggers an epoch rotation: a new KEK is generated, re-wrapped to remaining active members, and all item
+                        keys are re-encrypted with new AAD binding — all in one atomic transaction. The revoked member's key material becomes
+                        cryptographically useless.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>What MFA methods are supported?</summary>
+                    <p>
+                        IronHand supports WebAuthn/passkeys (FIDO2) and TOTP (time-based one-time passwords compatible with any authenticator app).
+                        You can configure passkey enforcement policy ("required" or "optional") and enable or disable TOTP at any time.
+                        Sensitive operations require step-up re-authentication via either method.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>What is step-up authentication?</summary>
+                    <p>
+                        Step-up auth is a second layer of verification required for sensitive operations like exporting a vault, revealing
+                        private keys, revoking members, changing roles, or creating invites. After verifying via TOTP or passkey, you get a
+                        5-minute window before re-authentication is needed again.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>How do vault invites work?</summary>
+                    <p>
+                        Vault owners and writers can create time-limited invite links (1-hour expiry) with a specific role.
+                        The passphrase is embedded in the URL fragment (never sent to the server). The invitee opens the link,
+                        and their credentials are wrapped into the vault's key hierarchy.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>Can I export and back up my vault?</summary>
+                    <p>
+                        Yes. The export feature creates an encrypted backup file protected by a passphrase you choose.
+                        The backup contains all vault items and can be used for disaster recovery.
+                        Exporting requires step-up re-authentication.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>What licence is IronHand under?</summary>
+                    <p>
+                        MIT. Fully open source, free forever, no usage restrictions.
+                    </p>
+                </details>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         Footer CTA
+         ============================================================ -->
+
+    <section class="section">
+        <div class="container footer-cta">
+            <div>
+                <h2>Start using IronHand</h2>
+                <p>
+                    Deploy with BBolt for single-instance or PostgreSQL for multi-instance.
+                    Set up passkeys for phishing-resistant MFA, configure step-up auth for sensitive operations,
+                    and enable PKCS#11 when you need hardware-backed CA keys.
+                </p>
+            </div>
+            <div class="footer-actions">
+                <a class="btn btn-solid" href="https://github.com/jmcleod/ironhand" target="_blank" rel="noreferrer">
+                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.464-1.11-1.464-.908-.62.069-.607.069-.607 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.268 2.75 1.026A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.026 2.747-1.026.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+                    View on GitHub
+                </a>
+                <a class="btn btn-ghost" href="https://github.com/jmcleod/ironhand/issues" target="_blank" rel="noreferrer">Report an issue</a>
+            </div>
+        </div>
+    </section>
+</main>
+
+<!-- ============================================================
+     Footer
+     ============================================================ -->
+
+<footer class="footer">
+    <div class="container footer-inner">
+        <p class="muted">
+            &copy; <span id="year"></span> IronHand contributors. Open source &mdash; MIT licence.
+        </p>
+        <p class="muted">
+            <a href="https://github.com/jmcleod/ironhand/blob/master/README.md" target="_blank" rel="noreferrer">Docs</a>
+            <span class="sep">&bull;</span>
+            <a href="https://github.com/jmcleod/ironhand" target="_blank" rel="noreferrer">GitHub</a>
+            <span class="sep">&bull;</span>
+            <a href="https://github.com/jmcleod/ironhand/issues" target="_blank" rel="noreferrer">Issues</a>
+        </p>
+    </div>
+</footer>
+
+<script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+</script>
+</body>
+</html>
