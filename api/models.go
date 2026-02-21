@@ -25,9 +25,10 @@ type RegisterResponse struct {
 
 // LoginRequest is the JSON body for POST /auth/login.
 type LoginRequest struct {
-	Passphrase string `json:"passphrase"`
-	SecretKey  string `json:"secret_key"`
-	TOTPCode   string `json:"totp_code,omitempty"`
+	Passphrase   string `json:"passphrase"`
+	SecretKey    string `json:"secret_key"`
+	TOTPCode     string `json:"totp_code,omitempty"`
+	RecoveryCode string `json:"recovery_code,omitempty"`
 }
 
 // SetupTwoFactorResponse is returned from POST /auth/2fa/setup.
@@ -286,4 +287,43 @@ type SignCSRResponse struct {
 	ItemID       string `json:"item_id"`
 	SerialNumber string `json:"serial_number"`
 	Certificate  string `json:"certificate"`
+}
+
+// ---------------------------------------------------------------------------
+// Passkey Management
+// ---------------------------------------------------------------------------
+
+// PasskeySummary is one entry in the list-passkeys response.
+type PasskeySummary struct {
+	CredentialID string `json:"credential_id"`
+	Label        string `json:"label"`
+	CreatedAt    string `json:"created_at"`
+	LastUsedAt   string `json:"last_used_at,omitempty"`
+	BackupState  bool   `json:"backup_state"`
+}
+
+// ListPasskeysResponse is returned from GET /auth/webauthn/credentials.
+type ListPasskeysResponse struct {
+	Passkeys []PasskeySummary `json:"passkeys"`
+}
+
+// LabelPasskeyRequest is the JSON body for PUT /auth/webauthn/credentials/{credentialID}.
+type LabelPasskeyRequest struct {
+	Label string `json:"label"`
+}
+
+// ---------------------------------------------------------------------------
+// Recovery Codes
+// ---------------------------------------------------------------------------
+
+// RecoveryCodesStatusResponse is returned from GET /auth/recovery-codes.
+type RecoveryCodesStatusResponse struct {
+	HasCodes    bool `json:"has_codes"`
+	CodesTotal  int  `json:"codes_total"`
+	CodesUnused int  `json:"codes_unused"`
+}
+
+// GenerateRecoveryCodesResponse is returned from POST /auth/recovery-codes.
+type GenerateRecoveryCodesResponse struct {
+	Codes []string `json:"codes"`
 }

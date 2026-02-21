@@ -120,7 +120,7 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	defer func() { req.Passphrase = ""; req.SecretKey = "" }() // best-effort: remove string references
+	defer func() { req.Passphrase = ""; req.SecretKey = ""; req.RecoveryCode = "" }() // best-effort: remove string references
 	if req.Passphrase == "" {
 		writeError(w, http.StatusBadRequest, "passphrase is required")
 		return
@@ -174,13 +174,28 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enforce passkey login when WebAuthn credentials are registered.
-	// Password-based login is not permitted once a passkey has been set up.
+	// Password-based login is only permitted with a valid recovery code.
+	var recoveryCodeUsedIdx = -1
 	if len(record.WebAuthnCredentials) > 0 {
-		recordLoginFailure()
-		a.audit.logFailure(AuditLoginFailure, r, "passkey required, password login rejected",
-			slog.String("account_id", record.SecretKeyID))
-		writeError(w, http.StatusForbidden, "passkey_required")
-		return
+		if req.RecoveryCode == "" {
+			// No recovery code provided — passkey is required.
+			a.audit.logFailure(AuditLoginFailure, r, "passkey required, password login rejected",
+				slog.String("account_id", record.SecretKeyID))
+			writeError(w, http.StatusForbidden, "passkey_required")
+			return
+		}
+		idx, valid := validateRecoveryCode(record.RecoveryCodes, req.RecoveryCode)
+		if !valid {
+			recordLoginFailure()
+			a.audit.logFailure(AuditLoginFailure, r, "invalid recovery code",
+				slog.String("account_id", record.SecretKeyID))
+			writeError(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
+		// Mark the code as used BEFORE passphrase validation to prevent
+		// brute-force reuse if the passphrase check fails.
+		record.RecoveryCodes[idx].Used = true
+		recoveryCodeUsedIdx = idx
 	}
 
 	if record.TOTPEnabled && !verifyTOTPCode(record.TOTPSecret, req.TOTPCode, time.Now()) {
@@ -227,6 +242,19 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	// Login succeeded — clear rate-limit state.
 	a.rateLimiter.recordSuccess(accountID)
 	a.ipLimiter.recordSuccess(clientIP)
+
+	// Persist consumed recovery code (if one was used).
+	if recoveryCodeUsedIdx >= 0 {
+		if err := a.updateAccountRecord(req.SecretKey, *record); err != nil {
+			// Non-fatal: the login session will proceed but the code
+			// won't be marked used on disk. Log and continue.
+			slog.Warn("failed to persist consumed recovery code",
+				slog.String("account_id", record.SecretKeyID),
+				slog.String("error", err.Error()))
+		}
+		a.audit.logEvent(AuditRecoveryCodeUsed, r, record.SecretKeyID,
+			slog.Int("codes_remaining", countUnusedRecoveryCodes(record.RecoveryCodes)))
+	}
 
 	expiresAt := time.Now().Add(sessionDuration)
 	a.sessions.Put(token, AuthSession{
@@ -363,6 +391,62 @@ func (a *API) sessionFromRequest(r *http.Request) (string, AuthSession, bool) {
 		return "", AuthSession{}, false
 	}
 	return token, session, true
+}
+
+// RecoveryCodesStatus handles GET /auth/recovery-codes.
+// Returns whether recovery codes exist and how many are unused.
+func (a *API) RecoveryCodesStatus(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sk := creds.SecretKey().String()
+	defer func() { sk = "" }()
+	record, err := a.loadAccountRecord(sk)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+	unused := countUnusedRecoveryCodes(record.RecoveryCodes)
+	writeJSON(w, http.StatusOK, RecoveryCodesStatusResponse{
+		HasCodes:    len(record.RecoveryCodes) > 0,
+		CodesTotal:  len(record.RecoveryCodes),
+		CodesUnused: unused,
+	})
+}
+
+// GenerateRecoveryCodes handles POST /auth/recovery-codes.
+// Generates a new batch of recovery codes, replacing any existing ones.
+// Returns the plaintext codes once — they are never stored.
+func (a *API) GenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sk := creds.SecretKey().String()
+	defer func() { sk = "" }()
+	record, err := a.loadAccountRecord(sk)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+
+	plaintext, hashed, err := generateRecoveryCodes(recoveryCodeCount)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate recovery codes")
+		return
+	}
+
+	record.RecoveryCodes = hashed
+	if err := a.updateAccountRecord(sk, *record); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save recovery codes")
+		return
+	}
+
+	a.audit.logEvent(AuditRecoveryCodesGenerated, r, record.SecretKeyID)
+	writeJSON(w, http.StatusOK, GenerateRecoveryCodesResponse{Codes: plaintext})
 }
 
 // Logout handles POST /auth/logout.

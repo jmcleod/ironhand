@@ -7,7 +7,11 @@ import (
 	"net/http"
 	"time"
 
+	"bytes"
+	"fmt"
+
 	"github.com/awnumar/memguard"
+	"github.com/go-chi/chi/v5"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
@@ -162,6 +166,17 @@ func (a *API) FinishWebAuthnRegistration(w http.ResponseWriter, r *http.Request)
 
 	// Store the new credential on the account.
 	record.WebAuthnCredentials = append(record.WebAuthnCredentials, *credential)
+
+	// Populate user-facing metadata for the new credential.
+	credIDStr := protocol.URLEncodedBase64(credential.ID).String()
+	if record.WebAuthnCredentialMeta == nil {
+		record.WebAuthnCredentialMeta = make(map[string]WebAuthnCredentialMeta)
+	}
+	record.WebAuthnCredentialMeta[credIDStr] = WebAuthnCredentialMeta{
+		Label:     fmt.Sprintf("Passkey %d", len(record.WebAuthnCredentials)),
+		CreatedAt: time.Now().UTC(),
+	}
+
 	secretKey := creds.SecretKey().String()
 	if err := a.updateAccountRecord(secretKey, *record); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save webauthn credential")
@@ -177,7 +192,7 @@ func (a *API) FinishWebAuthnRegistration(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, struct {
 		CredentialID string `json:"credential_id"`
 	}{
-		CredentialID: protocol.URLEncodedBase64(credential.ID).String(),
+		CredentialID: credIDStr,
 	})
 }
 
@@ -350,7 +365,7 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	user := newWebAuthnUser(record)
 
-	_, err = a.webauthn.ValidateLogin(user, state.SessionData, parsedResponse)
+	validatedCredential, err := a.webauthn.ValidateLogin(user, state.SessionData, parsedResponse)
 	if err != nil {
 		recordLoginFailure()
 		a.audit.logFailure(AuditLoginFailure, r, "webauthn validation failed",
@@ -358,6 +373,20 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()))
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
+	}
+
+	// Update LastUsedAt metadata for the credential that was just used.
+	if validatedCredential != nil {
+		usedCredIDStr := protocol.URLEncodedBase64(validatedCredential.ID).String()
+		if record.WebAuthnCredentialMeta == nil {
+			record.WebAuthnCredentialMeta = make(map[string]WebAuthnCredentialMeta)
+		}
+		meta := record.WebAuthnCredentialMeta[usedCredIDStr]
+		meta.LastUsedAt = time.Now().UTC()
+		record.WebAuthnCredentialMeta[usedCredIDStr] = meta
+		// Persist the updated metadata. Errors here are non-fatal — the
+		// login should still succeed.
+		_ = a.updateAccountRecord(secretKey, *record)
 	}
 
 	// WebAuthn verified — now decrypt the credentials blob to create a
@@ -420,6 +449,192 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 
 	a.audit.logEvent(AuditWebAuthnLoginSuccess, r, record.SecretKeyID)
 	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// maxPasskeyLabelLen is the maximum length of a user-assigned passkey label.
+const maxPasskeyLabelLen = 64
+
+// ListPasskeys handles GET /auth/webauthn/credentials.
+// Returns the list of registered passkeys with their metadata.
+func (a *API) ListPasskeys(w http.ResponseWriter, r *http.Request) {
+	if a.webauthn == nil {
+		writeError(w, http.StatusNotFound, "webauthn not configured")
+		return
+	}
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	record, err := a.loadAccountRecord(creds.SecretKey().String())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+
+	passkeys := make([]PasskeySummary, 0, len(record.WebAuthnCredentials))
+	for _, cred := range record.WebAuthnCredentials {
+		credIDStr := protocol.URLEncodedBase64(cred.ID).String()
+		meta := record.WebAuthnCredentialMeta[credIDStr] // zero value if absent
+
+		summary := PasskeySummary{
+			CredentialID: credIDStr,
+			Label:        meta.Label,
+			BackupState:  cred.Flags.BackupState,
+		}
+		if !meta.CreatedAt.IsZero() {
+			summary.CreatedAt = meta.CreatedAt.Format(time.RFC3339)
+		}
+		if !meta.LastUsedAt.IsZero() {
+			summary.LastUsedAt = meta.LastUsedAt.Format(time.RFC3339)
+		}
+		passkeys = append(passkeys, summary)
+	}
+
+	writeJSON(w, http.StatusOK, ListPasskeysResponse{Passkeys: passkeys})
+}
+
+// LabelPasskey handles PUT /auth/webauthn/credentials/{credentialID}.
+// Updates the user-visible label for a registered passkey.
+func (a *API) LabelPasskey(w http.ResponseWriter, r *http.Request) {
+	if a.webauthn == nil {
+		writeError(w, http.StatusNotFound, "webauthn not configured")
+		return
+	}
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	credentialID := chi.URLParam(r, "credentialID")
+	if credentialID == "" {
+		writeError(w, http.StatusBadRequest, "credentialID is required")
+		return
+	}
+
+	req, ok := decodeJSON[LabelPasskeyRequest](w, r, maxSmallBodySize)
+	if !ok {
+		return
+	}
+	if len(req.Label) > maxPasskeyLabelLen {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("label must be at most %d characters", maxPasskeyLabelLen))
+		return
+	}
+
+	secretKey := creds.SecretKey().String()
+	defer func() { secretKey = "" }()
+	record, err := a.loadAccountRecord(secretKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+
+	// Verify the credential exists.
+	found := false
+	for _, cred := range record.WebAuthnCredentials {
+		if protocol.URLEncodedBase64(cred.ID).String() == credentialID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "credential not found")
+		return
+	}
+
+	if record.WebAuthnCredentialMeta == nil {
+		record.WebAuthnCredentialMeta = make(map[string]WebAuthnCredentialMeta)
+	}
+	meta := record.WebAuthnCredentialMeta[credentialID]
+	meta.Label = req.Label
+	record.WebAuthnCredentialMeta[credentialID] = meta
+
+	if err := a.updateAccountRecord(secretKey, *record); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update passkey label")
+		return
+	}
+
+	a.audit.logEvent(AuditWebAuthnLabeled, r, record.SecretKeyID,
+		slog.String("credential_id", credentialID))
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// DeletePasskey handles DELETE /auth/webauthn/credentials/{credentialID}.
+// Removes a registered passkey. Rejects deletion of the last passkey when no
+// unused recovery codes exist to prevent the user from being locked out.
+func (a *API) DeletePasskey(w http.ResponseWriter, r *http.Request) {
+	if a.webauthn == nil {
+		writeError(w, http.StatusNotFound, "webauthn not configured")
+		return
+	}
+	creds := credentialsFromContext(r.Context())
+	if creds == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	credentialID := chi.URLParam(r, "credentialID")
+	if credentialID == "" {
+		writeError(w, http.StatusBadRequest, "credentialID is required")
+		return
+	}
+
+	secretKey := creds.SecretKey().String()
+	defer func() { secretKey = "" }()
+	record, err := a.loadAccountRecord(secretKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load account")
+		return
+	}
+
+	// Find and remove the credential.
+	idx := -1
+	for i, cred := range record.WebAuthnCredentials {
+		if protocol.URLEncodedBase64(cred.ID).String() == credentialID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		writeError(w, http.StatusNotFound, "credential not found")
+		return
+	}
+
+	// Safety check: prevent deletion of the last passkey without recovery codes.
+	if len(record.WebAuthnCredentials) == 1 && countUnusedRecoveryCodes(record.RecoveryCodes) == 0 {
+		writeError(w, http.StatusConflict, "cannot delete last passkey without recovery codes; generate recovery codes first")
+		return
+	}
+
+	// Remove from the credential slice.
+	record.WebAuthnCredentials = append(
+		record.WebAuthnCredentials[:idx],
+		record.WebAuthnCredentials[idx+1:]...,
+	)
+	// Remove metadata.
+	delete(record.WebAuthnCredentialMeta, credentialID)
+
+	if err := a.updateAccountRecord(secretKey, *record); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete passkey")
+		return
+	}
+
+	a.audit.logEvent(AuditWebAuthnDeleted, r, record.SecretKeyID,
+		slog.String("credential_id", credentialID))
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// credentialIDForLogin finds the base64url credential ID string for the
+// credential matching the given raw ID bytes. Returns "" if not found.
+func credentialIDForLogin(creds []webauthn.Credential, rawID []byte) string {
+	for _, c := range creds {
+		if bytes.Equal(c.ID, rawID) {
+			return protocol.URLEncodedBase64(c.ID).String()
+		}
+	}
+	return ""
 }
 
 // webauthnCeremonyState holds state for an in-progress WebAuthn login ceremony.

@@ -95,7 +95,12 @@ export async function register(passphrase: string): Promise<{ secret_key: string
   return resp.json();
 }
 
-export async function login(passphrase: string, secretKey: string, totpCode?: string): Promise<void> {
+export async function login(
+  passphrase: string,
+  secretKey: string,
+  totpCode?: string,
+  recoveryCode?: string,
+): Promise<void> {
   await request('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -103,6 +108,7 @@ export async function login(passphrase: string, secretKey: string, totpCode?: st
       passphrase,
       secret_key: secretKey,
       totp_code: totpCode ?? '',
+      recovery_code: recoveryCode ?? '',
     }),
   });
 }
@@ -495,4 +501,56 @@ export async function finishWebAuthnLogin(credential: unknown): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(credential),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Passkey Management
+// ---------------------------------------------------------------------------
+
+export interface PasskeySummary {
+  credential_id: string;
+  label: string;
+  created_at: string;
+  last_used_at?: string;
+  backup_state: boolean;
+}
+
+export async function listPasskeys(): Promise<PasskeySummary[]> {
+  const resp = await request('/auth/webauthn/credentials');
+  const data = (await resp.json()) as { passkeys: PasskeySummary[] };
+  return data.passkeys ?? [];
+}
+
+export async function labelPasskey(credentialID: string, label: string): Promise<void> {
+  await request(`/auth/webauthn/credentials/${encodeURIComponent(credentialID)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+}
+
+export async function deletePasskey(credentialID: string): Promise<void> {
+  await request(`/auth/webauthn/credentials/${encodeURIComponent(credentialID)}`, {
+    method: 'DELETE',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Recovery Codes
+// ---------------------------------------------------------------------------
+
+export interface RecoveryCodesStatus {
+  has_codes: boolean;
+  codes_total: number;
+  codes_unused: number;
+}
+
+export async function recoveryCodesStatus(): Promise<RecoveryCodesStatus> {
+  const resp = await request('/auth/recovery-codes');
+  return (await resp.json()) as RecoveryCodesStatus;
+}
+
+export async function generateRecoveryCodes(): Promise<{ codes: string[] }> {
+  const resp = await request('/auth/recovery-codes', { method: 'POST' });
+  return (await resp.json()) as { codes: string[] };
 }

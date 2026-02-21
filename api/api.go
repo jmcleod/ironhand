@@ -258,6 +258,13 @@ func (a *API) Router() chi.Router {
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/webauthn/register/finish", a.FinishWebAuthnRegistration)
 	r.Post("/auth/webauthn/login/begin", a.BeginWebAuthnLogin)
 	r.Post("/auth/webauthn/login/finish", a.FinishWebAuthnLogin)
+	r.With(a.AuthMiddleware).Get("/auth/webauthn/credentials", a.ListPasskeys)
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Put("/auth/webauthn/credentials/{credentialID}", a.LabelPasskey)
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Delete("/auth/webauthn/credentials/{credentialID}", a.DeletePasskey)
+
+	// Recovery code routes.
+	r.With(a.AuthMiddleware).Get("/auth/recovery-codes", a.RecoveryCodesStatus)
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/auth/recovery-codes", a.GenerateRecoveryCodes)
 
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/vaults", a.CreateVault)
 	r.With(a.AuthMiddleware).Get("/vaults", a.ListVaults)

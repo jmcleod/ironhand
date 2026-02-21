@@ -105,6 +105,8 @@ var serverCmd = &cobra.Command{
 		}
 		defer closeFn()
 
+		printBanner()
+
 		// Configure WebAuthn/passkey support.
 		rpOrigin := webauthnRPOrigin
 		if rpOrigin == "" {
@@ -242,7 +244,6 @@ var serverCmd = &cobra.Command{
 			done <- nil
 		}()
 
-		printBanner()
 		fmt.Printf("Starting server on port %d (storage: %s)...\n", port, storageBackend)
 
 		quit := make(chan os.Signal, 1)

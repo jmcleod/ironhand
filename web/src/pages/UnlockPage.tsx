@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useVault } from '@/contexts/VaultContext';
-import { Fingerprint, Shield } from 'lucide-react';
+import { Fingerprint, KeyRound, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -23,6 +23,8 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
   const [secretKey, setSecretKey] = useState(() => sessionStorage.getItem(SAVED_SECRET_KEY_KEY) ?? '');
   const [passphrase, setPassphrase] = useState('');
   const [totpCode, setTotpCode] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [showRecovery, setShowRecovery] = useState(false);
   const [rememberKey, setRememberKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
@@ -44,7 +46,12 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
   const handleUnlock = async () => {
     setLoading(true);
     try {
-      const success = await unlock(secretKey.trim(), passphrase, totpCode);
+      const success = await unlock(
+        secretKey.trim(),
+        passphrase,
+        totpCode,
+        showRecovery ? recoveryCode.trim() : undefined,
+      );
       if (!success) {
         toast({
           title: 'Login Failed',
@@ -57,9 +64,10 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
     } catch (err) {
       const msg = (err as { message?: string }).message;
       if (msg === 'passkey_required') {
+        setShowRecovery(true);
         toast({
           title: 'Passkey Required',
-          description: 'This account has a passkey enabled. Please use "Sign in with Passkey" below.',
+          description: 'Use a passkey or enter a recovery code to sign in.',
           variant: 'destructive',
         });
         return;
@@ -122,6 +130,27 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
               inputMode="numeric"
               className="bg-muted border-border font-mono"
             />
+
+            {showRecovery && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-yellow-500" />
+                  <span className="text-sm font-medium text-yellow-600 dark:text-yellow-400">
+                    Recovery Code
+                  </span>
+                </div>
+                <Input
+                  value={recoveryCode}
+                  onChange={e => setRecoveryCode(e.target.value)}
+                  placeholder="xxxx-xxxx-xxxx"
+                  className="bg-muted border-border font-mono tracking-wider"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Enter a recovery code to sign in without a passkey. Each code can only be used once.
+                </p>
+              </div>
+            )}
+
             <div>
               <div className="flex items-center gap-2">
                 <Checkbox id="remember-key" checked={rememberKey} onCheckedChange={v => setRememberKey(v === true)} />
@@ -136,7 +165,7 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
               )}
             </div>
             <Button className="w-full" onClick={handleUnlock} disabled={anyLoading || !secretKey || !passphrase}>
-              {loading ? 'Logging in...' : 'Login'}
+              {loading ? 'Logging in...' : showRecovery ? 'Login with Recovery Code' : 'Login'}
             </Button>
 
             <div className="relative">
@@ -157,6 +186,16 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
               <Fingerprint className="h-4 w-4 mr-2" />
               {passkeyLoading ? 'Verifying passkey...' : 'Sign in with Passkey'}
             </Button>
+
+            {!showRecovery && (
+              <button
+                type="button"
+                className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setShowRecovery(true)}
+              >
+                Lost your passkey? Use a recovery code
+              </button>
+            )}
 
             <Button variant="ghost" className="w-full" onClick={onSwitchToRegister}>
               Need an account? Register

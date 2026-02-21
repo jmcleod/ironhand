@@ -24,13 +24,32 @@ const (
 	vaultIndexAADPrefix  = "vault-index:"
 )
 
+// WebAuthnCredentialMeta holds user-facing metadata for a WebAuthn credential.
+// It is stored separately from the webauthn.Credential struct (which comes from
+// the third-party go-webauthn library) and keyed by the base64url credential ID.
+type WebAuthnCredentialMeta struct {
+	Label      string    `json:"label"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+}
+
+// HashedRecoveryCode is a single-use break-glass recovery code stored as its
+// SHA-256 hash. The plaintext is shown to the user once at generation time and
+// never persisted.
+type HashedRecoveryCode struct {
+	Hash string `json:"hash"` // hex(SHA-256(code))
+	Used bool   `json:"used"`
+}
+
 type accountRecord struct {
-	SecretKeyID         string                `json:"secret_key_id"`
-	CredentialsBlob     string                `json:"credentials_blob"`
-	CreatedAt           time.Time             `json:"created_at"`
-	TOTPEnabled         bool                  `json:"totp_enabled,omitempty"`
-	TOTPSecret          string                `json:"totp_secret,omitempty"`
-	WebAuthnCredentials []webauthn.Credential `json:"webauthn_credentials,omitempty"`
+	SecretKeyID            string                            `json:"secret_key_id"`
+	CredentialsBlob        string                            `json:"credentials_blob"`
+	CreatedAt              time.Time                         `json:"created_at"`
+	TOTPEnabled            bool                              `json:"totp_enabled,omitempty"`
+	TOTPSecret             string                            `json:"totp_secret,omitempty"`
+	WebAuthnCredentials    []webauthn.Credential             `json:"webauthn_credentials,omitempty"`
+	WebAuthnCredentialMeta map[string]WebAuthnCredentialMeta `json:"webauthn_credential_meta,omitempty"`
+	RecoveryCodes          []HashedRecoveryCode              `json:"recovery_codes,omitempty"`
 }
 
 func (a *API) saveAccountRecord(secretKey string, record accountRecord) error {
