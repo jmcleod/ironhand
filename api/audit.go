@@ -41,6 +41,10 @@ const (
 	AuditWebAuthnLabeled        AuditEvent = "webauthn_labeled"
 	AuditRecoveryCodesGenerated AuditEvent = "recovery_codes_generated"
 	AuditRecoveryCodeUsed       AuditEvent = "recovery_code_used"
+	AuditMemberRoleChanged      AuditEvent = "member_role_changed"
+	AuditInviteCreated          AuditEvent = "invite_created"
+	AuditInviteAccepted         AuditEvent = "invite_accepted"
+	AuditInviteCanceled         AuditEvent = "invite_canceled"
 )
 
 // auditLogger wraps slog.Logger for structured security audit logging.

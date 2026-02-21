@@ -7,6 +7,7 @@ import (
 
 	"github.com/awnumar/memguard"
 	"github.com/jmcleod/ironhand/crypto"
+	icrypto "github.com/jmcleod/ironhand/internal/crypto"
 	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/internal/uuid"
 	"golang.org/x/crypto/curve25519"
@@ -416,4 +417,104 @@ func ImportCredentialsBytes(data []byte, passphrase []byte) (*Credentials, error
 		saltPass:   util.CopyBytes(lc.SaltPass),
 		saltSecret: util.CopyBytes(lc.SaltSecret),
 	}, nil
+}
+
+// CloneForMember creates new credentials that share the same MUK and KDF
+// profile as the source but with a new member ID and X25519 keypair. This is
+// used in the invite flow where a vault owner's credentials are cloned for a
+// new member who needs the same MUK (and thus record key) to open the vault.
+func CloneForMember(src *Credentials) (*Credentials, error) {
+	if src == nil || src.destroyed {
+		return nil, fmt.Errorf("source credentials are nil or destroyed")
+	}
+
+	mukBuf, err := src.muk.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening source MUK enclave: %w", err)
+	}
+	defer mukBuf.Destroy()
+
+	kp, err := crypto.GenerateX25519Keypair()
+	if err != nil {
+		return nil, fmt.Errorf("generating keypair: %w", err)
+	}
+
+	return &Credentials{
+		memberID:   uuid.New(),
+		muk:        memguard.NewEnclave(util.CopyBytes(mukBuf.Bytes())),
+		keypair:    kp,
+		secretKey:  src.secretKey,
+		kdfParams:  src.kdfParams,
+		saltPass:   util.CopyBytes(src.saltPass),
+		saltSecret: util.CopyBytes(src.saltSecret),
+	}, nil
+}
+
+// SerializeCredentials marshals credentials to a JSON byte slice for secure
+// storage. The output contains sensitive key material (MUK, private key,
+// secret key) and MUST be encrypted before persistence. The caller should
+// wipe the returned bytes when done.
+func SerializeCredentials(creds *Credentials) ([]byte, error) {
+	if creds == nil || creds.destroyed {
+		return nil, fmt.Errorf("credentials are nil or destroyed")
+	}
+
+	mukBuf, err := creds.muk.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening MUK enclave: %w", err)
+	}
+	defer mukBuf.Destroy()
+
+	lc := lockedCredentials{
+		MemberID:   creds.memberID,
+		SecretKey:  creds.secretKey.String(),
+		PrivateKey: creds.keypair.Private,
+		MUK:        util.CopyBytes(mukBuf.Bytes()),
+		KDFParams:  creds.kdfParams,
+		SaltPass:   creds.saltPass,
+		SaltSecret: creds.saltSecret,
+	}
+	return json.Marshal(lc)
+}
+
+// DeserializeCredentials reconstructs credentials from a JSON byte slice
+// previously created by SerializeCredentials.
+func DeserializeCredentials(data []byte) (*Credentials, error) {
+	var lc lockedCredentials
+	if err := json.Unmarshal(data, &lc); err != nil {
+		return nil, fmt.Errorf("unmarshaling credentials: %w", err)
+	}
+
+	sk, err := crypto.ParseSecretKey(lc.SecretKey)
+	if err != nil {
+		return nil, fmt.Errorf("parsing secret key: %w", err)
+	}
+
+	var pub [32]byte
+	curve25519.ScalarBaseMult(&pub, &lc.PrivateKey)
+
+	return &Credentials{
+		memberID:   lc.MemberID,
+		muk:        memguard.NewEnclave(lc.MUK),
+		keypair:    crypto.KeyPair{Private: lc.PrivateKey, Public: pub},
+		secretKey:  sk,
+		kdfParams:  lc.KDFParams,
+		saltPass:   util.CopyBytes(lc.SaltPass),
+		saltSecret: util.CopyBytes(lc.SaltSecret),
+	}, nil
+}
+
+// DeriveKey derives a key from the credentials' MUK using the vault's
+// record key derivation with the given label. This is useful for encrypting
+// vault-specific credential blobs in the account record.
+func (c *Credentials) DeriveKey(label string) ([]byte, error) {
+	if c == nil || c.destroyed {
+		return nil, fmt.Errorf("credentials are nil or destroyed")
+	}
+	mukBuf, err := c.muk.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening MUK enclave: %w", err)
+	}
+	defer mukBuf.Destroy()
+	return icrypto.DeriveRecordKey(mukBuf.Bytes(), label)
 }

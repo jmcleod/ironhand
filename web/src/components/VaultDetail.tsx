@@ -345,7 +345,7 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
       </main>
 
       <AddItemDialog open={showAddItem} onOpenChange={setShowAddItem} vaultId={vault.id} />
-      <ShareDialog open={showShare} onOpenChange={setShowShare} vaultId={vault.id} sharedWith={vault.sharedWith} />
+      <ShareDialog open={showShare} onOpenChange={setShowShare} vaultId={vault.id} members={vault.members} />
       <AuditLogDialog open={showAudit} onOpenChange={setShowAudit} vaultId={vault.id} />
       <Dialog open={itemViewOpen} onOpenChange={(open) => { setItemViewOpen(open); if (!open) setSelectedItem(null); }}>
         <DialogContent className="bg-card border-border max-h-[85vh] overflow-y-auto">

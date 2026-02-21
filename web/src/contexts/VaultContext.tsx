@@ -1,7 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 import {
-  addMember as apiAddMember,
   createVault as apiCreateVault,
   deleteItem as apiDeleteItem,
   deleteVault as apiDeleteVault,
@@ -28,8 +27,20 @@ import {
   deletePasskey as apiDeletePasskey,
   recoveryCodesStatus as apiRecoveryCodesStatus,
   generateRecoveryCodes as apiGenerateRecoveryCodes,
+  listMembers as apiListMembers,
+  changeMemberRole as apiChangeMemberRole,
+  createInvite as apiCreateInvite,
+  listInvites as apiListInvites,
+  cancelInvite as apiCancelInvite,
+  getInviteInfo as apiGetInviteInfo,
+  acceptInvite as apiAcceptInvite,
   type ApiError,
   type PasskeySummary,
+  type MemberSummary,
+  type InviteSummary,
+  type InviteInfo,
+  type CreateInviteResult,
+  type AcceptInviteResult,
 } from '@/lib/api';
 import { generateId } from '@/lib/crypto';
 import { FIELD_CREATED, FIELD_NAME, FIELD_TYPE, FIELD_UPDATED, ItemType, Vault, VaultItem } from '@/types/vault';
@@ -64,8 +75,14 @@ interface VaultContextType {
   addItem: (vaultId: string, name: string, type: ItemType, fields: Record<string, string>) => Promise<void>;
   removeItem: (vaultId: string, itemId: string) => Promise<void>;
   updateItem: (vaultId: string, itemId: string, fields: Record<string, string>, removeKeys?: string[]) => Promise<void>;
-  shareVault: (vaultId: string, memberID: string, pubKey: string, role: 'owner' | 'writer' | 'reader') => Promise<void>;
   revokeMember: (vaultId: string, memberID: string) => Promise<void>;
+  listMembers: (vaultId: string) => Promise<MemberSummary[]>;
+  changeMemberRole: (vaultId: string, memberID: string, role: string) => Promise<void>;
+  createInvite: (vaultId: string, role: string) => Promise<CreateInviteResult>;
+  listInvites: (vaultId: string) => Promise<InviteSummary[]>;
+  cancelInvite: (vaultId: string, token: string) => Promise<void>;
+  getInviteInfo: (token: string) => Promise<InviteInfo>;
+  acceptInvite: (token: string, passphrase: string) => Promise<AcceptInviteResult>;
 }
 
 const VaultContext = createContext<VaultContextType | null>(null);
@@ -83,9 +100,10 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     const summaries = await apiListVaults();
     const nextVaults: Vault[] = [];
     for (const summary of summaries) {
-      const [listed, caInfo] = await Promise.all([
+      const [listed, caInfo, members] = await Promise.all([
         apiListItems(summary.vault_id).catch(() => []),
         apiGetCAInfo(summary.vault_id).catch(() => null),
+        apiListMembers(summary.vault_id).catch(() => []),
       ]);
       const items: VaultItem[] = [];
       for (const item of listed) {
@@ -102,7 +120,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         name: summary.name || summary.vault_id,
         description: summary.description || '',
         items,
-        sharedWith: [],
+        members,
         createdAt: '',
         updatedAt: new Date().toISOString(),
         epoch: summary.epoch,
@@ -307,10 +325,45 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     [refresh],
   );
 
-  const shareVault = useCallback(
-    async (vaultID: string, memberID: string, pubKey: string, role: 'owner' | 'writer' | 'reader') => {
-      await apiAddMember(vaultID, { memberID, pubKey, role });
+  const listMembers = useCallback(async (vaultID: string) => {
+    return apiListMembers(vaultID);
+  }, []);
+
+  const changeMemberRole = useCallback(
+    async (vaultID: string, memberID: string, role: string) => {
+      await apiChangeMemberRole(vaultID, memberID, role);
       await refresh();
+    },
+    [refresh],
+  );
+
+  const createInvite = useCallback(
+    async (vaultID: string, role: string) => {
+      return apiCreateInvite(vaultID, role);
+    },
+    [],
+  );
+
+  const listInvites = useCallback(async (vaultID: string) => {
+    return apiListInvites(vaultID);
+  }, []);
+
+  const cancelInvite = useCallback(
+    async (vaultID: string, token: string) => {
+      await apiCancelInvite(vaultID, token);
+    },
+    [],
+  );
+
+  const getInviteInfo = useCallback(async (token: string) => {
+    return apiGetInviteInfo(token);
+  }, []);
+
+  const acceptInvite = useCallback(
+    async (token: string, passphrase: string) => {
+      const result = await apiAcceptInvite(token, passphrase);
+      await refresh();
+      return result;
     },
     [refresh],
   );
@@ -366,8 +419,14 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         addItem,
         removeItem,
         updateItem,
-        shareVault,
         revokeMember,
+        listMembers,
+        changeMemberRole,
+        createInvite,
+        listInvites,
+        cancelInvite,
+        getInviteInfo,
+        acceptInvite,
       }}
     >
       {children}

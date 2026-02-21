@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { VaultProvider } from "@/contexts/VaultContext";
 import Index from "./pages/Index";
+import InviteAcceptPage from "./pages/InviteAcceptPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -20,6 +21,7 @@ const App = () => (
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Index />} />
+              <Route path="/invite/:token" element={<InviteAcceptPage />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </BrowserRouter>

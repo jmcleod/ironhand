@@ -327,3 +327,73 @@ type RecoveryCodesStatusResponse struct {
 type GenerateRecoveryCodesResponse struct {
 	Codes []string `json:"codes"`
 }
+
+// ---------------------------------------------------------------------------
+// Member Management
+// ---------------------------------------------------------------------------
+
+// MemberSummary is one entry in the list-members response.
+type MemberSummary struct {
+	MemberID   string `json:"member_id"`
+	Role       string `json:"role"`
+	Status     string `json:"status"`
+	AddedEpoch uint64 `json:"added_epoch"`
+}
+
+// ListMembersResponse is returned from GET /vaults/{vaultID}/members.
+type ListMembersResponse struct {
+	Members []MemberSummary `json:"members"`
+}
+
+// ChangeMemberRoleRequest is the JSON body for PUT /vaults/{vaultID}/members/{memberID}.
+type ChangeMemberRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// ---------------------------------------------------------------------------
+// Vault Invites
+// ---------------------------------------------------------------------------
+
+// CreateInviteRequest is the JSON body for POST /vaults/{vaultID}/invites.
+type CreateInviteRequest struct {
+	Role string `json:"role"`
+}
+
+// CreateInviteResponse is returned from POST /vaults/{vaultID}/invites.
+type CreateInviteResponse struct {
+	Token      string `json:"token"`
+	Passphrase string `json:"passphrase"`
+	ExpiresAt  string `json:"expires_at"`
+	InviteURL  string `json:"invite_url"`
+}
+
+// InviteSummary is one entry in the list-invites response.
+type InviteSummary struct {
+	Token     string `json:"token"`
+	Role      string `json:"role"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// ListInvitesResponse is returned from GET /vaults/{vaultID}/invites.
+type ListInvitesResponse struct {
+	Invites []InviteSummary `json:"invites"`
+}
+
+// InviteInfoResponse is returned from GET /invites/{token}.
+type InviteInfoResponse struct {
+	VaultName string `json:"vault_name"`
+	Role      string `json:"role"`
+	ExpiresAt string `json:"expires_at"`
+	CreatorID string `json:"creator_id"`
+}
+
+// AcceptInviteRequest is the JSON body for POST /invites/{token}/accept.
+type AcceptInviteRequest struct {
+	Passphrase string `json:"passphrase"`
+}
+
+// AcceptInviteResponse is returned from POST /invites/{token}/accept.
+type AcceptInviteResponse struct {
+	VaultID  string `json:"vault_id"`
+	MemberID string `json:"member_id"`
+}

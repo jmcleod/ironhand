@@ -23,10 +23,10 @@ export default function VaultCard({ vault, onClick }: VaultCardProps) {
               CA
             </div>
           )}
-          {vault.sharedWith.length > 0 && (
+          {vault.members.length > 1 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-1 rounded-full">
               <Share2 className="h-3 w-3" />
-              {vault.sharedWith.length}
+              {vault.members.length}
             </div>
           )}
         </div>

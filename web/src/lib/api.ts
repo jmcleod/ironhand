@@ -554,3 +554,102 @@ export async function generateRecoveryCodes(): Promise<{ codes: string[] }> {
   const resp = await request('/auth/recovery-codes', { method: 'POST' });
   return (await resp.json()) as { codes: string[] };
 }
+
+// ---------------------------------------------------------------------------
+// Member Management
+// ---------------------------------------------------------------------------
+
+export interface MemberSummary {
+  member_id: string;
+  role: string;
+  status: string;
+  added_epoch: number;
+}
+
+export async function listMembers(vaultID: string): Promise<MemberSummary[]> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/members`);
+  const data = (await resp.json()) as { members: MemberSummary[] };
+  return data.members ?? [];
+}
+
+export async function changeMemberRole(
+  vaultID: string,
+  memberID: string,
+  role: string,
+): Promise<void> {
+  await request(`/vaults/${encodeURIComponent(vaultID)}/members/${encodeURIComponent(memberID)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Vault Invites
+// ---------------------------------------------------------------------------
+
+export interface InviteSummary {
+  token: string;
+  role: string;
+  expires_at: string;
+}
+
+export interface InviteInfo {
+  vault_name: string;
+  role: string;
+  expires_at: string;
+  creator_id: string;
+}
+
+export interface CreateInviteResult {
+  token: string;
+  passphrase: string;
+  expires_at: string;
+  invite_url: string;
+}
+
+export interface AcceptInviteResult {
+  vault_id: string;
+  member_id: string;
+}
+
+export async function createInvite(
+  vaultID: string,
+  role: string,
+): Promise<CreateInviteResult> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/invites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+  return resp.json() as Promise<CreateInviteResult>;
+}
+
+export async function listInvites(vaultID: string): Promise<InviteSummary[]> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/invites`);
+  const data = (await resp.json()) as { invites: InviteSummary[] };
+  return data.invites ?? [];
+}
+
+export async function cancelInvite(vaultID: string, token: string): Promise<void> {
+  await request(`/vaults/${encodeURIComponent(vaultID)}/invites/${encodeURIComponent(token)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function getInviteInfo(token: string): Promise<InviteInfo> {
+  const resp = await request(`/invites/${encodeURIComponent(token)}`);
+  return (await resp.json()) as InviteInfo;
+}
+
+export async function acceptInvite(
+  token: string,
+  passphrase: string,
+): Promise<AcceptInviteResult> {
+  const resp = await request(`/invites/${encodeURIComponent(token)}/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passphrase }),
+  });
+  return resp.json() as Promise<AcceptInviteResult>;
+}

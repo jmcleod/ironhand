@@ -487,6 +487,74 @@ func (s *Session) RevokeMember(ctx context.Context, memberID string) error {
 	return s.rotateEpoch(ctx, state, nil, &memberID, recBuf.Bytes())
 }
 
+// ListMembers returns all members of the vault (active and revoked).
+// Requires at least read access.
+func (s *Session) ListMembers(ctx context.Context) ([]Member, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+
+	return loadMembers(s.vault.id, s.vault.repo, recBuf.Bytes(), s.epoch)
+}
+
+// ChangeMemberRole changes the role of an existing active member.
+// Only owners can change roles. Owners cannot change their own role.
+// This does NOT trigger an epoch rotation — roles are enforced server-side
+// at authorize() time and do not affect KEK wrapping.
+func (s *Session) ChangeMemberRole(ctx context.Context, memberID string, newRole MemberRole) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.checkClosed(); err != nil {
+		return err
+	}
+	if memberID == s.MemberID {
+		return fmt.Errorf("%w: cannot change own role", ErrUnauthorized)
+	}
+	if err := validateRole(newRole); err != nil {
+		return err
+	}
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+
+	if _, err := s.authorize(ctx, accessAdmin, recBuf.Bytes()); err != nil {
+		return err
+	}
+
+	member, err := loadMember(s.vault.id, s.vault.repo, recBuf.Bytes(), memberID, s.epoch)
+	if err != nil {
+		return fmt.Errorf("member %q not found", memberID)
+	}
+	if member.Status != StatusActive {
+		return fmt.Errorf("member %q is not active", memberID)
+	}
+
+	member.Role = newRole
+
+	env, err := sealMember(s.vault.id, recBuf.Bytes(), *member, s.epoch)
+	if err != nil {
+		return err
+	}
+	return s.vault.repo.Put(s.vault.id, recordTypeMember, memberID, env)
+}
+
 // RequireAdmin verifies the session member currently has owner/admin access.
 func (s *Session) RequireAdmin(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {

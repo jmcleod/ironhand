@@ -5,12 +5,19 @@ export interface VaultItem {
   fields: Record<string, string>;
 }
 
+export interface MemberInfo {
+  member_id: string;
+  role: string;
+  status: string;
+  added_epoch: number;
+}
+
 export interface Vault {
   id: string;
   name: string;
   description: string;
   items: VaultItem[];
-  sharedWith: string[];
+  members: MemberInfo[];
   createdAt: string;
   updatedAt: string;
   epoch: number;

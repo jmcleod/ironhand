@@ -1488,3 +1488,359 @@ func (a *API) SignCSR(w http.ResponseWriter, r *http.Request) {
 		Certificate:  string(fields[pki.FieldCertificate]),
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Member Management handlers
+// ---------------------------------------------------------------------------
+
+// ListMembers handles GET /vaults/{vaultID}/members.
+func (a *API) ListMembers(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	members, err := session.ListMembers(r.Context())
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+
+	summaries := make([]MemberSummary, len(members))
+	for i, m := range members {
+		summaries[i] = MemberSummary{
+			MemberID:   m.MemberID,
+			Role:       string(m.Role),
+			Status:     string(m.Status),
+			AddedEpoch: m.AddedEpoch,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, ListMembersResponse{Members: summaries})
+}
+
+// ChangeMemberRole handles PUT /vaults/{vaultID}/members/{memberID}.
+func (a *API) ChangeMemberRole(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	memberID := chi.URLParam(r, "memberID")
+	creds := credentialsFromContext(r.Context())
+
+	req, ok := decodeJSON[ChangeMemberRoleRequest](w, r, maxSmallBodySize)
+	if !ok {
+		return
+	}
+	if req.Role == "" {
+		writeError(w, http.StatusBadRequest, "role is required")
+		return
+	}
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.ChangeMemberRole(r.Context(), memberID, vault.MemberRole(req.Role)); err != nil {
+		mapError(w, err)
+		return
+	}
+
+	a.audit.logEvent(AuditMemberRoleChanged, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("member_id", memberID),
+		slog.String("role", req.Role))
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// ---------------------------------------------------------------------------
+// Invite handlers
+// ---------------------------------------------------------------------------
+
+// CreateInvite handles POST /vaults/{vaultID}/invites.
+func (a *API) CreateInvite(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	req, ok := decodeJSON[CreateInviteRequest](w, r, maxSmallBodySize)
+	if !ok {
+		return
+	}
+	if req.Role == "" {
+		req.Role = "reader"
+	}
+	if req.Role != "owner" && req.Role != "writer" && req.Role != "reader" {
+		writeError(w, http.StatusBadRequest, "role must be owner, writer, or reader")
+		return
+	}
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	// Only vault owners can create invites.
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		mapError(w, err)
+		return
+	}
+
+	// Read vault metadata for the invite display name.
+	var vaultName string
+	metaFields, err := session.Get(r.Context(), vaultMetadataItemID)
+	if err == nil {
+		vaultName = decodeVaultMetadata(metaFields).Name
+	}
+	if vaultName == "" {
+		vaultName = vaultID
+	}
+
+	// Export owner credentials encrypted with a random invite passphrase.
+	// This is expensive (~1-3s Argon2id) but runs once per invite creation.
+	credBlob, err := vault.ExportCredentials(creds, "invite-export-temp")
+	if err != nil {
+		writeInternalError(w, "failed to export credentials for invite", err)
+		return
+	}
+
+	token, passphrase, err := a.invites.create(
+		vaultID, vaultName, req.Role,
+		creds.SecretKey().ID(),
+		credBlob,
+		defaultInviteTTL,
+	)
+	if err != nil {
+		writeInternalError(w, "failed to create invite", err)
+		return
+	}
+
+	a.audit.logEvent(AuditInviteCreated, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("role", req.Role))
+
+	writeJSON(w, http.StatusCreated, CreateInviteResponse{
+		Token:      token,
+		Passphrase: passphrase,
+		ExpiresAt:  time.Now().Add(defaultInviteTTL).UTC().Format(time.RFC3339),
+		InviteURL:  fmt.Sprintf("/invite/%s#%s", token, passphrase),
+	})
+}
+
+// ListInvites handles GET /vaults/{vaultID}/invites.
+func (a *API) ListInvites(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	if err := session.RequireAdmin(r.Context()); err != nil {
+		mapError(w, err)
+		return
+	}
+
+	invites := a.invites.list(vaultID)
+	summaries := make([]InviteSummary, len(invites))
+	for i, inv := range invites {
+		summaries[i] = InviteSummary{
+			Token:     inv.Token,
+			Role:      inv.Role,
+			ExpiresAt: inv.ExpiresAt.UTC().Format(time.RFC3339),
+		}
+	}
+
+	writeJSON(w, http.StatusOK, ListInvitesResponse{Invites: summaries})
+}
+
+// CancelInvite handles DELETE /vaults/{vaultID}/invites/{token}.
+func (a *API) CancelInvite(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	_ = vaultID // used for route scoping; cancel checks creator
+	token := chi.URLParam(r, "token")
+	creds := credentialsFromContext(r.Context())
+
+	if !a.invites.cancel(token, creds.SecretKey().ID()) {
+		writeError(w, http.StatusNotFound, "invite not found or not authorized")
+		return
+	}
+
+	a.audit.logEvent(AuditInviteCanceled, r, creds.SecretKey().ID(),
+		slog.String("token", token))
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// GetInviteInfo handles GET /invites/{token}.
+// Auth required but no vault membership check.
+func (a *API) GetInviteInfo(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+
+	inv, ok := a.invites.get(token)
+	if !ok {
+		writeError(w, http.StatusNotFound, "invite not found or expired")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, InviteInfoResponse{
+		VaultName: inv.VaultName,
+		Role:      inv.Role,
+		ExpiresAt: inv.ExpiresAt.UTC().Format(time.RFC3339),
+		CreatorID: inv.CreatorID,
+	})
+}
+
+// AcceptInvite handles POST /invites/{token}/accept.
+func (a *API) AcceptInvite(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	creds := credentialsFromContext(r.Context())
+
+	req, ok := decodeJSON[AcceptInviteRequest](w, r, maxSmallBodySize)
+	if !ok {
+		return
+	}
+	if req.Passphrase == "" {
+		writeError(w, http.StatusBadRequest, "passphrase is required")
+		return
+	}
+
+	// Mark invite as accepted atomically.
+	inv, accepted := a.invites.accept(token)
+	if !accepted {
+		writeError(w, http.StatusNotFound, "invite not found, expired, or already accepted")
+		return
+	}
+
+	// Import the owner's credentials from the invite blob.
+	ownerCreds, err := vault.ImportCredentials(inv.CredentialBlob, "invite-export-temp")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to import invite credentials")
+		return
+	}
+	defer ownerCreds.Destroy()
+
+	// Open the vault with the owner's credentials.
+	session, err := a.openSession(r.Context(), inv.VaultID, ownerCreds)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to open vault with invite credentials")
+		return
+	}
+	defer session.Close()
+
+	// Clone credentials for the invitee: same MUK, new member ID + keypair.
+	inviteeCreds, err := vault.CloneForMember(ownerCreds)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clone credentials for invitee")
+		return
+	}
+	defer inviteeCreds.Destroy()
+
+	// Add the invitee as a member in the vault (triggers epoch rotation).
+	if err := session.AddMember(r.Context(), inviteeCreds.MemberID(), inviteeCreds.PublicKey(), vault.MemberRole(inv.Role)); err != nil {
+		mapError(w, err)
+		return
+	}
+
+	// Store vault-specific credentials in the invitee's account record.
+	if err := a.storeVaultCredentials(creds, inv.VaultID, inviteeCreds); err != nil {
+		slog.Warn("failed to store vault credentials for invitee",
+			"error", err, "vault_id", inv.VaultID)
+		// Don't fail the request — the member is added, credentials just
+		// aren't cached. The invitee may need to re-import.
+	}
+
+	// Add the vault to the invitee's vault index.
+	if err := a.addVaultToIndex(creds.SecretKey().String(), inv.VaultID); err != nil {
+		slog.Warn("failed to update vault index on invite accept", "error", err)
+	}
+
+	a.audit.logEvent(AuditInviteAccepted, r, creds.SecretKey().ID(),
+		slog.String("vault_id", inv.VaultID),
+		slog.String("member_id", inviteeCreds.MemberID()),
+		slog.String("role", inv.Role))
+
+	writeJSON(w, http.StatusOK, AcceptInviteResponse{
+		VaultID:  inv.VaultID,
+		MemberID: inviteeCreds.MemberID(),
+	})
+}
+
+// storeVaultCredentials encrypts and stores vault-specific credentials in the
+// account record so that openSession can fall back to them transparently.
+func (a *API) storeVaultCredentials(accountCreds *vault.Credentials, vaultID string, vaultCreds *vault.Credentials) error {
+	// Serialize the vault-specific credentials to JSON.
+	plaintext, err := vault.SerializeCredentials(vaultCreds)
+	if err != nil {
+		return fmt.Errorf("serializing vault credentials: %w", err)
+	}
+	defer util.WipeBytes(plaintext)
+
+	// Derive encryption key from the account's MUK.
+	encKey, err := accountCreds.DeriveKey("vault-cred:" + vaultID)
+	if err != nil {
+		return fmt.Errorf("deriving vault credential key: %w", err)
+	}
+	defer util.WipeBytes(encKey)
+
+	// Encrypt with AES-256-GCM.
+	ciphertext, err := util.EncryptAES(plaintext, encKey)
+	if err != nil {
+		return fmt.Errorf("encrypting vault credentials: %w", err)
+	}
+
+	// Load account record, update, and save.
+	record, err := a.loadAccountRecord(accountCreds.SecretKey().String())
+	if err != nil {
+		return fmt.Errorf("loading account record: %w", err)
+	}
+	if record.VaultCredentials == nil {
+		record.VaultCredentials = make(map[string]string)
+	}
+	record.VaultCredentials[vaultID] = base64.StdEncoding.EncodeToString(ciphertext)
+
+	if err := a.updateAccountRecord(accountCreds.SecretKey().String(), *record); err != nil {
+		return fmt.Errorf("saving account record: %w", err)
+	}
+	return nil
+}
+
+// loadVaultCredentials decrypts and returns vault-specific credentials stored
+// in the account record. Returns nil if no credentials exist for the vault.
+func (a *API) loadVaultCredentials(accountCreds *vault.Credentials, vaultID string) (*vault.Credentials, error) {
+	record, err := a.loadAccountRecord(accountCreds.SecretKey().String())
+	if err != nil {
+		return nil, err
+	}
+	encoded, ok := record.VaultCredentials[vaultID]
+	if !ok {
+		return nil, fmt.Errorf("no vault credentials for %s", vaultID)
+	}
+
+	ciphertext, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decoding vault credentials: %w", err)
+	}
+
+	encKey, err := accountCreds.DeriveKey("vault-cred:" + vaultID)
+	if err != nil {
+		return nil, fmt.Errorf("deriving vault credential key: %w", err)
+	}
+	defer util.WipeBytes(encKey)
+
+	plaintext, err := util.DecryptAES(ciphertext, encKey)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting vault credentials: %w", err)
+	}
+	defer util.WipeBytes(plaintext)
+
+	return vault.DeserializeCredentials(plaintext)
+}

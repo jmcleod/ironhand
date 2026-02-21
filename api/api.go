@@ -40,6 +40,7 @@ type API struct {
 	webauthn                   *webauthn.WebAuthn
 	webauthnCeremonies         map[string]webauthnCeremonyState
 	webauthnCeremonyMu         sync.Mutex
+	invites                    *inviteStore
 	trustedProxies             []netip.Prefix       // CIDR ranges for trusted reverse proxies; nil = trust none (fail-safe)
 	kdfParams                  *util.Argon2idParams // nil = use DefaultArgon2idParams(); overridden by --kdf-profile
 	auditMu                    vaultMutex           // serialises audit appends per vault
@@ -217,6 +218,7 @@ func New(repo storage.Repository, epochCache vault.EpochCache, opts ...Option) *
 		})
 	}
 	a.audit.metrics = a.metrics
+	a.invites = newInviteStore()
 	return a
 }
 
@@ -269,6 +271,10 @@ func (a *API) Router() chi.Router {
 	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/vaults", a.CreateVault)
 	r.With(a.AuthMiddleware).Get("/vaults", a.ListVaults)
 
+	// Invite routes (outside vault group — auth required, no vault membership check).
+	r.With(a.AuthMiddleware).Get("/invites/{token}", a.GetInviteInfo)
+	r.With(a.AuthMiddleware, a.CSRFMiddleware).Post("/invites/{token}/accept", a.AcceptInvite)
+
 	// All other vault routes require auth middleware.
 	r.Route("/vaults/{vaultID}", func(r chi.Router) {
 		r.Use(a.AuthMiddleware)
@@ -285,8 +291,13 @@ func (a *API) Router() chi.Router {
 		r.Get("/items/{itemID}/private-key", a.GetItemPrivateKey)
 		r.Get("/audit", a.ListAuditLogs)
 		r.Get("/audit/export", a.ExportAuditLog)
+		r.Get("/members", a.ListMembers)
 		r.Post("/members", a.AddMember)
+		r.Put("/members/{memberID}", a.ChangeMemberRole)
 		r.Delete("/members/{memberID}", a.RevokeMember)
+		r.Post("/invites", a.CreateInvite)
+		r.Get("/invites", a.ListInvites)
+		r.Delete("/invites/{token}", a.CancelInvite)
 		r.Post("/export", a.ExportVault)
 		r.Post("/import", a.ImportVault)
 
@@ -308,7 +319,29 @@ func (a *API) Router() chi.Router {
 }
 
 // openSession creates a Vault and opens a session with the given credentials.
+// If the primary credentials fail to open the vault (e.g. the user was invited
+// to a vault created with different KDF params / salts, so the derived record
+// key cannot decrypt the vault state), it transparently falls back to
+// vault-specific credentials stored in the account record.
 func (a *API) openSession(ctx context.Context, vaultID string, creds *vault.Credentials) (*vault.Session, error) {
 	v := vault.New(vaultID, a.repo, vault.WithEpochCache(a.epochCache))
-	return v.Open(ctx, creds)
+	session, err := v.Open(ctx, creds)
+	if err == nil {
+		return session, nil
+	}
+
+	// Always attempt fallback to vault-specific credentials. When the
+	// invitee's MUK differs from the vault creator's, vault.Open fails at
+	// loadVaultState (AES-GCM decryption error) — not at the profile
+	// comparison step — so we cannot rely on error string matching.
+	// If no vault-specific credentials exist, loadVaultCredentials fails
+	// and we return the original Open error.
+	vaultCreds, loadErr := a.loadVaultCredentials(creds, vaultID)
+	if loadErr != nil {
+		return nil, err // return the original error, not the load error
+	}
+	defer vaultCreds.Destroy()
+
+	v2 := vault.New(vaultID, a.repo, vault.WithEpochCache(a.epochCache))
+	return v2.Open(ctx, vaultCreds)
 }

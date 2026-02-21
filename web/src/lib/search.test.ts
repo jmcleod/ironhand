@@ -12,7 +12,7 @@ function makeVault(id: string, name: string, items: VaultItem[]): Vault {
     name,
     description: '',
     items,
-    sharedWith: [],
+    members: [],
     createdAt: '',
     updatedAt: '',
     epoch: 1,
