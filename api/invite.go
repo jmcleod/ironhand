@@ -40,21 +40,28 @@ func newInviteStore() *inviteStore {
 	}
 }
 
-// create stores a new invite and returns the token and passphrase.
-// The passphrase is returned as a hex string and is NOT stored — it must
-// be shared with the invitee who will present it when accepting.
-func (s *inviteStore) create(vaultID, vaultName, role, creatorID string, credBlob []byte, ttl time.Duration) (token, passphrase string, err error) {
-	tokenBytes := make([]byte, inviteTokenBytes)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return "", "", err
-	}
-	token = base64.RawURLEncoding.EncodeToString(tokenBytes)
-
+// generateInvitePassphrase returns a random hex-encoded passphrase.
+// The passphrase is used as the encryption key for the credential blob
+// and is NOT stored server-side — it must be shared with the invitee
+// who will present it when accepting. Wrong passphrase = decryption
+// failure = invite rejected.
+func generateInvitePassphrase() (string, error) {
 	passphraseBytes := make([]byte, invitePassphraseBytes)
 	if _, err := rand.Read(passphraseBytes); err != nil {
-		return "", "", err
+		return "", err
 	}
-	passphrase = hex.EncodeToString(passphraseBytes)
+	return hex.EncodeToString(passphraseBytes), nil
+}
+
+// create stores a new invite and returns the token.
+// The credBlob must already be encrypted with the invite passphrase
+// via vault.ExportCredentials — the passphrase is not stored.
+func (s *inviteStore) create(vaultID, vaultName, role, creatorID string, credBlob []byte, ttl time.Duration) (token string, err error) {
+	tokenBytes := make([]byte, inviteTokenBytes)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", err
+	}
+	token = base64.RawURLEncoding.EncodeToString(tokenBytes)
 
 	invite := &inviteState{
 		Token:          token,
@@ -73,7 +80,7 @@ func (s *inviteStore) create(vaultID, vaultName, role, creatorID string, credBlo
 	s.cleanupLocked()
 
 	s.invites[token] = invite
-	return token, passphrase, nil
+	return token, nil
 }
 
 // get returns a pending invite if it exists and is still valid.
@@ -100,6 +107,17 @@ func (s *inviteStore) accept(token string) (*inviteState, bool) {
 	}
 	inv.Accepted = true
 	return inv, true
+}
+
+// unaccept reverts the accepted flag so the invite can be retried
+// (e.g. after a wrong passphrase attempt).
+func (s *inviteStore) unaccept(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if inv, ok := s.invites[token]; ok {
+		inv.Accepted = false
+	}
 }
 
 // list returns all active (non-expired, non-accepted) invites for a vault.

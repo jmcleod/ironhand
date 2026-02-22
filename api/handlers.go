@@ -1631,15 +1631,25 @@ func (a *API) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		vaultName = vaultID
 	}
 
-	// Export owner credentials encrypted with a random invite passphrase.
+	// Generate a random passphrase that will encrypt the credential blob.
+	// The passphrase is returned to the creator and NOT stored server-side;
+	// the invitee must present it when accepting. Wrong passphrase =
+	// ImportCredentials fails = invite rejected.
+	passphrase, err := generateInvitePassphrase()
+	if err != nil {
+		writeInternalError(w, "failed to generate invite passphrase", err)
+		return
+	}
+
+	// Export owner credentials encrypted with the invite passphrase.
 	// This is expensive (~1-3s Argon2id) but runs once per invite creation.
-	credBlob, err := vault.ExportCredentials(creds, "invite-export-temp")
+	credBlob, err := vault.ExportCredentials(creds, passphrase)
 	if err != nil {
 		writeInternalError(w, "failed to export credentials for invite", err)
 		return
 	}
 
-	token, passphrase, err := a.invites.create(
+	token, err := a.invites.create(
 		vaultID, vaultName, req.Role,
 		creds.SecretKey().ID(),
 		credBlob,
@@ -1749,10 +1759,16 @@ func (a *API) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Import the owner's credentials from the invite blob.
-	ownerCreds, err := vault.ImportCredentials(inv.CredentialBlob, "invite-export-temp")
+	// Import the owner's credentials from the invite blob using the
+	// caller-provided passphrase. This is the cryptographic enforcement:
+	// the blob was encrypted with the passphrase at invite creation time,
+	// so a wrong passphrase will fail Argon2id decryption here.
+	ownerCreds, err := vault.ImportCredentials(inv.CredentialBlob, req.Passphrase)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to import invite credentials")
+		// Wrong passphrase or corrupted blob — un-accept so the invite
+		// can be retried with the correct passphrase.
+		a.invites.unaccept(token)
+		writeError(w, http.StatusForbidden, "invalid invite passphrase")
 		return
 	}
 	defer ownerCreds.Destroy()

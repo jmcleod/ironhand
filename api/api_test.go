@@ -2501,3 +2501,111 @@ func TestListAuditLogsPagination(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Invite passphrase enforcement
+// ---------------------------------------------------------------------------
+
+func TestInviteAcceptWithCorrectPassphrase(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+
+	// Owner: register, login, create vault.
+	owner := newClient(t)
+	registerAndLogin(t, owner, srv.URL)
+
+	resp := doJSON(t, owner, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "shared"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var cv api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&cv))
+
+	// Owner: create invite.
+	resp = doJSON(t, owner, http.MethodPost, srv.URL+"/api/v1/vaults/"+cv.VaultID+"/invites", map[string]string{"role": "reader"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var inv api.CreateInviteResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&inv))
+	require.NotEmpty(t, inv.Token)
+	require.NotEmpty(t, inv.Passphrase)
+
+	// Invitee: register, login, accept with the correct passphrase.
+	invitee := newClient(t)
+	registerAndLogin(t, invitee, srv.URL)
+
+	resp = doJSON(t, invitee, http.MethodPost, srv.URL+"/api/v1/invites/"+inv.Token+"/accept",
+		map[string]string{"passphrase": inv.Passphrase})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var accept api.AcceptInviteResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&accept))
+	assert.Equal(t, cv.VaultID, accept.VaultID)
+	assert.NotEmpty(t, accept.MemberID)
+}
+
+func TestInviteAcceptWithWrongPassphrase(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+
+	// Owner: register, login, create vault, create invite.
+	owner := newClient(t)
+	registerAndLogin(t, owner, srv.URL)
+
+	resp := doJSON(t, owner, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "shared"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var cv api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&cv))
+
+	resp = doJSON(t, owner, http.MethodPost, srv.URL+"/api/v1/vaults/"+cv.VaultID+"/invites", map[string]string{"role": "reader"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var inv api.CreateInviteResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&inv))
+
+	// Invitee: register, login, try to accept with a wrong passphrase.
+	invitee := newClient(t)
+	registerAndLogin(t, invitee, srv.URL)
+
+	resp = doJSON(t, invitee, http.MethodPost, srv.URL+"/api/v1/invites/"+inv.Token+"/accept",
+		map[string]string{"passphrase": "definitely-wrong-passphrase"})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// The invite should NOT be consumed — retry with the correct passphrase succeeds.
+	resp = doJSON(t, invitee, http.MethodPost, srv.URL+"/api/v1/invites/"+inv.Token+"/accept",
+		map[string]string{"passphrase": inv.Passphrase})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestInviteAcceptEmptyPassphrase(t *testing.T) {
+	srv := setupServer(t)
+	defer srv.Close()
+
+	// Owner: register, login, create vault, create invite.
+	owner := newClient(t)
+	registerAndLogin(t, owner, srv.URL)
+
+	resp := doJSON(t, owner, http.MethodPost, srv.URL+"/api/v1/vaults", map[string]string{"name": "shared"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var cv api.CreateVaultResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&cv))
+
+	resp = doJSON(t, owner, http.MethodPost, srv.URL+"/api/v1/vaults/"+cv.VaultID+"/invites", map[string]string{"role": "reader"})
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var inv api.CreateInviteResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&inv))
+
+	// Invitee: register, login, try with empty passphrase.
+	invitee := newClient(t)
+	registerAndLogin(t, invitee, srv.URL)
+
+	resp = doJSON(t, invitee, http.MethodPost, srv.URL+"/api/v1/invites/"+inv.Token+"/accept",
+		map[string]string{"passphrase": ""})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
