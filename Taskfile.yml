@@ -17,10 +17,26 @@ tasks:
     cmds:
       - task --list-all
 
+  # ─── Internal: Web UI embed prerequisite ────────────────────────────
+  # The Go server embeds web/dist/ via //go:embed. All Go commands
+  # (build, test, vet) fail on a fresh checkout without it. This
+  # internal task ensures the dist directory exists, building the
+  # web UI only when it is missing.
+
+  _web:dist:
+    internal: true
+    desc: Ensure web/dist exists (builds web UI if missing)
+    status:
+      - test -d {{.WEB_DIR}}/dist
+    deps: [web:install]
+    cmds:
+      - npm run --prefix {{.WEB_DIR}} build
+
   # ─── Go Server ──────────────────────────────────────────────────────
 
   build:
     desc: Build the Go server binary
+    deps: [_web:dist]
     cmds:
       - go build -o {{.BINARY}} ./cmd/ironhand
     sources:
@@ -32,6 +48,7 @@ tasks:
 
   build:pkcs11:
     desc: Build with PKCS#11 HSM support (requires CGo)
+    deps: [_web:dist]
     cmds:
       - go build -tags pkcs11 -o {{.BINARY}} ./cmd/ironhand
 
@@ -43,21 +60,25 @@ tasks:
 
   test:
     desc: Run all Go tests
+    deps: [_web:dist]
     cmds:
       - go test ./... -count=1
 
   test:verbose:
     desc: Run all Go tests with verbose output
+    deps: [_web:dist]
     cmds:
       - go test ./... -count=1 -v
 
   test:race:
     desc: Run all Go tests with race detector
+    deps: [_web:dist]
     cmds:
       - go test ./... -count=1 -race
 
   test:cover:
     desc: Run Go tests with coverage report
+    deps: [_web:dist]
     cmds:
       - go test ./... -count=1 -coverprofile=coverage.out
       - go tool cover -html=coverage.out -o coverage.html
@@ -65,6 +86,7 @@ tasks:
 
   test:postgres:
     desc: Run PostgreSQL integration tests (starts test container)
+    deps: [_web:dist]
     cmds:
       - docker compose -f docker-compose.test.yml up -d --wait
       - defer: docker compose -f docker-compose.test.yml down
@@ -74,6 +96,7 @@ tasks:
 
   test:pkcs11:
     desc: Run PKCS#11 tests (requires SoftHSM2)
+    deps: [_web:dist]
     preconditions:
       - sh: command -v softhsm2-util
         msg: "SoftHSM2 is required. Install with: brew install softhsm (macOS) or apt install softhsm2 (Linux)"
@@ -98,11 +121,13 @@ tasks:
 
   vet:
     desc: Run Go static analysis
+    deps: [_web:dist]
     cmds:
       - go vet ./...
 
   lint:go:
     desc: Run Go linters (requires golangci-lint)
+    deps: [_web:dist]
     preconditions:
       - sh: command -v golangci-lint
         msg: "golangci-lint is required. Install from https://golangci-lint.run/welcome/install/"
@@ -209,21 +234,22 @@ tasks:
       - task --parallel run web:dev
 
   check:
-    desc: Run all checks (vet, lint, test)
+    desc: Run all checks (lint, test, vet)
     cmds:
+      - task: web:lint
+      - task: web:test
       - task: vet
       - task: lint:go
-      - task: web:lint
       - task: test
-      - task: web:test
 
   ci:
-    desc: Full CI pipeline (build, vet, test, web build+test)
+    desc: Full CI pipeline (lint, test, build)
     cmds:
+      - task: web:lint
+      - task: web:test
+      - task: web:build
       - task: vet
       - task: test
-      - task: web:build
-      - task: web:test
       - task: build
       - echo "CI pipeline passed"
 
@@ -246,6 +272,7 @@ tasks:
 
   audit:verify:
     desc: Verify an exported audit chain (pass FILE=path/to/export.json)
+    deps: [_web:dist]
     cmds:
       - go run ./cmd/ironhand audit verify {{.FILE}}
     requires:
