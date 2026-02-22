@@ -44,15 +44,21 @@ jobs:
       - name: Run CI task pipeline
         run: task ci
 
-      # Create a deterministic-ish release binary (and ensure web build output is present for embed)
-      - name: Build release binary (linux-amd64)
-        env:
-          CGO_ENABLED: "0"
-          GOOS: linux
-          GOARCH: amd64
+      - name: Build release binaries
         run: |
           mkdir -p dist
-          go build -trimpath -o dist/ironhand-linux-amd64 ./cmd/ironhand
+          targets=(
+            "linux   amd64  ironhand-linux-amd64"
+            "darwin  arm64  ironhand-darwin-arm64"
+            "windows amd64  ironhand-windows-amd64.exe"
+            "windows arm64  ironhand-windows-arm64.exe"
+          )
+          for target in "${targets[@]}"; do
+            read -r os arch bin <<< "$target"
+            echo "Building $bin (GOOS=$os GOARCH=$arch)..."
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath -o "dist/$bin" ./cmd/ironhand
+          done
 
       - name: Generate SHA256 subjects (for provenance)
         id: hashes
