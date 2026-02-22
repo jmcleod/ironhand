@@ -73,6 +73,7 @@ jobs:
     name: Generate SLSA provenance
     needs: [build]
     permissions:
+      contents: read
       actions: read     # required by generator
       id-token: write   # required to sign provenance
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
