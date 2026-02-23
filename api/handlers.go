@@ -118,7 +118,7 @@ func (a *API) CreateVault(w http.ResponseWriter, r *http.Request) {
 
 	vaultID := uuid.New()
 	v := vault.New(vaultID, a.repo, vault.WithEpochCache(a.epochCache))
-	session, err := v.Create(r.Context(), creds)
+	session, err := v.Create(r.Context(), creds, vault.WithKDFParams(creds.Profile().KDFParams))
 	if err != nil {
 		mapError(w, err)
 		return

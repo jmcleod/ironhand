@@ -48,6 +48,7 @@ type API struct {
 	auditMaxEntries            int
 	auditAppendsSinceRetention atomic.Int64  // counts appends since last retention check
 	webhook                    *auditWebhook // nil when not configured
+	noRateLimit                bool          // disables all rate limiters (for E2E testing only)
 }
 
 // DefaultIdleTimeout is the default session idle timeout (30 minutes).
@@ -185,6 +186,15 @@ func WithKDFProfile(name string) (Option, error) {
 	return func(a *API) {
 		a.kdfParams = &p
 	}, nil
+}
+
+// WithNoRateLimit disables all rate limiters. This is intended exclusively
+// for automated E2E testing where many accounts are created in rapid
+// succession from the same IP. Do NOT use in production.
+func WithNoRateLimit() Option {
+	return func(a *API) {
+		a.noRateLimit = true
+	}
 }
 
 // kdfParamsForNewVault returns the Argon2id parameters to use when creating

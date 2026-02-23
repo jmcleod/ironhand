@@ -267,6 +267,30 @@ tasks:
       - task: build
       - echo "CI pipeline passed"
 
+  # ─── E2E Tests (Playwright) ────────────────────────────────────────
+
+  install:playwright:
+    desc: Install Playwright browsers
+    cmds:
+      - npx playwright install --with-deps chromium
+
+  test:e2e:
+    desc: Run Playwright E2E tests
+    deps: [_web:dist]
+    cmds:
+      - npx playwright test
+
+  test:e2e:ui:
+    desc: Run Playwright E2E tests with UI mode
+    deps: [_web:dist]
+    cmds:
+      - npx playwright test --ui
+
+  test:e2e:report:
+    desc: Show Playwright HTML report
+    cmds:
+      - npx playwright show-report
+
   # ─── Cleanup ────────────────────────────────────────────────────────
 
   clean:

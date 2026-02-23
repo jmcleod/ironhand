@@ -25,16 +25,18 @@ const (
 func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 	// Rate-limit registration before any expensive work.
 	clientIP := a.extractClientIP(r)
-	if blocked, retryAfter := a.regGlobalLimiter.check(); blocked {
-		a.audit.logFailure(AuditRegisterRateLimited, r, "global rate limited")
-		writeRegistrationRateLimited(w, retryAfter)
-		return
-	}
-	if blocked, retryAfter := a.regIPLimiter.check(clientIP); blocked {
-		a.audit.logFailure(AuditRegisterRateLimited, r, "ip rate limited",
-			slog.String("client_ip", clientIP))
-		writeRegistrationRateLimited(w, retryAfter)
-		return
+	if !a.noRateLimit {
+		if blocked, retryAfter := a.regGlobalLimiter.check(); blocked {
+			a.audit.logFailure(AuditRegisterRateLimited, r, "global rate limited")
+			writeRegistrationRateLimited(w, retryAfter)
+			return
+		}
+		if blocked, retryAfter := a.regIPLimiter.check(clientIP); blocked {
+			a.audit.logFailure(AuditRegisterRateLimited, r, "ip rate limited",
+				slog.String("client_ip", clientIP))
+			writeRegistrationRateLimited(w, retryAfter)
+			return
+		}
 	}
 
 	req, ok := decodeJSON[RegisterRequest](w, r, maxAuthBodySize)
@@ -52,8 +54,10 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record the request against both limiters before the expensive KDF.
-	a.regIPLimiter.record(clientIP)
-	a.regGlobalLimiter.record()
+	if !a.noRateLimit {
+		a.regIPLimiter.record(clientIP)
+		a.regGlobalLimiter.record()
+	}
 
 	kdfParams := a.kdfParamsForNewVault()
 	creds, err := vault.NewCredentials(req.Passphrase,
@@ -136,28 +140,33 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	clientIP := a.extractClientIP(r)
 
 	// Check rate limits before any expensive work: global → IP → per-account.
-	if blocked, retryAfter := a.globalLimiter.check(); blocked {
-		a.audit.logFailure(AuditLoginRateLimited, r, "global rate limited")
-		writeRateLimited(w, retryAfter)
-		return
-	}
-	if blocked, retryAfter := a.ipLimiter.check(clientIP); blocked {
-		a.audit.logFailure(AuditLoginRateLimited, r, "ip rate limited",
-			slog.String("client_ip", clientIP))
-		writeRateLimited(w, retryAfter)
-		return
-	}
-	if accountID != "" {
-		if blocked, retryAfter := a.rateLimiter.check(accountID); blocked {
-			a.audit.logFailure(AuditLoginRateLimited, r, "rate limited",
-				slog.String("account_id", accountID))
+	if !a.noRateLimit {
+		if blocked, retryAfter := a.globalLimiter.check(); blocked {
+			a.audit.logFailure(AuditLoginRateLimited, r, "global rate limited")
 			writeRateLimited(w, retryAfter)
 			return
+		}
+		if blocked, retryAfter := a.ipLimiter.check(clientIP); blocked {
+			a.audit.logFailure(AuditLoginRateLimited, r, "ip rate limited",
+				slog.String("client_ip", clientIP))
+			writeRateLimited(w, retryAfter)
+			return
+		}
+		if accountID != "" {
+			if blocked, retryAfter := a.rateLimiter.check(accountID); blocked {
+				a.audit.logFailure(AuditLoginRateLimited, r, "rate limited",
+					slog.String("account_id", accountID))
+				writeRateLimited(w, retryAfter)
+				return
+			}
 		}
 	}
 
 	// recordLoginFailure records a failure across all three rate limiters.
 	recordLoginFailure := func() {
+		if a.noRateLimit {
+			return
+		}
 		a.globalLimiter.recordFailure()
 		a.ipLimiter.recordFailure(clientIP)
 		if accountID != "" {
@@ -250,8 +259,10 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 	defer util.WipeBytes(sessionBlob)
 
 	// Login succeeded — clear rate-limit state.
-	a.rateLimiter.recordSuccess(accountID)
-	a.ipLimiter.recordSuccess(clientIP)
+	if !a.noRateLimit {
+		a.rateLimiter.recordSuccess(accountID)
+		a.ipLimiter.recordSuccess(clientIP)
+	}
 
 	// Persist consumed recovery code (if one was used).
 	if recoveryCodeUsedIdx >= 0 {
@@ -304,13 +315,15 @@ func (a *API) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 func (a *API) SetupTwoFactor(w http.ResponseWriter, r *http.Request) {
 	// Rate-limit MFA setup to prevent TOTP secret generation spam.
 	clientIP := a.extractClientIP(r)
-	if blocked, retryAfter := a.regIPLimiter.check(clientIP); blocked {
-		a.audit.logFailure(AuditRegisterRateLimited, r, "mfa setup ip rate limited",
-			slog.String("client_ip", clientIP))
-		writeRegistrationRateLimited(w, retryAfter)
-		return
+	if !a.noRateLimit {
+		if blocked, retryAfter := a.regIPLimiter.check(clientIP); blocked {
+			a.audit.logFailure(AuditRegisterRateLimited, r, "mfa setup ip rate limited",
+				slog.String("client_ip", clientIP))
+			writeRegistrationRateLimited(w, retryAfter)
+			return
+		}
+		a.regIPLimiter.record(clientIP)
 	}
-	a.regIPLimiter.record(clientIP)
 
 	creds := credentialsFromContext(r.Context())
 	if creds == nil {

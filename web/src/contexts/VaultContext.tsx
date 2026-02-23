@@ -185,8 +185,10 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
   const enroll = useCallback(async (passphrase: string) => {
     const result = await apiRegister(passphrase);
-    setIsUnlocked(true);
+    // Set justRegistered BEFORE isUnlocked so that even without batching,
+    // the intermediate render still shows EnrollPage (not DashboardPage).
     setJustRegistered(true);
+    setIsUnlocked(true);
     setVaults([]);
     // Fetch WebAuthn status so the enrollment screen knows passkeys are available.
     const waStatus = await apiWebAuthnStatus().catch(() => ({ enabled: false, credential_count: 0 }));

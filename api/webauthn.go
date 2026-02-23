@@ -230,23 +230,25 @@ func (a *API) BeginWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	// Rate-limit checks — same pattern as Login handler.
 	accountID, _ := accountLookupID(req.SecretKey)
 	clientIP := a.extractClientIP(r)
-	if blocked, retryAfter := a.globalLimiter.check(); blocked {
-		a.audit.logFailure(AuditLoginRateLimited, r, "global rate limited")
-		writeRateLimited(w, retryAfter)
-		return
-	}
-	if blocked, retryAfter := a.ipLimiter.check(clientIP); blocked {
-		a.audit.logFailure(AuditLoginRateLimited, r, "ip rate limited",
-			slog.String("client_ip", clientIP))
-		writeRateLimited(w, retryAfter)
-		return
-	}
-	if accountID != "" {
-		if blocked, retryAfter := a.rateLimiter.check(accountID); blocked {
-			a.audit.logFailure(AuditLoginRateLimited, r, "rate limited",
-				slog.String("account_id", accountID))
+	if !a.noRateLimit {
+		if blocked, retryAfter := a.globalLimiter.check(); blocked {
+			a.audit.logFailure(AuditLoginRateLimited, r, "global rate limited")
 			writeRateLimited(w, retryAfter)
 			return
+		}
+		if blocked, retryAfter := a.ipLimiter.check(clientIP); blocked {
+			a.audit.logFailure(AuditLoginRateLimited, r, "ip rate limited",
+				slog.String("client_ip", clientIP))
+			writeRateLimited(w, retryAfter)
+			return
+		}
+		if accountID != "" {
+			if blocked, retryAfter := a.rateLimiter.check(accountID); blocked {
+				a.audit.logFailure(AuditLoginRateLimited, r, "rate limited",
+					slog.String("account_id", accountID))
+				writeRateLimited(w, retryAfter)
+				return
+			}
 		}
 	}
 
@@ -350,6 +352,9 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := accountLookupID(secretKey)
 	clientIP := a.extractClientIP(r)
 	recordLoginFailure := func() {
+		if a.noRateLimit {
+			return
+		}
 		a.globalLimiter.recordFailure()
 		a.ipLimiter.recordFailure(clientIP)
 		if accountID != "" {
@@ -433,8 +438,10 @@ func (a *API) FinishWebAuthnLogin(w http.ResponseWriter, r *http.Request) {
 	defer util.WipeBytes(sessionBlob)
 
 	// Login succeeded — clear rate-limit state.
-	a.rateLimiter.recordSuccess(accountID)
-	a.ipLimiter.recordSuccess(clientIP)
+	if !a.noRateLimit {
+		a.rateLimiter.recordSuccess(accountID)
+		a.ipLimiter.recordSuccess(clientIP)
+	}
 
 	expiresAt := time.Now().Add(sessionDuration)
 	a.sessions.Put(token, AuthSession{

@@ -50,6 +50,7 @@ var (
 	auditWebhookURL    string
 	auditWebhookHeader string
 	trustedProxies     []string
+	noRateLimit        bool
 )
 
 var serverCmd = &cobra.Command{
@@ -134,6 +135,10 @@ var serverCmd = &cobra.Command{
 		apiOpts := []api.Option{
 			api.WithHeaderAuth(enableHeaderAuth),
 			api.WithWebAuthn(wa),
+		}
+		if noRateLimit {
+			apiOpts = append(apiOpts, api.WithNoRateLimit())
+			fmt.Println("WARNING: Rate limiting is disabled (--no-rate-limit)")
 		}
 		if kdfProfile != "" {
 			kdfOpt, err := api.WithKDFProfile(kdfProfile)
@@ -297,6 +302,7 @@ func init() {
 	serverCmd.Flags().StringVar(&auditWebhookURL, "audit-webhook-url", "", "HTTP(S) URL to POST audit events to (SIEM/webhook integration)")
 	serverCmd.Flags().StringVar(&auditWebhookHeader, "audit-webhook-header", "", "Auth header for audit webhook in 'Header: Value' format (e.g., 'Authorization: Bearer xxx')")
 	serverCmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxies", nil, "CIDR ranges of trusted reverse proxies (e.g., 10.0.0.0/8,172.16.0.0/12); proxy headers are ignored unless this is set")
+	serverCmd.Flags().BoolVar(&noRateLimit, "no-rate-limit", false, "Disable all rate limiters (for E2E testing only — do NOT use in production)")
 }
 
 // resolveSessionWrappingKey resolves the session wrapping key from the
