@@ -198,6 +198,19 @@ tasks:
     cmds:
       - npm run preview
 
+  web:generate-types:
+    desc: Generate TypeScript types from OpenAPI spec
+    dir: "{{.WEB_DIR}}"
+    deps: [web:install]
+    cmds:
+      - npm run generate:types
+
+  web:check-types:
+    desc: Verify generated TypeScript types are up to date with OpenAPI spec
+    deps: [web:generate-types]
+    cmds:
+      - git diff --exit-code {{.WEB_DIR}}/src/types/api-schema.d.ts
+
   # ─── Docker ─────────────────────────────────────────────────────────
 
   docker:build:
@@ -248,6 +261,7 @@ tasks:
       - task: web:lint
       - task: web:test
       - task: web:build
+      - task: web:check-types
       - task: vet
       - task: test
       - task: build

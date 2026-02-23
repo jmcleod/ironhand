@@ -120,6 +120,9 @@ components:
         totp_code:
           type: string
           description: 6-digit TOTP code, required when 2FA is enabled.
+        recovery_code:
+          type: string
+          description: One-time recovery code, accepted in place of totp_code when 2FA is enabled.
 
     SetupTwoFactorResponse:
       type: object
@@ -260,6 +263,17 @@ components:
           type: string
         type:
           type: string
+        version:
+          type: integer
+          format: int64
+        updated_at:
+          type: string
+          format: date-time
+        preview:
+          type: object
+          additionalProperties:
+            type: string
+          description: Subset of non-sensitive fields for display without opening the item.
 
     PutItemRequest:
       type: object
@@ -397,6 +411,9 @@ components:
       properties:
         error:
           type: string
+        correlation_id:
+          type: string
+          description: Request correlation ID for support and debugging.
 
     ExportVaultRequest:
       type: object
@@ -580,6 +597,289 @@ components:
           type: string
           description: PEM-encoded signed certificate.
 
+    # ─── 2FA / Auth Settings ──────────────────────────────────────────
+
+    DisableTwoFactorRequest:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          description: Valid TOTP code to confirm 2FA disable.
+
+    AuthSettingsResponse:
+      type: object
+      properties:
+        passkey_policy:
+          type: string
+          enum: [allowed, required, disabled]
+          description: WebAuthn/passkey login policy.
+        totp_enabled:
+          type: boolean
+
+    UpdateAuthSettingsRequest:
+      type: object
+      required:
+        - passkey_policy
+      properties:
+        passkey_policy:
+          type: string
+          enum: [allowed, required, disabled]
+
+    # ─── Step-Up Authentication ───────────────────────────────────────
+
+    StepUpTOTPRequest:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          description: 6-digit TOTP code for step-up verification.
+
+    StepUpResponse:
+      type: object
+      properties:
+        verified:
+          type: boolean
+        method:
+          type: string
+          description: Method used for step-up (totp or passkey).
+        expires_at:
+          type: string
+          format: date-time
+
+    StepUpRequiredResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        methods:
+          type: array
+          items:
+            type: string
+          description: Available step-up methods (e.g. ["totp", "passkey"]).
+
+    # ─── Item Mutations & Versions ────────────────────────────────────
+
+    MutationResponse:
+      type: object
+      properties:
+        item_id:
+          type: string
+        version:
+          type: integer
+          format: int64
+
+    ItemVersionsResponse:
+      type: object
+      properties:
+        versions:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Map of item_id to current version number.
+        epoch:
+          type: integer
+          format: int64
+
+    # ─── Members ──────────────────────────────────────────────────────
+
+    MemberSummary:
+      type: object
+      properties:
+        member_id:
+          type: string
+        role:
+          type: string
+          enum: [owner, writer, reader]
+        status:
+          type: string
+        added_epoch:
+          type: integer
+          format: int64
+
+    ListMembersResponse:
+      type: object
+      properties:
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemberSummary'
+
+    ChangeMemberRoleRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [owner, writer, reader]
+
+    # ─── Invites ──────────────────────────────────────────────────────
+
+    CreateInviteRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [owner, writer, reader]
+
+    CreateInviteResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        passphrase:
+          type: string
+          description: >
+            One-time passphrase for the invitee. Must be shared out-of-band.
+            The server does NOT store this — it is used as the Argon2id encryption
+            key for the credential blob.
+        expires_at:
+          type: string
+          format: date-time
+        invite_url:
+          type: string
+          description: Full URL the invitee can visit to accept.
+
+    InviteSummary:
+      type: object
+      properties:
+        token:
+          type: string
+        role:
+          type: string
+          enum: [owner, writer, reader]
+        expires_at:
+          type: string
+          format: date-time
+
+    ListInvitesResponse:
+      type: object
+      properties:
+        invites:
+          type: array
+          items:
+            $ref: '#/components/schemas/InviteSummary'
+
+    InviteInfoResponse:
+      type: object
+      properties:
+        vault_name:
+          type: string
+        role:
+          type: string
+          enum: [owner, writer, reader]
+        expires_at:
+          type: string
+          format: date-time
+        creator_id:
+          type: string
+
+    AcceptInviteRequest:
+      type: object
+      required:
+        - passphrase
+      properties:
+        passphrase:
+          type: string
+          description: Invite passphrase shared by the creator.
+
+    AcceptInviteResponse:
+      type: object
+      properties:
+        vault_id:
+          type: string
+        member_id:
+          type: string
+
+    # ─── Passkey Management ───────────────────────────────────────────
+
+    PasskeySummary:
+      type: object
+      properties:
+        credential_id:
+          type: string
+        label:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        backup_state:
+          type: boolean
+
+    ListPasskeysResponse:
+      type: object
+      properties:
+        passkeys:
+          type: array
+          items:
+            $ref: '#/components/schemas/PasskeySummary'
+
+    LabelPasskeyRequest:
+      type: object
+      required:
+        - label
+      properties:
+        label:
+          type: string
+
+    # ─── Recovery Codes ───────────────────────────────────────────────
+
+    RecoveryCodesStatusResponse:
+      type: object
+      properties:
+        has_codes:
+          type: boolean
+        codes_total:
+          type: integer
+        codes_unused:
+          type: integer
+
+    GenerateRecoveryCodesResponse:
+      type: object
+      properties:
+        codes:
+          type: array
+          items:
+            type: string
+          description: One-time recovery codes. Store securely — they cannot be viewed again.
+
+    # ─── Cross-Vault Search ───────────────────────────────────────────
+
+    SearchResultItem:
+      type: object
+      properties:
+        vault_id:
+          type: string
+        vault_name:
+          type: string
+        item_id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        matched_field:
+          type: string
+
+    SearchResponse:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          properties:
+            results:
+              type: array
+              items:
+                $ref: '#/components/schemas/SearchResultItem'
+
 paths:
   /auth/register:
     post:
@@ -700,6 +1000,35 @@ paths:
         '401':
           description: Invalid one-time code or unauthorized
 
+  /auth/2fa/disable:
+    post:
+      summary: Disable 2FA
+      operationId: disableTwoFactor
+      description: >
+        Disables TOTP two-factor authentication. Requires a valid TOTP code
+        to confirm the action.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisableTwoFactorRequest'
+      responses:
+        '200':
+          description: 2FA disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwoFactorStatusResponse'
+        '400':
+          description: Invalid or missing TOTP code
+        '401':
+          description: Unauthorized
+
   /auth/webauthn/status:
     get:
       summary: Get WebAuthn/passkey status
@@ -809,6 +1138,302 @@ paths:
         '404':
           description: WebAuthn not configured on server
 
+  /auth/webauthn/credentials:
+    get:
+      summary: List registered passkeys
+      operationId: listPasskeys
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: Passkey list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPasskeysResponse'
+        '401':
+          description: Unauthorized
+
+  /auth/webauthn/credentials/{credentialID}:
+    put:
+      summary: Label a passkey
+      operationId: labelPasskey
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: credentialID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LabelPasskeyRequest'
+      responses:
+        '204':
+          description: Label updated
+        '401':
+          description: Unauthorized
+        '404':
+          description: Credential not found
+    delete:
+      summary: Delete a passkey
+      operationId: deletePasskey
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: credentialID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204':
+          description: Passkey deleted
+        '401':
+          description: Unauthorized
+        '404':
+          description: Credential not found
+
+  /auth/recovery-codes:
+    get:
+      summary: Get recovery codes status
+      operationId: recoveryCodesStatus
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: Recovery codes status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodesStatusResponse'
+        '401':
+          description: Unauthorized
+    post:
+      summary: Generate new recovery codes
+      operationId: generateRecoveryCodes
+      description: >
+        Generates a new set of one-time recovery codes. Any existing unused
+        codes are replaced.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: New recovery codes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateRecoveryCodesResponse'
+        '401':
+          description: Unauthorized
+
+  /auth/settings:
+    get:
+      summary: Get authentication settings
+      operationId: getAuthSettings
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: Current auth settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSettingsResponse'
+        '401':
+          description: Unauthorized
+    put:
+      summary: Update authentication settings
+      operationId: updateAuthSettings
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAuthSettingsRequest'
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSettingsResponse'
+        '400':
+          description: Invalid policy value
+        '401':
+          description: Unauthorized
+
+  /auth/step-up:
+    post:
+      summary: Step-up authentication via TOTP
+      operationId: stepUpTOTP
+      description: >
+        Elevates the current session for sensitive operations by verifying
+        a TOTP code. The step-up is valid for a limited time window.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StepUpTOTPRequest'
+      responses:
+        '200':
+          description: Step-up verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StepUpResponse'
+        '401':
+          description: Invalid TOTP code or unauthorized
+
+  /auth/step-up/passkey/begin:
+    post:
+      summary: Begin step-up authentication via passkey
+      operationId: beginStepUpPasskey
+      description: >
+        Starts a WebAuthn assertion ceremony for step-up authentication.
+        Returns PublicKeyCredentialRequestOptions.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Credential request options
+        '401':
+          description: Unauthorized
+        '404':
+          description: No passkeys registered
+
+  /auth/step-up/passkey/finish:
+    post:
+      summary: Complete step-up authentication via passkey
+      operationId: finishStepUpPasskey
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Step-up verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StepUpResponse'
+        '400':
+          description: Ceremony expired or invalid response
+        '401':
+          description: Unauthorized
+
+  /invites/{token}:
+    get:
+      summary: Get invite information
+      operationId: getInviteInfo
+      description: >
+        Returns metadata about a pending invite (vault name, role, expiry).
+        Used by the invitee before accepting.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Invite details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteInfoResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Invite not found or expired
+
+  /invites/{token}/accept:
+    post:
+      summary: Accept a vault invite
+      operationId: acceptInvite
+      description: >
+        Accepts a pending invite using the passphrase shared by the creator.
+        The passphrase decrypts the credential blob (Argon2id + AES-256-GCM).
+        Wrong passphrase = decryption failure = 403.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptInviteRequest'
+      responses:
+        '200':
+          description: Invite accepted, vault membership granted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptInviteResponse'
+        '400':
+          description: Missing passphrase
+        '401':
+          description: Unauthorized
+        '403':
+          description: Wrong passphrase (decryption failed)
+        '404':
+          description: Invite not found or expired
+
+  /search:
+    get:
+      summary: Search items across all accessible vaults
+      operationId: searchItems
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query string.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/PaginationLimit'
+        - $ref: '#/components/parameters/PaginationOffset'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          description: Missing or empty query
+        '401':
+          description: Unauthorized
+
   /vaults:
     get:
       summary: List vaults visible to authenticated member
@@ -897,6 +1522,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListItemsResponse'
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/items/versions:
+    get:
+      summary: Get current version numbers for all items in a vault
+      operationId: listItemVersions
+      description: >
+        Returns a map of item_id to current version number, along with the
+        vault epoch. Useful for detecting changes since the last sync.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Item version manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemVersionsResponse'
         '401':
           description: Unauthorized
 
@@ -1161,6 +1811,26 @@ paths:
           description: Unauthorized
 
   /vaults/{vaultID}/members:
+    get:
+      summary: List vault members
+      operationId: listMembers
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Member list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMembersResponse'
+        '401':
+          description: Unauthorized
     post:
       summary: Add a member to a vault
       operationId: addMember
@@ -1189,6 +1859,38 @@ paths:
           description: Unauthorized
 
   /vaults/{vaultID}/members/{memberID}:
+    put:
+      summary: Change a member's role
+      operationId: changeMemberRole
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: memberID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeMemberRoleRequest'
+      responses:
+        '204':
+          description: Role updated
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (only owner can change roles)
+        '404':
+          description: Member not found
     delete:
       summary: Revoke a member from a vault
       operationId: revokeMember
@@ -1275,6 +1977,90 @@ paths:
           description: Unauthorized
         '403':
           description: Forbidden (not owner)
+
+  /vaults/{vaultID}/invites:
+    post:
+      summary: Create a vault invite
+      operationId: createInvite
+      description: >
+        Creates a pending invite for the vault. Returns a token and a one-time
+        passphrase that must be shared with the invitee out-of-band. The passphrase
+        is the Argon2id encryption key for the credential blob — it is NOT stored
+        server-side.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInviteRequest'
+      responses:
+        '201':
+          description: Invite created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateInviteResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden (insufficient role)
+    get:
+      summary: List active invites for a vault
+      operationId: listInvites
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Active invites
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListInvitesResponse'
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/invites/{token}:
+    delete:
+      summary: Cancel a vault invite
+      operationId: cancelInvite
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204':
+          description: Invite cancelled
+        '401':
+          description: Unauthorized
+        '403':
+          description: Only the invite creator can cancel
+        '404':
+          description: Invite not found
 
   /vaults/{vaultID}/pki/init:
     post:
@@ -1503,6 +2289,35 @@ paths:
       responses:
         '200':
           description: CRL in PEM format
+          content:
+            application/x-pem-file:
+              schema:
+                type: string
+        '401':
+          description: Unauthorized
+        '404':
+          description: Vault is not a CA
+
+  /vaults/{vaultID}/pki/crl:
+    post:
+      summary: Regenerate and cache Certificate Revocation List
+      operationId: generateCRL
+      description: >
+        Regenerates the CRL from the vault's revocation list and caches it.
+        Unlike the GET /crl.pem endpoint which returns the cached CRL,
+        this endpoint forces regeneration. Requires admin access.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: CRL regenerated (PEM format)
           content:
             application/x-pem-file:
               schema:
