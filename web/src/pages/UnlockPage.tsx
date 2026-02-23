@@ -45,6 +45,11 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
 
   const handleUnlock = async () => {
     setLoading(true);
+    // Persist the "remember key" preference eagerly — before the async
+    // unlock flow — so the value is in sessionStorage before React's
+    // setIsUnlocked(true) can trigger a re-render that replaces this
+    // component with the dashboard.  If login fails we roll it back.
+    handleRememberKey();
     try {
       const success = await unlock(
         secretKey.trim(),
@@ -53,6 +58,7 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
         showRecovery ? recoveryCode.trim() : undefined,
       );
       if (!success) {
+        sessionStorage.removeItem(SAVED_SECRET_KEY_KEY);
         toast({
           title: 'Login Failed',
           description: 'Invalid credentials or one-time code.',
@@ -60,8 +66,8 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
         });
         return;
       }
-      handleRememberKey();
     } catch (err) {
+      sessionStorage.removeItem(SAVED_SECRET_KEY_KEY);
       const msg = (err as { message?: string }).message;
       if (msg === 'passkey_required') {
         setShowRecovery(true);
@@ -84,9 +90,11 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
 
   const handlePasskeyLogin = async () => {
     setPasskeyLoading(true);
+    handleRememberKey();
     const success = await unlockWithPasskey(secretKey.trim(), passphrase);
     setPasskeyLoading(false);
     if (!success) {
+      sessionStorage.removeItem(SAVED_SECRET_KEY_KEY);
       toast({
         title: 'Passkey Login Failed',
         description: 'WebAuthn verification failed or no passkeys registered.',
@@ -94,7 +102,6 @@ export default function UnlockPage({ onSwitchToRegister }: UnlockPageProps) {
       });
       return;
     }
-    handleRememberKey();
   };
 
   const anyLoading = loading || passkeyLoading;
