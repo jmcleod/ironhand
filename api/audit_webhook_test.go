@@ -124,12 +124,18 @@ func TestWebhook_ContentType(t *testing.T) {
 }
 
 func TestWebhook_QueueFullNonBlocking(t *testing.T) {
-	// Create a webhook that never reads (no server, just a blocking handler).
+	// done unblocks the handler so the httptest server can shut down cleanly.
+	done := make(chan struct{})
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Block forever to simulate slow consumer.
-		select {}
+		// Block until the test signals completion, simulating a slow consumer.
+		<-done
 	}))
-	defer srv.Close()
+	defer func() {
+		close(done)
+		srv.CloseClientConnections()
+		srv.Close()
+	}()
 
 	wh := &auditWebhook{
 		url:    srv.URL,
@@ -145,9 +151,9 @@ func TestWebhook_QueueFullNonBlocking(t *testing.T) {
 	}
 
 	// If we get here without blocking, the test passes.
-	// Clean up by closing.
+	// Clean up by closing the channel and waiting for the loop goroutine.
 	close(wh.events)
-	// Don't wait for wg — the goroutine is stuck in the blocking handler.
+	wh.wg.Wait()
 }
 
 func TestWebhook_GracefulShutdownDrains(t *testing.T) {
