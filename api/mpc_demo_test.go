@@ -77,7 +77,7 @@ func TestMPCDemoHarness(t *testing.T) {
 		Policy:      prepared.Policy,
 	})
 	require.NoError(t, err)
-	api.commitMPCDKG(ctx, dkg)
+	require.NoError(t, api.commitMPCDKG(ctx, dkg))
 	attempt, err := session.GetMPCDKGAttempt(ctx, dkg.SessionID)
 	require.NoError(t, err)
 	attempt.Status = vault.MPCDKGStatusCommitted
@@ -250,7 +250,8 @@ func TestMPCRotateHandlerCreatesReplacementKey(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 	}))
 
-	req := httptest.NewRequest(http.MethodPost, "/vaults/"+env.vault.ID()+"/mpc/keys/"+env.key.KeyID+"/rotate", bytes.NewReader([]byte(`{}`)))
+	const failedReplacementKeyID = "failed-replacement-key"
+	req := httptest.NewRequest(http.MethodPost, "/vaults/"+env.vault.ID()+"/mpc/keys/"+env.key.KeyID+"/rotate", bytes.NewReader([]byte(`{"key_id":"`+failedReplacementKeyID+`"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	routeCtx := chi.NewRouteContext()
 	routeCtx.URLParams.Add("vaultID", env.vault.ID())
@@ -269,6 +270,60 @@ func TestMPCRotateHandlerCreatesReplacementKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, vault.MPCKeyStatusArchived, oldKey.Status)
 	require.Equal(t, replacement.KeyID, oldKey.ReplacedByKeyID)
+}
+
+func TestMPCRotateHandlerKeepsOldKeyWhenSignerCommitFails(t *testing.T) {
+	env := newDemoKeyEnv(t, "rotate-commit-fail")
+	require.NoError(t, env.session.RevokeMember(context.Background(), "bob"))
+	require.NoError(t, env.api.saveAccountRecord(env.creds.SecretKey().String(), accountRecord{
+		SecretKeyID: env.creds.SecretKey().ID(),
+		CreatedAt:   time.Now().UTC(),
+	}))
+
+	carol := env.signers[2]
+	failingCommitServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/signer/dkg/commit" {
+			writeError(w, http.StatusInternalServerError, "forced signer commit failure")
+			return
+		}
+		carol.service.Handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(failingCommitServer.Close)
+	identity := carol.service.Identity()
+	require.NoError(t, env.session.RegisterMPCSigner(context.Background(), carol.memberID, vault.MPCSignerRegistration{
+		URL:                 failingCommitServer.URL,
+		EncryptionPublicKey: identity.EncryptionPublicKey,
+		ApprovalPublicKey:   identity.ApprovalPublicKey,
+		Status:              vault.MPCSignerStatusActive,
+	}))
+
+	const failedReplacementKeyID = "failed-replacement-key"
+	req := httptest.NewRequest(http.MethodPost, "/vaults/"+env.vault.ID()+"/mpc/keys/"+env.key.KeyID+"/rotate", bytes.NewReader([]byte(`{"key_id":"`+failedReplacementKeyID+`"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("vaultID", env.vault.ID())
+	routeCtx.URLParams.Add("keyID", env.key.KeyID)
+	ctx := context.WithValue(req.Context(), credentialsKey, env.creds)
+	ctx = context.WithValue(ctx, chi.RouteCtxKey, routeCtx)
+	rec := httptest.NewRecorder()
+
+	env.api.RotateMPCKey(rec, req.WithContext(ctx))
+	require.NotEqual(t, http.StatusCreated, rec.Code, rec.Body.String())
+	oldKey, err := env.session.GetMPCKey(context.Background(), env.key.KeyID)
+	require.NoError(t, err)
+	require.Equal(t, vault.MPCKeyStatusReshareRequired, oldKey.Status)
+	require.Empty(t, oldKey.ReplacedByKeyID)
+	attempts, err := env.session.ListMPCDKGAttempts(context.Background())
+	require.NoError(t, err)
+	var failedAttempt *vault.MPCDKGAttempt
+	for i := range attempts {
+		if attempts[i].KeyID == failedReplacementKeyID {
+			failedAttempt = &attempts[i]
+			break
+		}
+	}
+	require.NotNil(t, failedAttempt)
+	require.Equal(t, vault.MPCDKGStatusFailed, failedAttempt.Status)
 }
 
 func newDemoKeyEnv(t *testing.T, name string) *demoKeyEnv {
@@ -304,6 +359,6 @@ func newDemoKeyEnv(t *testing.T, name string) *demoKeyEnv {
 	require.NoError(t, err)
 	key, err := session.CreateMPCKey(ctx, vault.MPCKeyCreate{KeyID: prepared.KeyID, Algorithm: prepared.Algorithm, Threshold: prepared.Threshold, MemberIDs: prepared.MemberIDs, Commitments: prepared.Commitments, Fragments: prepared.Fragments, Policy: prepared.Policy})
 	require.NoError(t, err)
-	api.commitMPCDKG(ctx, dkg)
+	require.NoError(t, api.commitMPCDKG(ctx, dkg))
 	return &demoKeyEnv{api: api, session: session, vault: v, creds: creds, key: key, signers: signers}
 }

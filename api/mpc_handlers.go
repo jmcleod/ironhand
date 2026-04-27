@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -150,7 +151,16 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dkg != nil {
-		a.commitMPCDKG(r.Context(), dkg)
+		if err := a.commitMPCDKG(r.Context(), dkg); err != nil {
+			_, _ = session.SetMPCKeyStatus(r.Context(), key.KeyID, vault.MPCKeyStatusDisabled)
+			if attempt, getErr := session.GetMPCDKGAttempt(r.Context(), dkg.SessionID); getErr == nil {
+				attempt.Status = vault.MPCDKGStatusFailed
+				attempt.LastError = err.Error()
+				_, _ = session.SaveMPCDKGAttempt(r.Context(), *attempt)
+			}
+			mapError(w, err)
+			return
+		}
 		if attempt, err := session.GetMPCDKGAttempt(r.Context(), dkg.SessionID); err == nil {
 			attempt.Status = vault.MPCDKGStatusCommitted
 			attempt.LastError = ""
@@ -317,7 +327,16 @@ func (a *API) RotateMPCKey(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	a.commitMPCDKG(r.Context(), dkg)
+	if err := a.commitMPCDKG(r.Context(), dkg); err != nil {
+		_, _ = session.SetMPCKeyStatus(r.Context(), key.KeyID, vault.MPCKeyStatusDisabled)
+		if attempt, getErr := session.GetMPCDKGAttempt(r.Context(), dkg.SessionID); getErr == nil {
+			attempt.Status = vault.MPCDKGStatusFailed
+			attempt.LastError = err.Error()
+			_, _ = session.SaveMPCDKGAttempt(r.Context(), *attempt)
+		}
+		mapError(w, err)
+		return
+	}
 	a.audit.logEvent(AuditMPCDKGCommitted, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("mpc_key_id", key.KeyID),
@@ -702,11 +721,12 @@ func (a *API) abortMPCDKG(ctx context.Context, dkg *mpcDKGOrchestration) {
 	}
 }
 
-func (a *API) commitMPCDKG(ctx context.Context, dkg *mpcDKGOrchestration) {
+func (a *API) commitMPCDKG(ctx context.Context, dkg *mpcDKGOrchestration) error {
 	if dkg == nil {
-		return
+		return nil
 	}
 	payload := mpcsigner.CommitDKGRequest{DKGSessionID: dkg.SessionID, KeyID: dkg.KeyID}
+	errs := make([]error, 0)
 	for _, member := range dkg.Members {
 		if err := a.mpcClient.PostJSON(member.URL+"/signer/dkg/commit", payload, nil); err != nil {
 			a.audit.logger.WarnContext(ctx, "failed to commit MPC DKG signer state",
@@ -714,8 +734,13 @@ func (a *API) commitMPCDKG(ctx context.Context, dkg *mpcDKGOrchestration) {
 				slog.String("dkg_session_id", dkg.SessionID),
 				slog.Uint64("party_id", uint64(member.PartyID)),
 				slog.String("error", err.Error()))
+			errs = append(errs, fmt.Errorf("party %d commit failed: %w", member.PartyID, err))
 		}
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf("MPC DKG commit failed for key %q: %w", dkg.KeyID, errors.Join(errs...))
+	}
+	return nil
 }
 
 func (a *API) requestMPCSessionApprovalWithSigner(ctx context.Context, session *vault.Session, sessionID string, partyID uint32) (*vault.MPCSigningSession, error) {
