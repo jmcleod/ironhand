@@ -870,7 +870,7 @@ export interface paths {
         put?: never;
         /**
          * Create a replacement MPC key
-         * @description Runs a fresh DKG ceremony for a replacement key using active original participants by default, links the new key to the old key, and archives the old key unless archive_old is false.
+         * @description Runs a fresh DKG ceremony for a replacement key using active original participants by default. The old key is archived only after every selected signer durably commits the replacement key; signer commit failures leave the old key unchanged and mark the replacement attempt failed.
          */
         post: operations["rotateMPCKey"];
         delete?: never;
@@ -1521,6 +1521,7 @@ export interface components {
             allowed_roles?: ("owner" | "writer" | "reader")[];
             allowed_destinations?: string[];
             denied_destinations?: string[];
+            /** @description Maximum allowed transaction value as a non-negative decimal integer in the chain's smallest unit. When set, signing session metadata must include a valid value at or below this limit. */
             max_value?: string;
         };
         MPCTransactionMetadata: {
@@ -1529,6 +1530,7 @@ export interface components {
             network?: string;
             digest?: string;
             destination?: string;
+            /** @description Transaction value as a non-negative decimal integer in the chain's smallest unit. Required when the MPC key policy sets max_value. */
             value?: string;
             fields?: {
                 [key: string]: unknown;
@@ -1653,7 +1655,7 @@ export interface components {
             member_ids?: string[];
             /** @description Optional precomputed DKG commitments. If omitted with fragments, the coordinator orchestrates DKG through registered signers. */
             commitments?: components["schemas"]["MPCPublicCommitment"][];
-            /** @description Optional encrypted fragments keyed by member ID. */
+            /** @description Optional encrypted fragments keyed by member ID. Manual imports are accepted only when each fragment is bound to the requested key/party and its public share commitment matches the submitted DKG commitments. */
             fragments?: {
                 [key: string]: components["schemas"]["MPCEncryptedFragment"];
             };
@@ -1682,6 +1684,7 @@ export interface components {
             party_id?: number;
         };
         CompleteMPCSigningSessionRequest: {
+            /** @description Signing commitments used for the completed transcript. They must exactly match signature.commitments and belong to the selected session participants. */
             commitments?: components["schemas"]["MPCCommitment"][];
             signature?: components["schemas"]["MPCSignature"];
         };

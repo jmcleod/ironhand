@@ -847,6 +847,7 @@ export interface MPCPolicy {
   allowed_roles?: string[];
   allowed_destinations?: string[];
   denied_destinations?: string[];
+  // Non-negative decimal integer in the target chain's smallest unit.
   max_value?: string;
 }
 export interface MPCTransactionMetadata {
@@ -855,6 +856,7 @@ export interface MPCTransactionMetadata {
   network?: string;
   digest: string;
   destination?: string;
+  // Required when the selected key policy sets max_value.
   value?: string;
   fields?: Record<string, unknown>;
 }

@@ -140,8 +140,10 @@ IronHand can run vault-scoped MPC flows where each active vault member maps to a
 - Start each signer with `ironhand signer --state-file ./signer-N.sealed --state-passphrase ...` so signer identity and finalized key metadata survive restarts.
 - Set `--mpc-shared-key` or `IRONHAND_MPC_SHARED_KEY` on both server and signers to HMAC-sign internal signer calls. Unsigned signer calls are rejected unless `--allow-insecure-mpc-local-dev` is explicitly set and the request is loopback-local.
 - Use `--mpc-client-cert`, `--mpc-client-key`, `--mpc-signer-ca`, `--tls-cert`, `--tls-key`, and `--client-ca` when signers require mTLS.
-- Coordinator-run DKG uses a per-attempt `dkg_session_id`; failed ceremonies are aborted on touched signers and committed only after the vault stores the key.
-- Signing approvals are bound to the vault, key, session, threshold, participant set, message hash, and expiry. Completion requires a valid threshold-sized approval subset before the session expiry; session TTL defaults to 15 minutes and is capped at 30 minutes.
+- Coordinator-run DKG uses a per-attempt `dkg_session_id`; failed ceremonies are aborted on touched signers and committed only after the vault stores the key. Key rotation archives the old key only after every selected signer durably commits the replacement key.
+- Manual MPC key imports validate that encrypted fragments are bound to the requested key/party and that each fragment's public share commitment matches the submitted DKG commitments.
+- Signing approvals are bound to the vault, key, session, threshold, participant set, message hash, and expiry. Completion requires a valid threshold-sized approval subset before the session expiry, and the recorded commitments must match the verified signature transcript; session TTL defaults to 15 minutes and is capped at 30 minutes.
+- MPC `max_value` policy limits are enforced as non-negative decimal integer strings in the target chain's smallest unit. When a key policy sets `max_value`, signing metadata must include a valid `value` at or below that limit.
 - Signers no longer auto-approve coordinator requests. The coordinator creates signer-local approval requests and an operator must approve them with `--operator-token` / `IRONHAND_MPC_SIGNER_OPERATOR_TOKEN` before signing can complete.
 
 Signer operators can inspect and approve pending requests directly on the signer:

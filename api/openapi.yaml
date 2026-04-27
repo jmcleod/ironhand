@@ -856,6 +856,8 @@ components:
             type: string
         max_value:
           type: string
+          pattern: '^[0-9]+$'
+          description: Maximum allowed transaction value as a non-negative decimal integer in the chain's smallest unit. When set, signing session metadata must include a valid value at or below this limit.
 
     MPCTransactionMetadata:
       type: object
@@ -872,6 +874,8 @@ components:
           type: string
         value:
           type: string
+          pattern: '^[0-9]+$'
+          description: Transaction value as a non-negative decimal integer in the chain's smallest unit. Required when the MPC key policy sets max_value.
         fields:
           type: object
           additionalProperties: true
@@ -1125,7 +1129,7 @@ components:
             $ref: '#/components/schemas/MPCPublicCommitment'
         fragments:
           type: object
-          description: Optional encrypted fragments keyed by member ID.
+          description: Optional encrypted fragments keyed by member ID. Manual imports are accepted only when each fragment is bound to the requested key/party and its public share commitment matches the submitted DKG commitments.
           additionalProperties:
             $ref: '#/components/schemas/MPCEncryptedFragment'
         policy:
@@ -1173,6 +1177,7 @@ components:
       properties:
         commitments:
           type: array
+          description: Signing commitments used for the completed transcript. They must exactly match signature.commitments and belong to the selected session participants.
           items:
             $ref: '#/components/schemas/MPCCommitment'
         signature:
@@ -2888,8 +2893,10 @@ paths:
       operationId: rotateMPCKey
       description: >
         Runs a fresh DKG ceremony for a replacement key using active original
-        participants by default, links the new key to the old key, and archives
-        the old key unless archive_old is false.
+        participants by default. The old key is archived only after every
+        selected signer durably commits the replacement key; signer commit
+        failures leave the old key unchanged and mark the replacement attempt
+        failed.
       security:
         - SessionAuth: []
       parameters:

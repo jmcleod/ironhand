@@ -29,6 +29,20 @@ The API exposes `GET /api/v1/vaults/<vault_id>/mpc/metrics`, returning counts fo
 
 These are intended for dashboards and alerting. They are vault-scoped and require normal vault authentication.
 
+## Key Generation And Rotation
+
+Coordinator-run DKG stores a vault DKG attempt, starts/finalizes selected signers, stores the vault key record, and then requires every selected signer to durably commit the key. If any signer commit fails, the attempt is marked failed and the key is disabled instead of being treated as active.
+
+Replacement-key rotation follows the same rule and only archives the old key after all selected signers commit the replacement. This prevents a vault from moving to a replacement key that signer processes cannot actually use.
+
+Manual key imports are deliberately narrow. Supplied fragments must be keyed by member ID, bound to the requested key ID and party ID, use the supported encrypted-fragment envelope, and expose a public share commitment that matches the submitted DKG commitments. The vault still cannot decrypt signer fragments; production-grade import should add signer attestations or a vetted provider import proof.
+
+## Policy And Completion Validation
+
+`max_value` is enforced during signing-session creation. Both `policy.max_value` and transaction metadata `value` are non-negative decimal integer strings in the target chain's smallest unit. If `max_value` is configured and the transaction value is missing, malformed, or above the limit, session creation is denied.
+
+Manual signing completion must submit commitments that exactly match `signature.commitments`; those commitments must be a threshold-sized subset of the selected session participants and each signature share must correspond to a commitment. The session stores the canonical commitments from the verified signature transcript.
+
 ## Audit Events
 
 MPC audit events include signer registration, DKG commit/abort, key creation, key rotation, key status changes, signing requests, approval requests, approvals, and signing completion.
