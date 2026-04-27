@@ -147,11 +147,9 @@ IronHand can run vault-scoped MPC flows where each active vault member maps to a
 Signer operators can inspect and approve pending requests directly on the signer:
 
 ```sh
-curl -H "X-Ironhand-Signer-Operator-Token: $IRONHAND_MPC_SIGNER_OPERATOR_TOKEN" \
-  http://127.0.0.1:8081/signer/approval-requests
-
-curl -X POST -H "X-Ironhand-Signer-Operator-Token: $IRONHAND_MPC_SIGNER_OPERATOR_TOKEN" \
-  http://127.0.0.1:8081/signer/approval-requests/<request_id>/approve
+ironhand signer approvals list --url http://127.0.0.1:8081
+ironhand signer approvals approve <request_id> --url http://127.0.0.1:8081
+ironhand signer approvals reject <request_id> --reason "not expected"
 ```
 
 The available algorithm is `experimental-p256-schnorr-v1`. It is suitable for protocol development and UX testing, not production funds. A production deployment should replace this boundary with a vetted threshold signature implementation such as FROST over the target production curve.

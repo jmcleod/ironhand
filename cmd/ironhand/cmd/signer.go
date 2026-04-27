@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -33,6 +36,8 @@ var (
 	signerDevMemory        bool
 	signerAllowInsecureDev bool
 	signerOperatorToken    string
+	signerApprovalURL      string
+	signerApprovalReason   string
 )
 
 var signerCmd = &cobra.Command{
@@ -156,8 +161,65 @@ var signerCmd = &cobra.Command{
 	},
 }
 
+var signerApprovalsCmd = &cobra.Command{
+	Use:   "approvals",
+	Short: "Manage local MPC signer approval requests",
+}
+
+var signerApprovalsListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List pending local signer approval requests",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var resp mpcsigner.ListApprovalRequestsResponse
+		if err := signerApprovalJSON(http.MethodGet, "/signer/approval-requests", nil, &resp); err != nil {
+			return err
+		}
+		for _, request := range resp.Requests {
+			fmt.Printf("%s\t%s\tkey=%s\tsession=%s\texpires=%s\tmessage_type=%s\n",
+				request.RequestID,
+				request.Status,
+				request.Request.KeyID,
+				request.Request.SessionID,
+				request.Request.ExpiresAt.Format(time.RFC3339),
+				request.Request.MessageType)
+		}
+		return nil
+	},
+}
+
+var signerApprovalsApproveCmd = &cobra.Command{
+	Use:   "approve <request_id>",
+	Short: "Approve a local signer approval request",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var resp mpcsigner.CreateApprovalRequestResponse
+		if err := signerApprovalJSON(http.MethodPost, "/signer/approval-requests/"+args[0]+"/approve", map[string]string{}, &resp); err != nil {
+			return err
+		}
+		fmt.Printf("approved %s for session %s\n", resp.Request.RequestID, resp.Request.Request.SessionID)
+		return nil
+	},
+}
+
+var signerApprovalsRejectCmd = &cobra.Command{
+	Use:   "reject <request_id>",
+	Short: "Reject a local signer approval request",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var resp mpcsigner.CreateApprovalRequestResponse
+		payload := mpcsigner.RejectApprovalRequest{Reason: signerApprovalReason}
+		if err := signerApprovalJSON(http.MethodPost, "/signer/approval-requests/"+args[0]+"/reject", payload, &resp); err != nil {
+			return err
+		}
+		fmt.Printf("rejected %s for session %s\n", resp.Request.RequestID, resp.Request.Request.SessionID)
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(signerCmd)
+	signerCmd.AddCommand(signerApprovalsCmd)
+	signerApprovalsCmd.AddCommand(signerApprovalsListCmd, signerApprovalsApproveCmd, signerApprovalsRejectCmd)
 	signerCmd.Flags().StringVar(&signerListen, "listen", "127.0.0.1:8081", "Address for the signer service to listen on")
 	signerCmd.Flags().StringVar(&signerMemberID, "member-id", "", "IronHand vault member ID represented by this signer")
 	signerCmd.Flags().Uint32Var(&signerPartyID, "party-id", 0, "Stable MPC party ID for this signer")
@@ -172,4 +234,46 @@ func init() {
 	signerCmd.Flags().BoolVar(&signerDevMemory, "dev-in-memory", false, "Run signer with volatile in-memory state for tests only")
 	signerCmd.Flags().BoolVar(&signerAllowInsecureDev, "allow-insecure-mpc-local-dev", false, "Allow unsigned MPC signer calls from loopback clients only")
 	signerCmd.Flags().StringVar(&signerOperatorToken, "operator-token", "", "Local operator token for approving/rejecting signer approval requests (or IRONHAND_MPC_SIGNER_OPERATOR_TOKEN)")
+	signerApprovalsCmd.PersistentFlags().StringVar(&signerApprovalURL, "url", "http://127.0.0.1:8081", "Local signer URL")
+	signerApprovalsCmd.PersistentFlags().StringVar(&signerOperatorToken, "operator-token", "", "Local operator token (or IRONHAND_MPC_SIGNER_OPERATOR_TOKEN)")
+	signerApprovalsRejectCmd.Flags().StringVar(&signerApprovalReason, "reason", "", "Optional rejection reason")
+}
+
+func signerApprovalJSON(method, path string, in any, out any) error {
+	token := signerOperatorToken
+	if token == "" {
+		token = os.Getenv("IRONHAND_MPC_SIGNER_OPERATOR_TOKEN")
+	}
+	if token == "" {
+		return fmt.Errorf("--operator-token or IRONHAND_MPC_SIGNER_OPERATOR_TOKEN is required")
+	}
+	var body []byte
+	var err error
+	if in != nil {
+		body, err = json.Marshal(in)
+		if err != nil {
+			return err
+		}
+	}
+	req, err := http.NewRequest(method, mpcsigner.NormalizeURL(signerApprovalURL)+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Ironhand-Signer-Operator-Token", token)
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("signer returned status %d: %s", resp.StatusCode, string(data))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
