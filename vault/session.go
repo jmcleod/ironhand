@@ -612,7 +612,10 @@ func (s *Session) ChangeMemberRole(ctx context.Context, memberID string, newRole
 	if err != nil {
 		return err
 	}
-	return s.vault.repo.Put(s.vault.id, recordTypeMember, memberID, env)
+	if err := s.vault.repo.Put(s.vault.id, recordTypeMember, memberID, env); err != nil {
+		return err
+	}
+	return s.syncMPCParticipantRole(ctx, recBuf.Bytes(), memberID, newRole)
 }
 
 // RequireAdmin verifies the session member currently has owner/admin access.

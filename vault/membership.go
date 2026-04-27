@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/awnumar/memguard"
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
@@ -299,7 +300,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 	}
 
 	if rotateRoot {
-		mpcWrites, err := rewrapRecordType(state.VaultID, s.vault.repo, recordTypeMPCKey, recordKey, writeRecordKey, mpcRecordAAD)
+		mpcWrites, err := rewrapMPCKeysForMembershipChange(state.VaultID, s.vault.repo, recordKey, writeRecordKey, revokeMemberID)
 		if err != nil {
 			return err
 		}
@@ -416,6 +417,43 @@ func rewrapRecordType(vaultID string, repo storage.Repository, recordType string
 		writes = append(writes, writeOp{recordType: recordType, recordID: id, envelope: newEnv})
 	}
 	return writes, nil
+}
+
+func rewrapMPCKeysForMembershipChange(vaultID string, repo storage.Repository, oldRecordKey, newRecordKey []byte, revokedMemberID *string) ([]writeOp, error) {
+	ids, err := repo.List(vaultID, recordTypeMPCKey)
+	if err != nil {
+		return nil, err
+	}
+	writes := make([]writeOp, 0, len(ids))
+	for _, id := range ids {
+		env, err := repo.Get(vaultID, recordTypeMPCKey, id)
+		if err != nil {
+			return nil, err
+		}
+		key, err := openMPCRecord[MPCKey](vaultID, recordTypeMPCKey, id, oldRecordKey, env)
+		if err != nil {
+			return nil, fmt.Errorf("rewrap %s/%s: %w", recordTypeMPCKey, id, err)
+		}
+		if revokedMemberID != nil && mpcKeyHasMember(key, *revokedMemberID) && key.Status != MPCKeyStatusDestroyed {
+			key.Status = MPCKeyStatusReshareRequired
+			key.UpdatedAt = time.Now().UTC()
+		}
+		newEnv, err := sealMPCRecord(vaultID, recordTypeMPCKey, id, newRecordKey, key)
+		if err != nil {
+			return nil, err
+		}
+		writes = append(writes, writeOp{recordType: recordTypeMPCKey, recordID: id, envelope: newEnv})
+	}
+	return writes, nil
+}
+
+func mpcKeyHasMember(key *MPCKey, memberID string) bool {
+	for _, participant := range key.Participants {
+		if participant.MemberID == memberID {
+			return true
+		}
+	}
+	return false
 }
 
 func mpcRecordAAD(vaultID, recordType, recordID string) []byte {

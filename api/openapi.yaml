@@ -1057,6 +1057,9 @@ components:
         created_at:
           type: string
           format: date-time
+        updated_at:
+          type: string
+          format: date-time
         public_key:
           $ref: '#/components/schemas/MPCPublicKey'
         participants:
@@ -1154,6 +1157,15 @@ components:
             $ref: '#/components/schemas/MPCCommitment'
         signature:
           $ref: '#/components/schemas/MPCSignature'
+
+    UpdateMPCKeyStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [active, disabled, archived, rotation_required, reshare_required, destroyed]
 
     MPCSigningSession:
       type: object
@@ -2768,6 +2780,42 @@ paths:
           description: Unauthorized
         '403':
           description: Experimental MPC disabled
+
+  /vaults/{vaultID}/mpc/keys/{keyID}/status:
+    post:
+      summary: Update an MPC key lifecycle status
+      operationId: updateMPCKeyStatus
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: keyID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMPCKeyStatusRequest'
+      responses:
+        '200':
+          description: MPC key status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MPCKey'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Experimental MPC disabled or step-up required
 
   /vaults/{vaultID}/mpc/keys/{keyID}/sessions:
     post:

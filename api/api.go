@@ -391,6 +391,7 @@ func (a *API) Router() chi.Router {
 			r.Get("/dkg/{dkgSessionID}", a.GetMPCDKGAttempt)
 			r.Post("/dkg/{dkgSessionID}/abort", a.AbortMPCDKGAttempt)
 			r.Get("/keys/{keyID}", a.GetMPCKey)
+			r.Post("/keys/{keyID}/status", a.UpdateMPCKeyStatus)
 			r.Post("/keys/{keyID}/sessions", a.CreateMPCSigningSession)
 			r.Post("/sessions/{sessionID}/approvals", a.AddMPCApproval)
 			r.Post("/sessions/{sessionID}/complete", a.CompleteMPCSigningSession)

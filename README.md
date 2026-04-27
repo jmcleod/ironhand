@@ -163,6 +163,8 @@ The available algorithm is `experimental-p256-schnorr-v1`. It is suitable for pr
 
 Available MPC providers are exposed at `GET /api/v1/vaults/<vault_id>/mpc/providers`; the current provider reports `production_ready: false` and `supports_reshare: false` to make the experimental boundary explicit.
 
+MPC keys have lifecycle statuses (`active`, `disabled`, `archived`, `rotation_required`, `reshare_required`, `destroyed`). Revoking a vault member automatically marks any MPC key that included that member as `reshare_required`; admins can also set status explicitly with `POST /api/v1/vaults/<vault_id>/mpc/keys/<key_id>/status`.
+
 ### Storage
 
 All records are stored as AES-256-GCM encrypted envelopes with AAD that binds the ciphertext to its vault, record type, record ID, epoch, and version. This prevents record swapping and cross-vault replay attacks.

@@ -119,6 +119,7 @@ type MPCKey struct {
 	Threshold    int                    `json:"threshold"`
 	Status       MPCKeyStatus           `json:"status"`
 	CreatedAt    time.Time              `json:"created_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
 	PublicKey    mpc.PublicKey          `json:"public_key"`
 	Participants []MPCParticipant       `json:"participants"`
 	Commitments  []mpc.PublicCommitment `json:"commitments"`
@@ -301,6 +302,7 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now().UTC()
 	key := &MPCKey{
 		KeyID:        create.KeyID,
 		VaultID:      s.vault.id,
@@ -309,7 +311,8 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 		Provider:     providerInfo,
 		Threshold:    create.Threshold,
 		Status:       MPCKeyStatusActive,
-		CreatedAt:    time.Now().UTC(),
+		CreatedAt:    now,
+		UpdatedAt:    now,
 		PublicKey:    meta.Public(),
 		Participants: participants,
 		Commitments:  append([]mpc.PublicCommitment(nil), create.Commitments...),
@@ -400,6 +403,17 @@ func (s *Session) GetMPCKey(ctx context.Context, keyID string) (*MPCKey, error) 
 		return nil, err
 	}
 	return loadMPCKey(s.vault.id, s.vault.repo, recBuf.Bytes(), keyID)
+}
+
+func (s *Session) SetMPCKeyStatus(ctx context.Context, keyID string, status MPCKeyStatus) (*MPCKey, error) {
+	if !validMPCKeyStatus(status) {
+		return nil, validationErrorf("invalid MPC key status %q", status)
+	}
+	return s.updateMPCKey(ctx, keyID, func(key *MPCKey) error {
+		key.Status = status
+		key.UpdatedAt = time.Now().UTC()
+		return nil
+	})
 }
 
 func (s *Session) SaveMPCDKGAttempt(ctx context.Context, attempt MPCDKGAttempt) (*MPCDKGAttempt, error) {
@@ -930,6 +944,45 @@ func (s *Session) updateMPCSigningSession(ctx context.Context, sessionID string,
 	return session, nil
 }
 
+func (s *Session) updateMPCKey(ctx context.Context, keyID string, update func(key *MPCKey) error) (*MPCKey, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	if err := validateID(keyID, "MPC key ID"); err != nil {
+		return nil, err
+	}
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	if _, err := s.authorize(ctx, accessAdmin, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+	env, err := s.vault.repo.Get(s.vault.id, recordTypeMPCKey, keyID)
+	if err != nil {
+		return nil, err
+	}
+	key, err := openMPCRecord[MPCKey](s.vault.id, recordTypeMPCKey, keyID, recBuf.Bytes(), env)
+	if err != nil {
+		return nil, err
+	}
+	if err := update(key); err != nil {
+		return nil, err
+	}
+	newEnv, err := sealMPCRecord(s.vault.id, recordTypeMPCKey, keyID, recBuf.Bytes(), key)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.vault.repo.PutCAS(s.vault.id, recordTypeMPCKey, keyID, env.Version, newEnv); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
 func selectMPCParticipants(members []Member, memberIDs []string) ([]Member, error) {
 	requested := make(map[string]struct{}, len(memberIDs))
 	for _, memberID := range memberIDs {
@@ -967,6 +1020,54 @@ func selectMPCParticipants(members []Member, memberIDs []string) ([]Member, erro
 	}
 	sort.Slice(selected, func(i, j int) bool { return selected[i].MPCPartyID < selected[j].MPCPartyID })
 	return selected, nil
+}
+
+func validMPCKeyStatus(status MPCKeyStatus) bool {
+	switch status {
+	case MPCKeyStatusActive, MPCKeyStatusDisabled, MPCKeyStatusArchived, MPCKeyStatusRotationRequired, MPCKeyStatusReshareRequired, MPCKeyStatusDestroyed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Session) syncMPCParticipantRole(ctx context.Context, recordKey []byte, memberID string, role MemberRole) error {
+	ids, err := s.vault.repo.List(s.vault.id, recordTypeMPCKey)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		env, err := s.vault.repo.Get(s.vault.id, recordTypeMPCKey, id)
+		if err != nil {
+			return err
+		}
+		key, err := openMPCRecord[MPCKey](s.vault.id, recordTypeMPCKey, id, recordKey, env)
+		if err != nil {
+			return err
+		}
+		changed := false
+		for i := range key.Participants {
+			if key.Participants[i].MemberID == memberID && key.Participants[i].Role != role {
+				key.Participants[i].Role = role
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		key.UpdatedAt = time.Now().UTC()
+		newEnv, err := sealMPCRecord(s.vault.id, recordTypeMPCKey, id, recordKey, key)
+		if err != nil {
+			return err
+		}
+		if err := s.vault.repo.PutCAS(s.vault.id, recordTypeMPCKey, id, env.Version, newEnv); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateMPCCommitments(members []Member, commitments []mpc.PublicCommitment) error {

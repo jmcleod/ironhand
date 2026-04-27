@@ -171,6 +171,41 @@ func (a *API) GetMPCKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, MPCKeyResponse(*key))
 }
 
+func (a *API) UpdateMPCKeyStatus(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	keyID := chi.URLParam(r, "keyID")
+	creds := credentialsFromContext(r.Context())
+
+	if !a.requireStepUp(w, r) {
+		return
+	}
+	req, ok := decodeJSON[UpdateMPCKeyStatusRequest](w, r, maxSmallBodySize)
+	if !ok {
+		return
+	}
+	if req.Status == "" {
+		writeError(w, http.StatusBadRequest, "status is required")
+		return
+	}
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	key, err := session.SetMPCKeyStatus(r.Context(), keyID, req.Status)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	a.audit.logEvent(AuditMPCKeyStatusChanged, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("mpc_key_id", key.KeyID),
+		slog.String("status", string(key.Status)))
+	writeJSON(w, http.StatusOK, MPCKeyResponse(*key))
+}
+
 func (a *API) ListMPCDKGAttempts(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())

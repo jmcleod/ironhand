@@ -209,6 +209,10 @@ type CompleteMPCSigningSessionRequest struct {
 	Signature   *mpc.Signature   `json:"signature,omitempty"`
 }
 
+type UpdateMPCKeyStatusRequest struct {
+	Status vault.MPCKeyStatus `json:"status"`
+}
+
 type MPCKeyResponse = vault.MPCKey
 type MPCSigningSessionResponse = vault.MPCSigningSession
 type MPCDKGAttemptResponse = vault.MPCDKGAttempt

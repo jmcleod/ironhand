@@ -198,4 +198,18 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	time.Sleep(time.Millisecond)
 	_, err = session.CompleteMPCSigningSession(ctx, expiredSession.SessionID, nil, nil)
 	require.ErrorContains(t, err, "expired")
+
+	updatedKey, err := session.SetMPCKeyStatus(ctx, key.KeyID, MPCKeyStatusDisabled)
+	require.NoError(t, err)
+	assert.Equal(t, MPCKeyStatusDisabled, updatedKey.Status)
+	_, err = session.CreateMPCSigningSession(ctx, key.KeyID, []byte("disabled payload"), []uint32{1, 2}, time.Minute)
+	require.ErrorContains(t, err, "is not active")
+	updatedKey, err = session.SetMPCKeyStatus(ctx, key.KeyID, MPCKeyStatusActive)
+	require.NoError(t, err)
+	assert.Equal(t, MPCKeyStatusActive, updatedKey.Status)
+
+	require.NoError(t, session.RevokeMember(ctx, "bob"))
+	updatedKey, err = session.GetMPCKey(ctx, key.KeyID)
+	require.NoError(t, err)
+	assert.Equal(t, MPCKeyStatusReshareRequired, updatedKey.Status)
 }

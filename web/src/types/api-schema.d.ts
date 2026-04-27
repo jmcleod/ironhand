@@ -825,6 +825,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vaults/{vaultID}/mpc/keys/{keyID}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Update an MPC key lifecycle status */
+        post: operations["updateMPCKeyStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/vaults/{vaultID}/mpc/keys/{keyID}/sessions": {
         parameters: {
             query?: never;
@@ -1568,6 +1585,8 @@ export interface components {
             status?: "active" | "disabled" | "archived" | "rotation_required" | "reshare_required" | "destroyed";
             /** Format: date-time */
             created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
             public_key?: components["schemas"]["MPCPublicKey"];
             participants?: components["schemas"]["MPCParticipant"][];
             commitments?: components["schemas"]["MPCPublicCommitment"][];
@@ -1615,6 +1634,10 @@ export interface components {
         CompleteMPCSigningSessionRequest: {
             commitments?: components["schemas"]["MPCCommitment"][];
             signature?: components["schemas"]["MPCSignature"];
+        };
+        UpdateMPCKeyStatusRequest: {
+            /** @enum {string} */
+            status: "active" | "disabled" | "archived" | "rotation_required" | "reshare_required" | "destroyed";
         };
         MPCSigningSession: {
             session_id?: string;
@@ -3732,6 +3755,50 @@ export interface operations {
                 content?: never;
             };
             /** @description Experimental MPC disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateMPCKeyStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF double-submit token. Must match the value of the `ironhand_csrf` cookie. Required on all mutating (POST/PUT/DELETE) requests that use cookie-based session authentication. GET/HEAD/OPTIONS requests and header-authenticated requests are exempt. */
+                "X-CSRF-Token": components["parameters"]["CSRFToken"];
+            };
+            path: {
+                vaultID: string;
+                keyID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMPCKeyStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description MPC key status updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCKey"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled or step-up required */
             403: {
                 headers: {
                     [name: string]: unknown;
