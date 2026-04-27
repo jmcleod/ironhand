@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-openapi/runtime/middleware"
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/jmcleod/ironhand/internal/mpcclient"
 	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/pki"
 	"github.com/jmcleod/ironhand/storage"
@@ -49,6 +51,8 @@ type API struct {
 	auditAppendsSinceRetention atomic.Int64  // counts appends since last retention check
 	webhook                    *auditWebhook // nil when not configured
 	noRateLimit                bool          // disables all rate limiters (for E2E testing only)
+	mpcClient                  *mpcclient.Client
+	experimentalMPCEnabled     bool
 }
 
 // DefaultIdleTimeout is the default session idle timeout (30 minutes).
@@ -197,6 +201,29 @@ func WithNoRateLimit() Option {
 	}
 }
 
+// WithMPCSignerAuth configures the shared HMAC key used for internal calls to
+// MPC signer processes. Empty keys are accepted for local development only.
+func WithMPCSignerAuth(sharedKey []byte) Option {
+	return func(a *API) {
+		a.mpcClient = mpcclient.New(sharedKey, nil)
+	}
+}
+
+func WithMPCSignerTransport(sharedKey []byte, tlsConfig *tls.Config) Option {
+	return func(a *API) {
+		a.mpcClient = mpcclient.New(sharedKey, tlsConfig)
+	}
+}
+
+// WithExperimentalMPC enables the current MPC implementation. The available
+// algorithm is intentionally marked experimental until replaced by a
+// production-vetted threshold signature implementation.
+func WithExperimentalMPC(enabled bool) Option {
+	return func(a *API) {
+		a.experimentalMPCEnabled = enabled
+	}
+}
+
 // kdfParamsForNewVault returns the Argon2id parameters to use when creating
 // new vaults or credentials. Returns the configured profile or the default.
 func (a *API) kdfParamsForNewVault() util.Argon2idParams {
@@ -227,6 +254,9 @@ func New(repo storage.Repository, epochCache vault.EpochCache, opts ...Option) *
 	}
 	if a.audit == nil {
 		a.audit = newAuditLogger(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	}
+	if a.mpcClient == nil {
+		a.mpcClient = mpcclient.New(nil, nil)
 	}
 	// Default to a logging-based alert handler so anomaly detection is
 	// always active, even when no custom callback is provided.
@@ -348,6 +378,19 @@ func (a *API) Router() chi.Router {
 		r.Delete("/invites/{token}", a.CancelInvite)
 		r.Post("/export", a.ExportVault)
 		r.Post("/import", a.ImportVault)
+
+		// Vault-scoped MPC routes. A vault is the MPC group; keys and
+		// signing sessions are attached to vault membership.
+		r.Route("/mpc", func(r chi.Router) {
+			r.Use(a.requireExperimentalMPC)
+			r.Post("/signers/{memberID}", a.RegisterMPCSigner)
+			r.Get("/keys", a.ListMPCKeys)
+			r.Post("/keys", a.CreateMPCKey)
+			r.Get("/keys/{keyID}", a.GetMPCKey)
+			r.Post("/keys/{keyID}/sessions", a.CreateMPCSigningSession)
+			r.Post("/sessions/{sessionID}/approvals", a.AddMPCApproval)
+			r.Post("/sessions/{sessionID}/complete", a.CompleteMPCSigningSession)
+		})
 
 		// PKI / Certificate Authority routes
 		r.Route("/pki", func(r chi.Router) {

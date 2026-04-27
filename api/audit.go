@@ -49,6 +49,11 @@ const (
 	AuditInviteCanceled         AuditEvent = "invite_canceled"
 	AuditStepUpTOTP             AuditEvent = "step_up_totp"
 	AuditStepUpPasskey          AuditEvent = "step_up_passkey"
+	AuditMPCSignerRegistered    AuditEvent = "mpc_signer_registered"
+	AuditMPCKeyCreated          AuditEvent = "mpc_key_created"
+	AuditMPCSigningRequested    AuditEvent = "mpc_signing_requested"
+	AuditMPCSigningApproved     AuditEvent = "mpc_signing_approved"
+	AuditMPCSigningCompleted    AuditEvent = "mpc_signing_completed"
 )
 
 // auditLogger wraps slog.Logger for structured security audit logging.

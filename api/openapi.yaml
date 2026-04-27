@@ -2062,6 +2062,190 @@ paths:
         '404':
           description: Invite not found
 
+  /vaults/{vaultID}/mpc/signers/{memberID}:
+    post:
+      summary: Register a vault member's MPC signer identity
+      operationId: registerMPCSigner
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: memberID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: MPC signer registered
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/mpc/keys:
+    get:
+      summary: List vault MPC keys
+      operationId: listMPCKeys
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MPC key list
+        '401':
+          description: Unauthorized
+    post:
+      summary: Store a vault-scoped MPC key from a DKG ceremony
+      operationId: createMPCKey
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: MPC key created
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/mpc/keys/{keyID}:
+    get:
+      summary: Get a vault MPC key
+      operationId: getMPCKey
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: keyID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MPC key
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/mpc/keys/{keyID}/sessions:
+    post:
+      summary: Create an MPC signing session
+      operationId: createMPCSigningSession
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: keyID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: MPC signing session created
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/mpc/sessions/{sessionID}/approvals:
+    post:
+      summary: Add an MPC signing approval
+      operationId: addMPCApproval
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: MPC approval recorded
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/mpc/sessions/{sessionID}/complete:
+    post:
+      summary: Complete and verify an MPC signing session
+      operationId: completeMPCSigningSession
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sessionID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: MPC signing session completed
+        '401':
+          description: Unauthorized
+
   /vaults/{vaultID}/pki/init:
     post:
       summary: Initialize vault as a Certificate Authority

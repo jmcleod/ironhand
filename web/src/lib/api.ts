@@ -33,7 +33,9 @@ async function readError(resp: Response): Promise<never> {
   let methods: string[] | undefined;
   try {
     const data = await resp.json();
-    if (typeof data?.error === 'string') {
+    if (typeof data?.detail === 'string') {
+      message = data.detail;
+    } else if (typeof data?.error === 'string') {
       message = data.error;
     }
     if (Array.isArray(data?.methods)) {
@@ -777,4 +779,101 @@ export async function finishStepUpPasskey(credential: unknown): Promise<StepUpRe
     body: JSON.stringify(credential),
   });
   return (await resp.json()) as StepUpResult;
+}
+
+// ---------------------------------------------------------------------------
+// MPC
+// ---------------------------------------------------------------------------
+
+export interface MPCPoint { x: string; y: string }
+export interface MPCPublicKey { curve: string; encoded: string; x: string; y: string; threshold: number; parties: number }
+export interface MPCParticipant {
+  member_id: string;
+  party_id: number;
+  role: string;
+  signer_url: string;
+  encryption_public_key: string;
+  approval_public_key: string;
+  signer_status: string;
+  public_share_commitment?: MPCPoint;
+}
+export interface MPCKey {
+  key_id: string;
+  vault_id: string;
+  algorithm: string;
+  curve: string;
+  threshold: number;
+  status: string;
+  created_at: string;
+  public_key: MPCPublicKey;
+  participants: MPCParticipant[];
+}
+export interface MPCSigningSession {
+  session_id: string;
+  vault_id: string;
+  key_id: string;
+  status: string;
+  message: string;
+  message_hash: string;
+  participants: number[];
+  approvals?: { party_id: number; signature: string }[];
+  signature?: unknown;
+  created_at: string;
+  expires_at: string;
+}
+
+export async function registerMPCSigner(vaultID: string, memberID: string, req: {
+  url: string;
+  encryption_public_key: string;
+  approval_public_key: string;
+  status?: string;
+}): Promise<void> {
+  await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/signers/${encodeURIComponent(memberID)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function listMPCKeys(vaultID: string): Promise<MPCKey[]> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys`);
+  const data = (await resp.json()) as { keys: MPCKey[] };
+  return data.keys ?? [];
+}
+
+export async function createMPCKey(vaultID: string, req: { threshold: number; member_ids?: string[] }): Promise<MPCKey> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  return (await resp.json()) as MPCKey;
+}
+
+export async function createMPCSigningSession(vaultID: string, keyID: string, req: { message: string; participants?: number[] }): Promise<MPCSigningSession> {
+  const messageBase64 = btoa(unescape(encodeURIComponent(req.message)));
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys/${encodeURIComponent(keyID)}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message_base64: messageBase64, participants: req.participants ?? [] }),
+  });
+  return (await resp.json()) as MPCSigningSession;
+}
+
+export async function approveMPCSigningSession(vaultID: string, sessionID: string, partyID: number): Promise<MPCSigningSession> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/sessions/${encodeURIComponent(sessionID)}/approvals`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ party_id: partyID }),
+  });
+  return (await resp.json()) as MPCSigningSession;
+}
+
+export async function completeMPCSigningSession(vaultID: string, sessionID: string): Promise<MPCSigningSession> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/sessions/${encodeURIComponent(sessionID)}/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  return (await resp.json()) as MPCSigningSession;
 }

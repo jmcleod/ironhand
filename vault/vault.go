@@ -73,13 +73,13 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 		return nil, fmt.Errorf("credential profile salts must not be empty")
 	}
 
-	mukBuf, err := creds.muk.Open()
+	rootKey, err := util.NewAESKey()
 	if err != nil {
-		return nil, fmt.Errorf("opening MUK enclave: %w", err)
+		return nil, err
 	}
-	defer mukBuf.Destroy()
+	defer util.WipeBytes(rootKey)
 
-	recordKey, err := icrypto.DeriveRecordKey(mukBuf.Bytes(), v.id)
+	recordKey, err := icrypto.DeriveRecordKey(rootKey, v.id)
 	if err != nil {
 		return nil, err
 	}
@@ -100,16 +100,27 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 
 	// Set owner
 	owner := Member{
-		MemberID:   creds.memberID,
-		PubKey:     creds.keypair.Public,
-		Role:       RoleOwner,
-		AddedEpoch: 1,
-		Status:     StatusActive,
+		MemberID:        creds.memberID,
+		PubKey:          creds.keypair.Public,
+		Role:            RoleOwner,
+		AddedEpoch:      1,
+		Status:          StatusActive,
+		MPCPartyID:      1,
+		MPCSignerStatus: MPCSignerStatusUnregistered,
 	}
 
 	// Wrap KEK for the owner
 	aadKEK := icrypto.AADKEKWrap(v.id, owner.MemberID, 1, 1)
 	sealedWrap, err := icrypto.SealToMember(owner.PubKey, kek[:], aadKEK)
+	if err != nil {
+		return nil, err
+	}
+
+	rootWrap, err := sealVaultRootKey(v.id, owner.MemberID, owner.PubKey, rootKey)
+	if err != nil {
+		return nil, err
+	}
+	rootWrapEnv, err := encodeVaultRootWrap(v.id, *rootWrap)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +165,10 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 			return err
 		}
 		wrapID := fmt.Sprintf("%d:%s", kekWrap.Epoch, kekWrap.MemberID)
-		return tx.Put(recordTypeKEKWrap, wrapID, wrapEnv)
+		if err := tx.Put(recordTypeKEKWrap, wrapID, wrapEnv); err != nil {
+			return err
+		}
+		return tx.Put(recordTypeRootWrap, owner.MemberID, rootWrapEnv)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating vault: %w", err)
@@ -170,6 +184,7 @@ func (v *Vault) Create(ctx context.Context, creds *Credentials, opts ...CreateOp
 		MemberID:  creds.memberID,
 		kek:       memguard.NewEnclave(kek[:]),
 		recordKey: memguard.NewEnclave(util.CopyBytes(recordKey)),
+		rootKey:   memguard.NewEnclave(util.CopyBytes(rootKey)),
 	}, nil
 }
 
@@ -191,13 +206,13 @@ func (v *Vault) Open(ctx context.Context, creds *Credentials) (*Session, error) 
 		return nil, fmt.Errorf("credentials have been destroyed")
 	}
 
-	mukBuf, err := creds.muk.Open()
+	rootKey, err := openVaultRootKey(v.id, v.repo, creds)
 	if err != nil {
-		return nil, fmt.Errorf("opening MUK enclave: %w", err)
+		return nil, fmt.Errorf("opening vault root key: %w", err)
 	}
-	defer mukBuf.Destroy()
+	defer util.WipeBytes(rootKey)
 
-	recordKey, err := icrypto.DeriveRecordKey(mukBuf.Bytes(), v.id)
+	recordKey, err := icrypto.DeriveRecordKey(rootKey, v.id)
 	if err != nil {
 		return nil, err
 	}
@@ -210,9 +225,6 @@ func (v *Vault) Open(ctx context.Context, creds *Credentials) (*Session, error) 
 	state, err := loadVaultState(v.id, v.repo, recordKey)
 	if err != nil {
 		return nil, err
-	}
-	if !creds.matchesProfile(state.KDFParams, state.SaltPass, state.SaltSecret) {
-		return nil, fmt.Errorf("credential KDF profile does not match vault state")
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -279,5 +291,6 @@ func (v *Vault) Open(ctx context.Context, creds *Credentials) (*Session, error) 
 		MemberID:  creds.memberID,
 		kek:       memguard.NewEnclave(kekBytes),
 		recordKey: memguard.NewEnclave(util.CopyBytes(recordKey)),
+		rootKey:   memguard.NewEnclave(util.CopyBytes(rootKey)),
 	}, nil
 }

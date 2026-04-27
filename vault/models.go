@@ -56,19 +56,42 @@ const (
 	StatusRevoked MemberStatus = "revoked"
 )
 
+// MPCSignerStatus represents whether a member's external MPC signer can be
+// used for threshold key generation and signing.
+type MPCSignerStatus string
+
+const (
+	MPCSignerStatusUnregistered MPCSignerStatus = "unregistered"
+	MPCSignerStatusActive       MPCSignerStatus = "active"
+	MPCSignerStatusDisabled     MPCSignerStatus = "disabled"
+)
+
 // Member represents a vault member with their public key and access metadata.
 type Member struct {
-	MemberID     string       `json:"member_id,omitzero"`
-	PubKey       [32]byte     `json:"pub_key,omitzero"`
-	Role         MemberRole   `json:"role,omitzero"`
-	Status       MemberStatus `json:"status,omitzero"`
-	AddedEpoch   uint64       `json:"added_epoch,omitzero"`
-	RevokedEpoch uint64       `json:"revoked_epoch,omitzero"`
+	MemberID               string          `json:"member_id,omitzero"`
+	PubKey                 [32]byte        `json:"pub_key,omitzero"`
+	Role                   MemberRole      `json:"role,omitzero"`
+	Status                 MemberStatus    `json:"status,omitzero"`
+	AddedEpoch             uint64          `json:"added_epoch,omitzero"`
+	RevokedEpoch           uint64          `json:"revoked_epoch,omitzero"`
+	MPCPartyID             uint32          `json:"mpc_party_id,omitzero"`
+	MPCSignerURL           string          `json:"mpc_signer_url,omitzero"`
+	MPCEncryptionPublicKey string          `json:"mpc_encryption_public_key,omitzero"`
+	MPCApprovalPublicKey   string          `json:"mpc_approval_public_key,omitzero"`
+	MPCSignerStatus        MPCSignerStatus `json:"mpc_signer_status,omitzero"`
 }
 
 // memberKEKWrap holds a KEK wrapped (sealed) to a specific member at a given epoch.
 type memberKEKWrap struct {
 	Epoch    uint64             `json:"epoch"`
+	MemberID string             `json:"member_id"`
+	Wrap     icrypto.SealedWrap `json:"wrap"`
+}
+
+// vaultRootWrap holds the vault root key sealed to one member. The root key is
+// used to derive record keys; it is wrapped per member instead of being copied
+// through credential cloning.
+type vaultRootWrap struct {
 	MemberID string             `json:"member_id"`
 	Wrap     icrypto.SealedWrap `json:"wrap"`
 }
@@ -157,8 +180,12 @@ const (
 	recordTypeState       = "STATE"
 	recordTypeMember      = "MEMBER"
 	recordTypeKEKWrap     = "KEKWRAP"
+	recordTypeRootWrap    = "ROOTWRAP"
 	recordTypeItem        = "ITEM"
 	recordTypeItemHistory = "ITEM_HISTORY"
+	recordTypeMPCKey      = "MPC_KEY"
+	recordTypeMPCFragment = "MPC_FRAGMENT"
+	recordTypeMPCSession  = "MPC_SESSION"
 )
 
 // Special record IDs

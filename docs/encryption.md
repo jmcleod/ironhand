@@ -13,7 +13,13 @@ Passphrase + Secret Key
        MUK  (Master Unlock Key — Argon2id + HKDF + XOR)
         │
         ▼
-   Record Key  (HKDF — one per vault)
+   Member X25519 keypair
+        │
+        ▼
+   Vault Root Key  (random — wrapped per member)
+        │
+        ▼
+   Record Key  (HKDF(root, vaultID) — one per vault)
         │
         ▼
    Vault Records  (encrypted envelopes in storage)
@@ -57,7 +63,7 @@ The secret key is shown to the user once at registration and never stored in pla
 
 ### X25519 Keypair
 
-Each member has an X25519 keypair used for KEK wrapping.
+Each member has an X25519 keypair used for vault root-key and KEK wrapping.
 
 **Generation** (`internal/util/x25519.go`):
 
@@ -117,8 +123,8 @@ The passphrase is normalised to Unicode NFKD form before hashing to ensure consi
 
 - **Two-factor derivation:** Compromising only the passphrase or only the secret key is insufficient.
 - **Memory-hard:** Argon2id resists GPU/ASIC brute-force attacks.
-- **Deterministic per vault:** The same passphrase and secret key with the same salts always produce the same MUK.
-- **Shared salts:** All members of a vault share the same `saltPass`, `saltSecret`, and Argon2id parameters (stored in vault state). This allows any member with the correct credentials to derive the same MUK.
+- **Deterministic per account profile:** The same passphrase and secret key with the same salts always produce the same MUK.
+- **Credential scope:** The MUK unlocks account credential material; vault access is granted by the member's X25519 key opening a per-member vault root wrap rather than by deriving the vault record key directly from the MUK.
 
 ## Key Hierarchy
 
@@ -135,7 +141,14 @@ The passphrase is normalised to Unicode NFKD form before hashing to ensure consi
                    │   per account   │
                    └────────┬────────┘
                             │
-                 HKDF(MUK, vaultID, info)
+                 Opens member ROOTWRAP
+                            │
+                 ┌──────────▼──────────┐
+                 │ Vault Root Key (32 B)│
+                 │ per vault, random    │
+                 └──────────┬──────────┘
+                            │
+                 HKDF(root, vaultID, info)
                             │
                  ┌──────────▼──────────┐
                  │  Record Key (32 B)  │
@@ -146,7 +159,7 @@ The passphrase is normalised to Unicode NFKD form before hashing to ensure consi
                             │
          ┌──────────────────┼──────────────────┐
          │                  │                  │
-    Vault State       Member Records      KEK Wraps
+    Vault State       Member Records      Root + KEK Wraps
                                               │
                                     ┌─────────▼──────────┐
                                     │   KEK (32 B)       │
@@ -171,11 +184,12 @@ The passphrase is normalised to Unicode NFKD form before hashing to ensure consi
 **Source:** `internal/crypto/recordkeys.go`
 
 ```
-RecordKey = HKDF-SHA256(MUK, salt=vaultID, info="vault:record-key:v1")
+RecordKey = HKDF-SHA256(VaultRootKey, salt=vaultID, info="vault:record-key:v1")
 ```
 
 - Unique per vault (different vault IDs produce different record keys).
 - Used to seal and open all record envelopes in storage.
+- Rotated on member revocation by generating a new vault root key and re-encrypting current record envelopes.
 
 ### Key Encryption Key (KEK)
 
@@ -471,11 +485,15 @@ When a member is added or revoked, the vault undergoes epoch rotation — a comp
    newEpoch = currentEpoch + 1
 
 2. For each active member:
+   If revoking a member, first generate newVaultRootKey = random 32 bytes.
+   Then seal the current/new vault root key to active members as ROOTWRAP.
+
+3. For each active member:
    aad  = AADKEKWrap(vaultID, memberID, newEpoch, 1)
    wrap = SealToMember(member.PubKey, newKEK, aad)
    → Store as KEKWRAP record with ID "{newEpoch}:{memberID}"
 
-3. For each item (and each history version):
+4. For each item (and each history version):
    a. Unwrap DEK with old KEK:
       oldAAD = AADDEKWrap(vaultID, itemID, oldEpoch, 1)
       DEK    = Decrypt(wrappedDEK, oldKEK, oldAAD)
@@ -492,19 +510,22 @@ When a member is added or revoked, the vault undergoes epoch rotation — a comp
       newAAD     = AADDEKWrap(vaultID, itemID, newEpoch, 1)
       wrappedDEK = Encrypt(DEK, newKEK, newAAD)
 
-4. Update vault state: Epoch = newEpoch
+5. On revocation, re-encrypt vault state, member records, KEK wraps, item envelopes, item history envelopes, MPC records, and audit records with RecordKey(newVaultRootKey).
 
-5. Write all changes atomically via repo.Batch()
+6. Update vault state: Epoch = newEpoch
 
-6. Update epoch cache: SetMaxEpochSeen(vaultID, newEpoch)
+7. Write all changes atomically via repo.Batch()
 
-7. Update session: replace KEK Enclave with newKEK
+8. Update epoch cache: SetMaxEpochSeen(vaultID, newEpoch)
+
+9. Update session: replace KEK Enclave with newKEK; on revocation, also replace root-key and record-key Enclaves.
 ```
 
 ### Security Properties
 
 - **Atomicity:** All writes (state, members, KEK wraps, items, history) are committed in a single transaction. A failure rolls back everything.
 - **Forward secrecy:** The old KEK is discarded. Revoked members do not receive a `SealedWrap` for the new epoch and cannot decrypt new data.
+- **Record-key revocation:** On revocation, the vault root key changes and current record envelopes are re-encrypted, so cached old root keys cannot open current metadata or MPC/audit records.
 - **AAD refresh:** Re-encrypting fields with new-epoch AAD ensures old ciphertexts cannot be replayed at the new epoch.
 - **Complete re-keying:** The DEK for each item is not regenerated (it is reused), but its wrapping changes to the new KEK and its field ciphertexts are re-encrypted with new AAD.
 

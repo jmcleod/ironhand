@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/jmcleod/ironhand/internal/mpc"
 	"github.com/jmcleod/ironhand/internal/uuid"
 	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/vault"
@@ -120,6 +121,8 @@ func mapError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "vault not found")
 	case errors.Is(err, storage.ErrCASFailed):
 		writeError(w, http.StatusConflict, "conflict")
+	case errors.Is(err, mpc.ErrInvalidKey), errors.Is(err, mpc.ErrInvalidParticipants):
+		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeInternalError(w, "internal server error", err)
 	}

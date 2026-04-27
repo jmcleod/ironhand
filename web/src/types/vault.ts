@@ -10,6 +10,11 @@ export interface MemberInfo {
   role: string;
   status: string;
   added_epoch: number;
+  mpc_party_id?: number;
+  mpc_signer_url?: string;
+  mpc_encryption_public_key?: string;
+  mpc_approval_public_key?: string;
+  mpc_signer_status?: string;
 }
 
 export interface Vault {

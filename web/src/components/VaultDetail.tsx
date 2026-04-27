@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Vault, ItemType, VaultItem, itemName, itemType } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
 import { CAInfo } from '@/types/vault';
-import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box, Shield, ScrollText, Download, Upload } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Share2, FileText, Search, X, KeyRound, StickyNote, CreditCard, Box, Shield, ScrollText, Download, Upload, Network } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import ItemCard from '@/components/ItemCard';
@@ -14,6 +14,7 @@ import ExportVaultDialog from '@/components/ExportVaultDialog';
 import ImportVaultDialog from '@/components/ImportVaultDialog';
 import InitCADialog from '@/components/InitCADialog';
 import IssueCertDialog from '@/components/IssueCertDialog';
+import MPCDialog from '@/components/MPCDialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
@@ -54,6 +55,7 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
   const [caInfo, setCAInfo] = useState<CAInfo | null>(null);
   const [showInitCA, setShowInitCA] = useState(false);
   const [showIssueCert, setShowIssueCert] = useState(false);
+  const [showMPC, setShowMPC] = useState(false);
 
   // Fetch CA info on mount / refresh.
   const refreshCAInfo = () => {
@@ -185,6 +187,10 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
             <Button variant="outline" size="sm" onClick={() => setShowAudit(true)}>
               <ScrollText className="h-4 w-4 mr-1" />
               Audit
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowMPC(true)}>
+              <Network className="h-4 w-4 mr-1" />
+              MPC
             </Button>
             <Button variant="outline" size="sm" onClick={() => setShowExport(true)}>
               <Download className="h-4 w-4 mr-1" />
@@ -384,6 +390,7 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
       <ImportVaultDialog open={showImport} onOpenChange={setShowImport} vaultId={vault.id} />
       <InitCADialog open={showInitCA} onOpenChange={setShowInitCA} vaultId={vault.id} onSuccess={() => { refreshCAInfo(); refresh(); }} />
       <IssueCertDialog open={showIssueCert} onOpenChange={setShowIssueCert} vaultId={vault.id} onSuccess={() => { refreshCAInfo(); refresh(); }} />
+      <MPCDialog open={showMPC} onOpenChange={setShowMPC} vaultId={vault.id} members={vault.members} onChanged={refresh} />
     </div>
   );
 }

@@ -1535,10 +1535,15 @@ func (a *API) ListMembers(w http.ResponseWriter, r *http.Request) {
 	summaries := make([]MemberSummary, len(members))
 	for i, m := range members {
 		summaries[i] = MemberSummary{
-			MemberID:   m.MemberID,
-			Role:       string(m.Role),
-			Status:     string(m.Status),
-			AddedEpoch: m.AddedEpoch,
+			MemberID:               m.MemberID,
+			Role:                   string(m.Role),
+			Status:                 string(m.Status),
+			AddedEpoch:             m.AddedEpoch,
+			MPCPartyID:             m.MPCPartyID,
+			MPCSignerURL:           m.MPCSignerURL,
+			MPCEncryptionPublicKey: m.MPCEncryptionPublicKey,
+			MPCApprovalPublicKey:   m.MPCApprovalPublicKey,
+			MPCSignerStatus:        string(m.MPCSignerStatus),
 		}
 	}
 
@@ -1631,28 +1636,27 @@ func (a *API) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		vaultName = vaultID
 	}
 
-	// Generate a random passphrase that will encrypt the credential blob.
+	// Generate a random passphrase that will encrypt the invite grant.
 	// The passphrase is returned to the creator and NOT stored server-side;
-	// the invitee must present it when accepting. Wrong passphrase =
-	// ImportCredentials fails = invite rejected.
+	// the invitee must present it when accepting.
 	passphrase, err := generateInvitePassphrase()
 	if err != nil {
 		writeInternalError(w, "failed to generate invite passphrase", err)
 		return
 	}
 
-	// Export owner credentials encrypted with the invite passphrase.
-	// This is expensive (~1-3s Argon2id) but runs once per invite creation.
-	credBlob, err := vault.ExportCredentials(creds, passphrase)
+	// Export a vault-only invite grant. This deliberately avoids cloning or
+	// exporting the owner's account credentials, MUK, secret key, or private key.
+	grantBlob, err := session.ExportInviteGrant(r.Context(), passphrase)
 	if err != nil {
-		writeInternalError(w, "failed to export credentials for invite", err)
+		writeInternalError(w, "failed to export invite grant", err)
 		return
 	}
 
 	token, err := a.invites.create(
 		vaultID, vaultName, req.Role,
 		creds.SecretKey().ID(),
-		credBlob,
+		grantBlob,
 		defaultInviteTTL,
 	)
 	if err != nil {
@@ -1759,11 +1763,8 @@ func (a *API) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Import the owner's credentials from the invite blob using the
-	// caller-provided passphrase. This is the cryptographic enforcement:
-	// the blob was encrypted with the passphrase at invite creation time,
-	// so a wrong passphrase will fail Argon2id decryption here.
-	ownerCreds, err := vault.ImportCredentials(inv.CredentialBlob, req.Passphrase)
+	v := vault.New(inv.VaultID, a.repo, vault.WithEpochCache(a.epochCache))
+	session, err := v.OpenInviteGrant(r.Context(), inv.CredentialBlob, req.Passphrase)
 	if err != nil {
 		// Wrong passphrase or corrupted blob — un-accept so the invite
 		// can be retried with the correct passphrase.
@@ -1771,36 +1772,13 @@ func (a *API) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "invalid invite passphrase")
 		return
 	}
-	defer ownerCreds.Destroy()
-
-	// Open the vault with the owner's credentials.
-	session, err := a.openSession(r.Context(), inv.VaultID, ownerCreds)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to open vault with invite credentials")
-		return
-	}
 	defer session.Close()
 
-	// Clone credentials for the invitee: same MUK, new member ID + keypair.
-	inviteeCreds, err := vault.CloneForMember(ownerCreds)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clone credentials for invitee")
-		return
-	}
-	defer inviteeCreds.Destroy()
-
-	// Add the invitee as a member in the vault (triggers epoch rotation).
-	if err := session.AddMember(r.Context(), inviteeCreds.MemberID(), inviteeCreds.PublicKey(), vault.MemberRole(inv.Role)); err != nil {
+	// Add the invitee's account credentials directly as a vault member. The
+	// epoch rotation wraps the vault root key and KEK to their own public key.
+	if err := session.AddMember(r.Context(), creds.MemberID(), creds.PublicKey(), vault.MemberRole(inv.Role)); err != nil {
 		mapError(w, err)
 		return
-	}
-
-	// Store vault-specific credentials in the invitee's account record.
-	if err := a.storeVaultCredentials(creds, inv.VaultID, inviteeCreds); err != nil {
-		slog.Warn("failed to store vault credentials for invitee",
-			"error", err, "vault_id", inv.VaultID)
-		// Don't fail the request — the member is added, credentials just
-		// aren't cached. The invitee may need to re-import.
 	}
 
 	// Add the vault to the invitee's vault index.
@@ -1810,12 +1788,12 @@ func (a *API) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 
 	a.audit.logEvent(AuditInviteAccepted, r, creds.SecretKey().ID(),
 		slog.String("vault_id", inv.VaultID),
-		slog.String("member_id", inviteeCreds.MemberID()),
+		slog.String("member_id", creds.MemberID()),
 		slog.String("role", inv.Role))
 
 	writeJSON(w, http.StatusOK, AcceptInviteResponse{
 		VaultID:  inv.VaultID,
-		MemberID: inviteeCreds.MemberID(),
+		MemberID: creds.MemberID(),
 	})
 }
 

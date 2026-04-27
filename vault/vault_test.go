@@ -9,7 +9,6 @@ import (
 
 	"github.com/awnumar/memguard"
 	"github.com/jmcleod/ironhand/crypto"
-	icrypto "github.com/jmcleod/ironhand/internal/crypto"
 	"github.com/jmcleod/ironhand/storage"
 	"github.com/jmcleod/ironhand/storage/memory"
 	"github.com/stretchr/testify/assert"
@@ -303,8 +302,11 @@ func TestVault_Revocation(t *testing.T) {
 	// Bob fails to open vault at current epoch
 	_, err = v.Open(ctx, bobCreds)
 	assert.Error(t, err)
+	_, err = repo.Get("default", recordTypeRootWrap, "bob")
+	assert.ErrorIs(t, err, storage.ErrNotFound)
 
-	// Bob's old session still has old KEK, but the item was rewrapped
+	// Bob's old session still has old KEK/root material, but current records
+	// were re-encrypted under the rotated root and record key.
 	_, err = bobSession.Get(ctx, "item1")
 	assert.Error(t, err, "Bob's old session should fail to decrypt rewrapped item")
 }
@@ -332,10 +334,9 @@ func TestVault_RollbackDetection(t *testing.T) {
 	assert.Equal(t, uint64(2), cache.GetMaxEpochSeen("default"))
 
 	// Simulate malicious rollback: overwrite state with epoch 1
-	mukBuf, err := creds.muk.Open()
+	recBuf, err := session.recordKey.Open()
 	require.NoError(t, err)
-	defer mukBuf.Destroy()
-	recordKey, _ := icrypto.DeriveRecordKey(mukBuf.Bytes(), "default")
+	defer recBuf.Destroy()
 	profile := creds.Profile()
 	state1 := &vaultState{
 		VaultID:    "default",
@@ -345,7 +346,7 @@ func TestVault_RollbackDetection(t *testing.T) {
 		SaltSecret: profile.SaltSecret,
 		Ver:        1,
 	}
-	env, _ := sealVaultState(recordKey, state1)
+	env, _ := sealVaultState(recBuf.Bytes(), state1)
 	repo.Put("default", "STATE", "current", env)
 
 	openCreds, err := OpenCredentials(
@@ -364,11 +365,13 @@ func TestVault_SessionClose(t *testing.T) {
 	session := &Session{
 		kek:       memguard.NewEnclave([]byte{1, 2, 3, 4, 5}),
 		recordKey: memguard.NewEnclave([]byte{10, 20, 30, 40, 50}),
+		rootKey:   memguard.NewEnclave([]byte{20, 30, 40, 50, 60}),
 	}
 	session.Close()
 
 	assert.Nil(t, session.kek)
 	assert.Nil(t, session.recordKey)
+	assert.Nil(t, session.rootKey)
 }
 
 func TestVault_InputValidation(t *testing.T) {

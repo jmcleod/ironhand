@@ -62,24 +62,25 @@ Create a handle with `vault.New(id, repo, ...opts)`. By default an in-memory epo
 `v.Create(ctx, creds, ...opts)` initialises a new vault:
 
 1. Validates the vault ID and credentials.
-2. Derives a record key from the owner's Master Unlock Key (MUK) and the vault ID.
+2. Generates a random 32-byte vault root key and derives the vault record key from it.
 3. Generates a random 32-byte KEK (Key Encryption Key) for epoch 1.
 4. Builds a `vaultState` containing epoch number, KDF parameters, and salts.
 5. Creates the owner's member record with role `owner` and status `active`.
-6. Wraps the KEK for the owner using X25519 public-key sealing.
-7. Writes state, member, and KEK wrap atomically via `repo.Batch()`.
-8. Returns an open `Session` with the KEK and record key held in memguard Enclaves.
+6. Wraps both the vault root key and KEK for the owner using X25519 public-key sealing.
+7. Writes state, member, root wrap, and KEK wrap atomically via `repo.Batch()`.
+8. Returns an open `Session` with the root key, KEK, and record key held in memguard Enclaves.
 
 ### Opening a Vault
 
 `v.Open(ctx, creds)` opens an existing vault for a member:
 
-1. Loads vault state and verifies the KDF profile matches the credentials.
-2. Checks the epoch cache for rollback (`GetMaxEpochSeen`). If the stored epoch exceeds the vault's current epoch, returns `ErrRollbackDetected`.
-3. Loads the member record and verifies status is `active`.
-4. Loads and unwraps the member's KEK wrap using their X25519 private key.
-5. Updates the epoch cache with the current epoch.
-6. Returns an active `Session`.
+1. Opens the member's `ROOTWRAP` with their X25519 private key.
+2. Derives the record key from the unwrapped vault root key.
+3. Loads vault state and checks the epoch cache for rollback (`GetMaxEpochSeen`). If the stored epoch exceeds the vault's current epoch, returns `ErrRollbackDetected`.
+4. Loads the member record and verifies status is `active`.
+5. Loads and unwraps the member's KEK wrap using their X25519 private key.
+6. Updates the epoch cache with the current epoch.
+7. Returns an active `Session`.
 
 ### Vault State
 
@@ -126,10 +127,11 @@ type Session struct {
     MemberID  string
     kek       *memguard.Enclave
     recordKey *memguard.Enclave
+    rootKey   *memguard.Enclave
 }
 ```
 
-Both the KEK and record key are stored in memguard Enclaves, which encrypt keys at rest in process memory. Keys are decrypted briefly into mlock'd `LockedBuffer` instances only during operations, then wiped immediately. Callers must call `Close()` when finished.
+The vault root key, KEK, and record key are stored in memguard Enclaves, which encrypt keys at rest in process memory. Keys are decrypted briefly into mlock'd `LockedBuffer` instances only during operations, then wiped immediately. Callers must call `Close()` when finished.
 
 ### Item Operations
 
@@ -222,11 +224,12 @@ Adding or revoking a member triggers epoch rotation, which is the core mechanism
 3. **Re-wrap KEK for all active members** — Each active member's X25519 public key is used to seal the new KEK. The wrap record ID is `{epoch}:{memberID}`.
 4. **Re-encrypt all items** — For each item: decrypt the DEK with the old KEK, decrypt all fields, re-encrypt fields with new-epoch AAD, re-wrap the DEK with the new KEK.
 5. **Re-encrypt all history records** — Same process as items.
-6. **Update vault state** — Increment the epoch number.
-7. **Atomic batch write** — All records are written in a single `repo.Batch()` transaction.
-8. **Update session** — The session's KEK Enclave is replaced with the new KEK.
+6. **Rotate root on revocation** — Revocations generate a new vault root key, rewrap it for active members only, remove the revoked member root wrap, and re-encrypt vault metadata, MPC records, and audit records under the newly derived record key.
+7. **Update vault state** — Increment the epoch number.
+8. **Atomic batch write** — All records are written in a single `repo.Batch()` transaction.
+9. **Update session** — The session's KEK Enclave is replaced with the new KEK; on revocation, the root-key and record-key Enclaves are also replaced.
 
-After rotation, revoked members cannot decrypt data at the new epoch because they do not have a KEK wrap for that epoch.
+After rotation, revoked members cannot decrypt data at the new epoch because they do not have a KEK wrap for that epoch; after revocation they also cannot open current record envelopes because the root-derived record key changed.
 
 ### Rollback Detection
 
@@ -293,8 +296,12 @@ Envelopes are created with `SealRecord(recordKey, plaintext, aad)` and opened wi
 | `STATE` | Vault metadata | `current` |
 | `MEMBER` | Member records | `{memberID}` |
 | `KEKWRAP` | Per-member KEK wraps | `{epoch}:{memberID}` |
+| `ROOTWRAP` | Per-member vault root key wraps | `{memberID}` |
 | `ITEM` | Encrypted items | `{itemID}` |
 | `ITEM_HISTORY` | Historical item snapshots | `{itemID}#{version}` |
+| `MPC_KEY` | Experimental MPC threshold key metadata | `{keyID}` |
+| `MPC_FRAGMENT` | Encrypted per-member MPC key fragments | `{keyID}:{memberID}` |
+| `MPC_SESSION` | Experimental MPC signing sessions | `{sessionID}` |
 | `AUDIT` | Audit trail entries | `{auditID}` |
 | `AUDIT_TIP` | Latest audit chain hash | `tip` |
 | `SESSION` | Encrypted session data (persistent mode) | `{token}` |

@@ -26,6 +26,7 @@ type Session struct {
 	MemberID  string
 	kek       *memguard.Enclave
 	recordKey *memguard.Enclave
+	rootKey   *memguard.Enclave
 }
 
 type requiredAccess int
@@ -45,10 +46,11 @@ func (s *Session) Epoch() uint64 {
 func (s *Session) Close() {
 	s.kek = nil
 	s.recordKey = nil
+	s.rootKey = nil
 }
 
 func (s *Session) checkClosed() error {
-	if s.kek == nil || s.recordKey == nil {
+	if s.kek == nil || s.recordKey == nil || s.rootKey == nil {
 		return ErrSessionClosed
 	}
 	return nil

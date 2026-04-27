@@ -23,7 +23,7 @@ type inviteState struct {
 	VaultName      string
 	Role           string
 	CreatorID      string // SecretKey ID of the invite creator
-	CredentialBlob []byte // ExportCredentialsBytes output (Argon2id-encrypted)
+	CredentialBlob []byte // encrypted vault invite grant
 	ExpiresAt      time.Time
 	Accepted       bool
 }
@@ -53,9 +53,8 @@ func generateInvitePassphrase() (string, error) {
 	return hex.EncodeToString(passphraseBytes), nil
 }
 
-// create stores a new invite and returns the token.
-// The credBlob must already be encrypted with the invite passphrase
-// via vault.ExportCredentials — the passphrase is not stored.
+// create stores a new invite and returns the token. The grant blob must already
+// be encrypted with the invite passphrase; the passphrase is not stored.
 func (s *inviteStore) create(vaultID, vaultName, role, creatorID string, credBlob []byte, ttl time.Duration) (token string, err error) {
 	tokenBytes := make([]byte, inviteTokenBytes)
 	if _, err := rand.Read(tokenBytes); err != nil {

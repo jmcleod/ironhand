@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,30 +28,35 @@ import (
 )
 
 var (
-	port               int
-	dataDir            string
-	tlsCert            string
-	tlsKey             string
-	storageBackend     string
-	postgresDSN        string
-	enableHeaderAuth   bool
-	sessionStorage     string
-	webauthnRPID       string
-	webauthnRPOrigin   string
-	webauthnRPName     string
-	sessionKey         string
-	sessionKeyFile     string
-	pkiKeystore        string
-	pkcs11Module       string
-	pkcs11Token        string
-	pkcs11PIN          string
-	kdfProfile         string
-	auditRetentionDays int
-	auditMaxEntries    int
-	auditWebhookURL    string
-	auditWebhookHeader string
-	trustedProxies     []string
-	noRateLimit        bool
+	port                  int
+	dataDir               string
+	tlsCert               string
+	tlsKey                string
+	storageBackend        string
+	postgresDSN           string
+	enableHeaderAuth      bool
+	sessionStorage        string
+	webauthnRPID          string
+	webauthnRPOrigin      string
+	webauthnRPName        string
+	sessionKey            string
+	sessionKeyFile        string
+	pkiKeystore           string
+	pkcs11Module          string
+	pkcs11Token           string
+	pkcs11PIN             string
+	kdfProfile            string
+	auditRetentionDays    int
+	auditMaxEntries       int
+	auditWebhookURL       string
+	auditWebhookHeader    string
+	trustedProxies        []string
+	noRateLimit           bool
+	mpcSharedKey          string
+	mpcClientCert         string
+	mpcClientKey          string
+	mpcSignerCA           string
+	enableExperimentalMPC bool
 )
 
 var serverCmd = &cobra.Command{
@@ -168,6 +174,22 @@ var serverCmd = &cobra.Command{
 		if auditWebhookURL != "" {
 			apiOpts = append(apiOpts, api.WithAuditWebhook(auditWebhookURL, auditWebhookHeader))
 			fmt.Printf("Audit webhook: %s\n", auditWebhookURL)
+		}
+		mpcKey := mpcSharedKey
+		if mpcKey == "" {
+			mpcKey = os.Getenv("IRONHAND_MPC_SHARED_KEY")
+		}
+		mpcTLSConfig, err := resolveMPCSignerTLSConfig()
+		if err != nil {
+			return err
+		}
+		apiOpts = append(apiOpts, api.WithMPCSignerTransport([]byte(mpcKey), mpcTLSConfig))
+		apiOpts = append(apiOpts, api.WithExperimentalMPC(enableExperimentalMPC))
+		if enableExperimentalMPC {
+			fmt.Println("WARNING: experimental MPC enabled (experimental-p256-schnorr-v1); do not use for production funds")
+		}
+		if mpcKey == "" {
+			fmt.Println("WARNING: MPC signer request signing is disabled; set --mpc-shared-key or IRONHAND_MPC_SHARED_KEY")
 		}
 		switch sessionStorage {
 		case "memory":
@@ -303,6 +325,40 @@ func init() {
 	serverCmd.Flags().StringVar(&auditWebhookHeader, "audit-webhook-header", "", "Auth header for audit webhook in 'Header: Value' format (e.g., 'Authorization: Bearer xxx')")
 	serverCmd.Flags().StringSliceVar(&trustedProxies, "trusted-proxies", nil, "CIDR ranges of trusted reverse proxies (e.g., 10.0.0.0/8,172.16.0.0/12); proxy headers are ignored unless this is set")
 	serverCmd.Flags().BoolVar(&noRateLimit, "no-rate-limit", false, "Disable all rate limiters (for E2E testing only — do NOT use in production)")
+	serverCmd.Flags().StringVar(&mpcSharedKey, "mpc-shared-key", "", "Shared HMAC key for internal MPC signer calls (or IRONHAND_MPC_SHARED_KEY)")
+	serverCmd.Flags().StringVar(&mpcClientCert, "mpc-client-cert", "", "Client certificate presented to MPC signers that require mTLS")
+	serverCmd.Flags().StringVar(&mpcClientKey, "mpc-client-key", "", "Client private key presented to MPC signers that require mTLS")
+	serverCmd.Flags().StringVar(&mpcSignerCA, "mpc-signer-ca", "", "CA bundle used to verify MPC signer TLS certificates")
+	serverCmd.Flags().BoolVar(&enableExperimentalMPC, "enable-experimental-mpc", false, "Enable experimental-p256-schnorr-v1 MPC APIs (not production-vetted)")
+}
+
+func resolveMPCSignerTLSConfig() (*tls.Config, error) {
+	if mpcClientCert == "" && mpcClientKey == "" && mpcSignerCA == "" {
+		return nil, nil
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if mpcClientCert != "" || mpcClientKey != "" {
+		if mpcClientCert == "" || mpcClientKey == "" {
+			return nil, fmt.Errorf("--mpc-client-cert and --mpc-client-key must be provided together")
+		}
+		cert, err := tls.LoadX509KeyPair(mpcClientCert, mpcClientKey)
+		if err != nil {
+			return nil, fmt.Errorf("load MPC client TLS key pair: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+	if mpcSignerCA != "" {
+		pem, err := os.ReadFile(mpcSignerCA)
+		if err != nil {
+			return nil, fmt.Errorf("read MPC signer CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("MPC signer CA file did not contain a PEM certificate")
+		}
+		cfg.RootCAs = pool
+	}
+	return cfg, nil
 }
 
 // resolveSessionWrappingKey resolves the session wrapping key from the

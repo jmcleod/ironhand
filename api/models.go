@@ -1,5 +1,10 @@
 package api
 
+import (
+	"github.com/jmcleod/ironhand/internal/mpc"
+	"github.com/jmcleod/ironhand/vault"
+)
+
 // CreateVaultRequest is the JSON body for POST /vaults.
 type CreateVaultRequest struct {
 	Name        string `json:"name,omitempty"`
@@ -161,6 +166,46 @@ type AddMemberRequest struct {
 type AddMemberResponse struct {
 	Epoch uint64 `json:"epoch"`
 }
+
+// RegisterMPCSignerRequest registers or updates the signer identity for a vault member.
+type RegisterMPCSignerRequest struct {
+	URL                 string `json:"url"`
+	EncryptionPublicKey string `json:"encryption_public_key"`
+	ApprovalPublicKey   string `json:"approval_public_key"`
+	Status              string `json:"status,omitempty"`
+}
+
+// CreateMPCKeyRequest stores the result of a vault-scoped MPC DKG ceremony.
+type CreateMPCKeyRequest struct {
+	KeyID       string                           `json:"key_id,omitempty"`
+	Algorithm   string                           `json:"algorithm,omitempty"`
+	Threshold   int                              `json:"threshold"`
+	MemberIDs   []string                         `json:"member_ids,omitempty"`
+	Commitments []mpc.PublicCommitment           `json:"commitments"`
+	Fragments   map[string]mpc.EncryptedFragment `json:"fragments"`
+}
+
+// CreateMPCSigningSessionRequest starts a new signing session for an MPC key.
+type CreateMPCSigningSessionRequest struct {
+	MessageBase64 string   `json:"message_base64"`
+	Participants  []uint32 `json:"participants,omitempty"`
+	TTLSeconds    int64    `json:"ttl_seconds,omitempty"`
+}
+
+// AddMPCApprovalRequest stores a signed approval from a participating signer.
+type AddMPCApprovalRequest struct {
+	Approval mpc.Approval `json:"approval"`
+	PartyID  uint32       `json:"party_id,omitempty"`
+}
+
+// CompleteMPCSigningSessionRequest stores and verifies a completed MPC signature.
+type CompleteMPCSigningSessionRequest struct {
+	Commitments []mpc.Commitment `json:"commitments,omitempty"`
+	Signature   *mpc.Signature   `json:"signature,omitempty"`
+}
+
+type MPCKeyResponse = vault.MPCKey
+type MPCSigningSessionResponse = vault.MPCSigningSession
 
 // HistoryEntryResponse represents a single version in an item's history.
 type HistoryEntryResponse struct {
@@ -377,10 +422,15 @@ type GenerateRecoveryCodesResponse struct {
 
 // MemberSummary is one entry in the list-members response.
 type MemberSummary struct {
-	MemberID   string `json:"member_id"`
-	Role       string `json:"role"`
-	Status     string `json:"status"`
-	AddedEpoch uint64 `json:"added_epoch"`
+	MemberID               string `json:"member_id"`
+	Role                   string `json:"role"`
+	Status                 string `json:"status"`
+	AddedEpoch             uint64 `json:"added_epoch"`
+	MPCPartyID             uint32 `json:"mpc_party_id,omitempty"`
+	MPCSignerURL           string `json:"mpc_signer_url,omitempty"`
+	MPCEncryptionPublicKey string `json:"mpc_encryption_public_key,omitempty"`
+	MPCApprovalPublicKey   string `json:"mpc_approval_public_key,omitempty"`
+	MPCSignerStatus        string `json:"mpc_signer_status,omitempty"`
 }
 
 // ListMembersResponse is returned from GET /vaults/{vaultID}/members.

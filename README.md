@@ -7,7 +7,8 @@ A secure, encrypted vault library for Go with member-based access control, epoch
 - **AES-256-GCM encryption** with Authenticated Associated Data (AAD) on every layer
 - **Two-secret-key MUK derivation** — requires both a passphrase and a secret key (Argon2id + HKDF + XOR)
 - **X25519 member key wrapping** — per-member public-key sealed KEK distribution
-- **Epoch-based key rotation** — adding or revoking members rotates the vault KEK and re-wraps all items atomically
+- **Vault-root-key sharing** — each member receives an X25519-sealed vault root key instead of cloned owner credentials
+- **Epoch-based key rotation** — adding members rotates the vault KEK; revoking members also rotates the vault root record key and re-encrypts vault metadata atomically
 - **Rollback detection** — persistent epoch cache detects storage rollback attacks
 - **Credential export/import** — single encrypted blob for portable vault access
 - **Vault export/import** — full vault backup encrypted with a user-provided passphrase; requires owner access and step-up authentication
@@ -28,6 +29,7 @@ A secure, encrypted vault library for Go with member-based access control, epoch
 - **Encrypted audit trail** — AES-256-GCM encrypted audit entries with tamper-evident hash chains; offline verification CLI
 - **Audit webhook** — forward audit events in real-time to external SIEM/webhook endpoints
 - **Anomaly detection** — automated alerting for login failure spikes and bulk data exports
+- **Experimental MPC workflows** — vault-scoped threshold key generation and signing with external signer processes, HMAC-signed internal calls, optional mTLS, durable sealed signer state, and explicit `--enable-experimental-mpc` gating
 
 ## Documentation
 
@@ -97,10 +99,16 @@ func main() {
 Passphrase + SecretKey
         │
         ▼
-  MUK (Master Unlock Key)         Argon2id(passphrase) ⊕ HKDF(secretKey)
+  Account MUK                     Argon2id(passphrase) ⊕ HKDF(secretKey)
         │
         ▼
-  Record Key                       HKDF(MUK, vaultID)
+  Member X25519 keypair            Opens this member's sealed vault root wrap
+        │
+        ▼
+  Vault Root Key                   Random 32-byte root, wrapped per member
+        │
+        ▼
+  Record Key                       HKDF(Vault Root Key, vaultID)
         │
         ▼
   KEK (Key Encryption Key)        Random 32-byte, wrapped per-member via X25519
@@ -119,9 +127,21 @@ When a member is added or revoked, the vault advances to a new epoch:
 1. Generate a fresh KEK
 2. Re-wrap the KEK for all active members using X25519
 3. Re-wrap all item DEKs with the new KEK
-4. Update vault state atomically via batch transaction
+4. On revocation, generate a fresh vault root key and re-encrypt current vault metadata, item envelopes, MPC records, and audit records under the new record key
+5. Update vault state atomically via batch transaction
 
 Revoked members cannot decrypt items at the new epoch.
+
+### Experimental MPC
+
+IronHand can run vault-scoped MPC flows where each active vault member maps to an independent signer process. The current implementation is intentionally marked experimental:
+
+- Start the API with `--enable-experimental-mpc` to expose MPC routes.
+- Start each signer with `ironhand signer --state-file ./signer-N.sealed --state-passphrase ...` so signer identity and finalized key metadata survive restarts.
+- Set `--mpc-shared-key` or `IRONHAND_MPC_SHARED_KEY` on both server and signers to HMAC-sign internal signer calls.
+- Use `--mpc-client-cert`, `--mpc-client-key`, `--mpc-signer-ca`, `--tls-cert`, `--tls-key`, and `--client-ca` when signers require mTLS.
+
+The available algorithm is `experimental-p256-schnorr-v1`. It is suitable for protocol development and UX testing, not production funds. A production deployment should replace this boundary with a vetted threshold signature implementation such as FROST over the target production curve.
 
 ### Storage
 

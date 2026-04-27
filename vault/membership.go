@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/awnumar/memguard"
@@ -10,6 +11,13 @@ import (
 	"github.com/jmcleod/ironhand/internal/util"
 	"github.com/jmcleod/ironhand/storage"
 )
+
+type writeOp struct {
+	recordType string
+	recordID   string
+	envelope   *storage.Envelope
+	delete     bool
+}
 
 // rotateEpoch advances the vault to a new epoch, optionally adding or revoking a member.
 // It re-wraps all item DEKs and member KEKs atomically.
@@ -35,6 +43,11 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		return fmt.Errorf("opening old KEK enclave: %w", err)
 	}
 	defer oldKEKBuf.Destroy()
+	rootKeyBuf, err := s.rootKey.Open()
+	if err != nil {
+		return fmt.Errorf("opening vault root key enclave: %w", err)
+	}
+	defer rootKeyBuf.Destroy()
 
 	newEpoch := state.Epoch + 1
 
@@ -60,6 +73,12 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 				return fmt.Errorf("member %q already exists", addMember.MemberID)
 			}
 		}
+		if addMember.MPCPartyID == 0 {
+			addMember.MPCPartyID = nextMPCPartyID(members)
+		}
+		if addMember.MPCSignerStatus == "" {
+			addMember.MPCSignerStatus = MPCSignerStatusUnregistered
+		}
 		addMember.AddedEpoch = newEpoch
 		addMember.Status = StatusActive
 		members = append(members, *addMember)
@@ -78,16 +97,53 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		}
 	}
 
-	// 4. Prepare all writes, then execute atomically via Batch
-	type writeOp struct {
-		recordType string
-		recordID   string
-		envelope   *storage.Envelope
-	}
+	// 4. Prepare all writes, then execute atomically via Batch.
 	var writes []writeOp
+	rotateRoot := revokeMemberID != nil
+	newRootKey := util.CopyBytes(rootKeyBuf.Bytes())
+	if rotateRoot {
+		util.WipeBytes(newRootKey)
+		newRootKey, err = util.NewAESKey()
+		if err != nil {
+			return err
+		}
+	}
+	defer util.WipeBytes(newRootKey)
+	writeRecordKey := recordKey
+	var newRecordKey []byte
+	if rotateRoot {
+		newRecordKey, err = icrypto.DeriveRecordKey(newRootKey, state.VaultID)
+		if err != nil {
+			return err
+		}
+		defer util.WipeBytes(newRecordKey)
+		writeRecordKey = newRecordKey
+	}
 
 	// KEK wraps and member records
 	for _, m := range members {
+		if m.Status == StatusActive && (rotateRoot || (addMember != nil && m.MemberID == addMember.MemberID)) {
+			rootWrap, err := sealVaultRootKey(state.VaultID, m.MemberID, m.PubKey, newRootKey)
+			if err != nil {
+				return err
+			}
+			env, err := encodeVaultRootWrap(state.VaultID, *rootWrap)
+			if err != nil {
+				return err
+			}
+			writes = append(writes, writeOp{
+				recordType: recordTypeRootWrap,
+				recordID:   m.MemberID,
+				envelope:   env,
+			})
+		}
+		if rotateRoot && m.Status == StatusRevoked {
+			writes = append(writes, writeOp{
+				recordType: recordTypeRootWrap,
+				recordID:   m.MemberID,
+				delete:     true,
+			})
+		}
 		if m.Status == StatusActive {
 			aad := icrypto.AADKEKWrap(state.VaultID, m.MemberID, newEpoch, 1)
 			wrap, err := icrypto.SealToMember(m.PubKey, newKEK32[:], aad)
@@ -99,7 +155,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 				MemberID: m.MemberID,
 				Wrap:     *wrap,
 			}
-			env, err := sealMemberKEKWrap(state.VaultID, recordKey, kw)
+			env, err := sealMemberKEKWrap(state.VaultID, writeRecordKey, kw)
 			if err != nil {
 				return err
 			}
@@ -109,7 +165,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 				envelope:   env,
 			})
 		}
-		env, err := sealMember(state.VaultID, recordKey, m, newEpoch)
+		env, err := sealMember(state.VaultID, writeRecordKey, m, newEpoch)
 		if err != nil {
 			return err
 		}
@@ -170,7 +226,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		itm.WrappedDEK = newWrappedDEK
 		itm.WrappedEpoch = newEpoch
 
-		env, err := sealItem(state.VaultID, recordKey, *itm, newEpoch)
+		env, err := sealItem(state.VaultID, writeRecordKey, *itm, newEpoch)
 		if err != nil {
 			return err
 		}
@@ -231,7 +287,7 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		hist.WrappedDEK = newWrappedDEK
 		hist.WrappedEpoch = newEpoch
 
-		env, err := sealItemHistory(state.VaultID, recordKey, *hist, newEpoch)
+		env, err := sealItemHistory(state.VaultID, writeRecordKey, *hist, newEpoch)
 		if err != nil {
 			return err
 		}
@@ -242,9 +298,37 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 		})
 	}
 
+	if rotateRoot {
+		mpcWrites, err := rewrapRecordType(state.VaultID, s.vault.repo, recordTypeMPCKey, recordKey, writeRecordKey, mpcRecordAAD)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, mpcWrites...)
+		mpcFragmentWrites, err := rewrapRecordType(state.VaultID, s.vault.repo, recordTypeMPCFragment, recordKey, writeRecordKey, mpcRecordAAD)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, mpcFragmentWrites...)
+		mpcSessionWrites, err := rewrapRecordType(state.VaultID, s.vault.repo, recordTypeMPCSession, recordKey, writeRecordKey, mpcRecordAAD)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, mpcSessionWrites...)
+		auditWrites, err := rewrapRecordType(state.VaultID, s.vault.repo, "AUDIT", recordKey, writeRecordKey, auditRecordAAD)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, auditWrites...)
+		auditTipWrites, err := rewrapRecordType(state.VaultID, s.vault.repo, "AUDIT_TIP", recordKey, writeRecordKey, auditRecordAAD)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, auditTipWrites...)
+	}
+
 	// 6. Update vaultState
 	state.Epoch = newEpoch
-	stateEnv, err := sealVaultState(recordKey, state)
+	stateEnv, err := sealVaultState(writeRecordKey, state)
 	if err != nil {
 		return err
 	}
@@ -257,6 +341,12 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 	// 7. Execute all writes atomically
 	err = s.vault.repo.Batch(state.VaultID, func(tx storage.BatchTx) error {
 		for _, w := range writes {
+			if w.delete {
+				if err := tx.Delete(w.recordType, w.recordID); err != nil && !errors.Is(err, storage.ErrNotFound) {
+					return err
+				}
+				continue
+			}
 			if err := tx.Put(w.recordType, w.recordID, w.envelope); err != nil {
 				return err
 			}
@@ -275,11 +365,61 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 	// 9. Update session — seal new KEK into Enclave
 	s.epoch = newEpoch
 	s.kek = memguard.NewEnclave(newKEK32[:])
+	if rotateRoot {
+		s.recordKey = memguard.NewEnclave(util.CopyBytes(writeRecordKey))
+		s.rootKey = memguard.NewEnclave(util.CopyBytes(newRootKey))
+	}
 
 	return nil
 }
 
+func nextMPCPartyID(members []Member) uint32 {
+	var max uint32
+	for _, member := range members {
+		if member.MPCPartyID > max {
+			max = member.MPCPartyID
+		}
+	}
+	return max + 1
+}
+
 // Helper functions
+
+type recordAADFunc func(vaultID, recordType, recordID string) []byte
+
+func rewrapRecordType(vaultID string, repo storage.Repository, recordType string, oldRecordKey, newRecordKey []byte, aadFn recordAADFunc) ([]writeOp, error) {
+	ids, err := repo.List(vaultID, recordType)
+	if err != nil {
+		return nil, err
+	}
+	writes := make([]writeOp, 0, len(ids))
+	for _, id := range ids {
+		env, err := repo.Get(vaultID, recordType, id)
+		if err != nil {
+			return nil, err
+		}
+		aad := aadFn(vaultID, recordType, id)
+		plaintext, err := storage.OpenRecord(oldRecordKey, env, aad)
+		if err != nil {
+			return nil, fmt.Errorf("rewrap %s/%s: %w", recordType, id, err)
+		}
+		newEnv, err := storage.SealRecord(newRecordKey, plaintext, aad, env.Version)
+		util.WipeBytes(plaintext)
+		if err != nil {
+			return nil, err
+		}
+		writes = append(writes, writeOp{recordType: recordType, recordID: id, envelope: newEnv})
+	}
+	return writes, nil
+}
+
+func mpcRecordAAD(vaultID, recordType, recordID string) []byte {
+	return icrypto.AADRecord(vaultID, recordType, recordID, 0, 1)
+}
+
+func auditRecordAAD(vaultID, _, recordID string) []byte {
+	return []byte("audit:" + vaultID + ":" + recordID)
+}
 
 func loadVaultState(vaultID string, repo storage.Repository, recordKey []byte) (*vaultState, error) {
 	envelope, err := repo.Get(vaultID, recordTypeState, recordIDCurrent)
