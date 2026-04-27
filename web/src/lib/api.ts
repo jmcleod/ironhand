@@ -837,6 +837,11 @@ export interface MPCDKGAttempt {
   created_at: string;
   updated_at: string;
 }
+export interface MPCMetrics {
+  keys_by_status?: Record<string, number>;
+  dkg_attempts_by_status?: Record<string, number>;
+  signing_sessions_by_status?: Record<string, number>;
+}
 export interface MPCPolicy {
   approval_mode?: string;
   allowed_roles?: string[];
@@ -915,6 +920,11 @@ export async function listMPCDKGAttempts(vaultID: string): Promise<MPCDKGAttempt
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/dkg`);
   const data = (await resp.json()) as { attempts: MPCDKGAttempt[] };
   return data.attempts ?? [];
+}
+
+export async function getMPCMetrics(vaultID: string): Promise<MPCMetrics> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/metrics`);
+  return (await resp.json()) as MPCMetrics;
 }
 
 export async function abortMPCDKGAttempt(vaultID: string, dkgSessionID: string): Promise<MPCDKGAttempt> {

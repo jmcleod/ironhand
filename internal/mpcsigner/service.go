@@ -141,6 +141,7 @@ func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /signer/identity", s.handleIdentity)
 	mux.HandleFunc("GET /signer/health", s.handleHealth)
+	mux.HandleFunc("GET /signer/ready", s.handleReady)
 	mux.HandleFunc("POST /signer/dkg/start", s.handleStartDKG)
 	mux.HandleFunc("POST /signer/dkg/share", s.handleReceiveShare)
 	mux.HandleFunc("POST /signer/dkg/finalize", s.handleFinalizeDKG)
@@ -162,7 +163,22 @@ func (s *Service) handleIdentity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "member_id": s.memberID, "party_id": s.partyID})
+	writeJSON(w, http.StatusOK, s.healthSnapshot("ok"))
+}
+
+func (s *Service) handleReady(w http.ResponseWriter, r *http.Request) {
+	status := "ready"
+	s.mu.Lock()
+	hasIdentity := s.identity.EncryptionPublicKey != "" && s.identity.ApprovalPublicKey != ""
+	s.mu.Unlock()
+	if !hasIdentity {
+		status = "not_ready"
+	}
+	if status != "ready" {
+		writeJSON(w, http.StatusServiceUnavailable, s.healthSnapshot(status))
+		return
+	}
+	writeJSON(w, http.StatusOK, s.healthSnapshot(status))
 }
 
 func (s *Service) handleStartDKG(w http.ResponseWriter, r *http.Request) {
@@ -854,6 +870,35 @@ func (s *Service) ensureStateLocked(keyID string, threshold int, members []Membe
 		state.nonces = make(map[string]*nonceState)
 	}
 	return state
+}
+
+func (s *Service) healthSnapshot(status string) map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dkg := make(map[string]int)
+	for _, state := range s.keys {
+		keyStatus := state.dkgStatus
+		if keyStatus == "" {
+			keyStatus = "unknown"
+		}
+		dkg[keyStatus]++
+	}
+	approvals := make(map[ApprovalRequestStatus]int)
+	now := time.Now().UTC()
+	for _, request := range s.approvals {
+		refreshApprovalRequestStatus(request, now)
+		approvals[request.Status]++
+	}
+	return map[string]any{
+		"status":                  status,
+		"member_id":               s.memberID,
+		"party_id":                s.partyID,
+		"url":                     s.identity.URL,
+		"durable_state":           s.store != nil,
+		"keys":                    len(s.keys),
+		"dkg_statuses":            dkg,
+		"approval_request_counts": approvals,
+	}
 }
 
 func (s *Service) sendDKGShares(req StartDKGRequest, members []Member, commitment mpc.PublicCommitment, outgoing map[int]string) error {

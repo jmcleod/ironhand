@@ -57,6 +57,8 @@ const (
 	AuditMPCSigningCompleted         AuditEvent = "mpc_signing_completed"
 	AuditMPCKeyStatusChanged         AuditEvent = "mpc_key_status_changed"
 	AuditMPCKeyRotated               AuditEvent = "mpc_key_rotated"
+	AuditMPCDKGCommitted             AuditEvent = "mpc_dkg_committed"
+	AuditMPCDKGAborted               AuditEvent = "mpc_dkg_aborted"
 )
 
 // auditLogger wraps slog.Logger for structured security audit logging.

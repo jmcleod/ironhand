@@ -77,6 +77,28 @@ func TestNonceCommitIsIdempotentAndTranscriptBound(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, conflict.Code)
 }
 
+func TestSignerHealthAndReadyExposeOperationalState(t *testing.T) {
+	service := newTestSignerService(t)
+	installTestSignerKey(service, "vault-1", "key-1")
+
+	req := httptest.NewRequest(http.MethodGet, "/signer/health", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+	service.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var health map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &health))
+	assert.Equal(t, "ok", health["status"])
+	assert.Equal(t, "member-1", health["member_id"])
+	assert.Equal(t, float64(1), health["keys"])
+
+	req = httptest.NewRequest(http.MethodGet, "/signer/ready", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	service.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+}
+
 func newTestSignerService(t *testing.T) *Service {
 	t.Helper()
 	service, err := New("member-1", 1, "member-1", "http://signer-1.test", nil, nil)

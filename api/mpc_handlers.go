@@ -32,6 +32,24 @@ func (a *API) ListMPCProviders(w http.ResponseWriter, r *http.Request) {
 	}{Providers: mpc.SupportedProviders()})
 }
 
+func (a *API) GetMPCMetrics(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+	metrics, err := session.MPCMetrics(r.Context())
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, MPCMetricsResponse(*metrics))
+}
+
 func (a *API) validateMPCProviderForUse(algorithm string) error {
 	provider, err := mpc.GetProvider(algorithm)
 	if err != nil {
@@ -138,6 +156,10 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 			attempt.LastError = ""
 			_, _ = session.SaveMPCDKGAttempt(r.Context(), *attempt)
 		}
+		a.audit.logEvent(AuditMPCDKGCommitted, r, creds.SecretKey().ID(),
+			slog.String("vault_id", vaultID),
+			slog.String("mpc_key_id", key.KeyID),
+			slog.String("dkg_session_id", dkg.SessionID))
 	}
 	a.audit.logEvent(AuditMPCKeyCreated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -296,6 +318,10 @@ func (a *API) RotateMPCKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.commitMPCDKG(r.Context(), dkg)
+	a.audit.logEvent(AuditMPCDKGCommitted, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("mpc_key_id", key.KeyID),
+		slog.String("dkg_session_id", dkg.SessionID))
 	if req.ArchiveOld == nil || *req.ArchiveOld {
 		if _, err := session.MarkMPCKeyReplaced(r.Context(), oldKey.KeyID, key.KeyID); err != nil {
 			mapError(w, err)
@@ -384,6 +410,10 @@ func (a *API) AbortMPCDKGAttempt(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
+	a.audit.logEvent(AuditMPCDKGAborted, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("mpc_key_id", attempt.KeyID),
+		slog.String("dkg_session_id", attempt.DKGSessionID))
 	writeJSON(w, http.StatusOK, MPCDKGAttemptResponse(*attempt))
 }
 

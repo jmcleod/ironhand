@@ -167,6 +167,8 @@ MPC keys have lifecycle statuses (`active`, `disabled`, `archived`, `rotation_re
 
 Servers started with `--mpc-production-mode` reject providers that do not report `production_ready: true`; today that means the experimental P-256 provider cannot create or use signing sessions in production mode.
 
+See `docs/mpc-operations.md` for signer health, metrics, deployment, and backup/restore guidance.
+
 ### Storage
 
 All records are stored as AES-256-GCM encrypted envelopes with AAD that binds the ciphertext to its vault, record type, record ID, epoch, and version. This prevents record swapping and cross-vault replay attacks.

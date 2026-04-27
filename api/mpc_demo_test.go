@@ -95,6 +95,10 @@ func TestMPCDemoHarness(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, vault.MPCSigningSessionCompleted, completed.Status)
 	require.NotNil(t, completed.Signature)
+	metrics, err := session.MPCMetrics(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, metrics.KeysByStatus[vault.MPCKeyStatusActive])
+	require.Equal(t, 1, metrics.SigningSessionsByStatus[vault.MPCSigningSessionCompleted])
 
 	dkgAttempt, err := session.GetMPCDKGAttempt(ctx, dkg.SessionID)
 	require.NoError(t, err)

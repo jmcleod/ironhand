@@ -394,6 +394,7 @@ func (a *API) Router() chi.Router {
 		r.Route("/mpc", func(r chi.Router) {
 			r.Use(a.requireExperimentalMPC)
 			r.Get("/providers", a.ListMPCProviders)
+			r.Get("/metrics", a.GetMPCMetrics)
 			r.Post("/signers/{memberID}", a.RegisterMPCSigner)
 			r.Get("/keys", a.ListMPCKeys)
 			r.Post("/keys", a.CreateMPCKey)

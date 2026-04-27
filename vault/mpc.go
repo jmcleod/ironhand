@@ -179,6 +179,12 @@ type MPCDKGAttempt struct {
 	UpdatedAt    time.Time                        `json:"updated_at"`
 }
 
+type MPCMetricsSnapshot struct {
+	KeysByStatus            map[MPCKeyStatus]int            `json:"keys_by_status"`
+	DKGAttemptsByStatus     map[MPCDKGStatus]int            `json:"dkg_attempts_by_status"`
+	SigningSessionsByStatus map[MPCSigningSessionStatus]int `json:"signing_sessions_by_status"`
+}
+
 func (s *Session) RegisterMPCSigner(ctx context.Context, memberID string, reg MPCSignerRegistration) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -698,6 +704,71 @@ func (s *Session) GetMPCSigningSession(ctx context.Context, sessionID string) (*
 		return nil, err
 	}
 	return openMPCRecord[MPCSigningSession](s.vault.id, recordTypeMPCSession, sessionID, recBuf.Bytes(), env)
+}
+
+func (s *Session) ListMPCSigningSessions(ctx context.Context) ([]MPCSigningSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+	ids, err := s.vault.repo.List(s.vault.id, recordTypeMPCSession)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(ids)
+	sessions := make([]MPCSigningSession, 0, len(ids))
+	for _, id := range ids {
+		env, err := s.vault.repo.Get(s.vault.id, recordTypeMPCSession, id)
+		if err != nil {
+			return nil, err
+		}
+		session, err := openMPCRecord[MPCSigningSession](s.vault.id, recordTypeMPCSession, id, recBuf.Bytes(), env)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, *session)
+	}
+	return sessions, nil
+}
+
+func (s *Session) MPCMetrics(ctx context.Context) (*MPCMetricsSnapshot, error) {
+	keys, err := s.ListMPCKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dkgAttempts, err := s.ListMPCDKGAttempts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	signingSessions, err := s.ListMPCSigningSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &MPCMetricsSnapshot{
+		KeysByStatus:            make(map[MPCKeyStatus]int),
+		DKGAttemptsByStatus:     make(map[MPCDKGStatus]int),
+		SigningSessionsByStatus: make(map[MPCSigningSessionStatus]int),
+	}
+	for _, key := range keys {
+		snapshot.KeysByStatus[key.Status]++
+	}
+	for _, attempt := range dkgAttempts {
+		snapshot.DKGAttemptsByStatus[attempt.Status]++
+	}
+	for _, signingSession := range signingSessions {
+		snapshot.SigningSessionsByStatus[signingSession.Status]++
+	}
+	return snapshot, nil
 }
 
 func (s *Session) AddMPCApproval(ctx context.Context, sessionID string, approval mpc.Approval) (*MPCSigningSession, error) {

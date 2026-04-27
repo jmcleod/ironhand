@@ -739,6 +739,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vaults/{vaultID}/mpc/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get vault MPC metrics */
+        get: operations["getMPCMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/vaults/{vaultID}/mpc/keys": {
         parameters: {
             query?: never;
@@ -1535,6 +1552,17 @@ export interface components {
         };
         ListMPCProvidersResponse: {
             providers?: components["schemas"]["MPCProviderInfo"][];
+        };
+        MPCMetrics: {
+            keys_by_status?: {
+                [key: string]: number;
+            };
+            dkg_attempts_by_status?: {
+                [key: string]: number;
+            };
+            signing_sessions_by_status?: {
+                [key: string]: number;
+            };
         };
         MPCSignature: {
             curve?: string;
@@ -3549,6 +3577,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListMPCProvidersResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMPCMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vaultID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MPC metrics snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCMetrics"];
                 };
             };
             /** @description Unauthorized */

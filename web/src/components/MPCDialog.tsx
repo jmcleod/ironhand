@@ -17,6 +17,7 @@ import {
   completeMPCSigningSession,
   createMPCKey,
   createMPCSigningSession,
+  getMPCMetrics,
   isStepUpRequired,
   listMPCDKGAttempts,
   listMPCKeys,
@@ -26,6 +27,7 @@ import {
   updateMPCKeyStatus,
   type MPCDKGAttempt,
   type MPCKey,
+  type MPCMetrics,
   type MPCProviderInfo,
   type MPCSigningSession,
 } from '@/lib/api';
@@ -70,6 +72,7 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
   const [keys, setKeys] = useState<MPCKey[]>([]);
   const [providers, setProviders] = useState<MPCProviderInfo[]>([]);
   const [dkgAttempts, setDKGAttempts] = useState<MPCDKGAttempt[]>([]);
+  const [metrics, setMetrics] = useState<MPCMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<WorkflowPhase>('idle');
@@ -97,14 +100,16 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
   const loadMPCState = useCallback(async () => {
     setLoading(true);
     try {
-      const [next, nextProviders, nextDKG] = await Promise.all([
+      const [next, nextProviders, nextDKG, nextMetrics] = await Promise.all([
         listMPCKeys(vaultId),
         listMPCProviders(vaultId),
         listMPCDKGAttempts(vaultId),
+        getMPCMetrics(vaultId),
       ]);
       setKeys(next);
       setProviders(nextProviders);
       setDKGAttempts(nextDKG);
+      setMetrics(nextMetrics);
       if (!selectedKeyID && next[0]) setSelectedKeyID(next[0].key_id);
     } catch (err) {
       toast({ title: 'MPC unavailable', description: (err as Error).message, variant: 'destructive' });
@@ -287,8 +292,8 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
               <div className="mt-2 text-2xl font-semibold">{keys.length}</div>
             </div>
             <div className="rounded-xl border border-border bg-muted/20 p-4">
-              <div className="text-sm text-muted-foreground">Current session</div>
-              <div className="mt-2 flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> {session?.status ?? 'none'}</div>
+              <div className="text-sm text-muted-foreground">Sessions</div>
+              <div className="mt-2 flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> {Object.values(metrics?.signing_sessions_by_status ?? {}).reduce((sum, count) => sum + count, 0)}</div>
             </div>
           </div>
 
