@@ -120,7 +120,8 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 	defer session.Close()
 
 	var dkg *mpcDKGOrchestration
-	if len(req.Commitments) == 0 && len(req.Fragments) == 0 {
+	hasManualArtifacts := len(req.Commitments) > 0 || len(req.Fragments) > 0
+	if !hasManualArtifacts {
 		prepared, orchestration, err := a.orchestrateMPCDKG(r.Context(), session, vaultID, req)
 		if err != nil {
 			mapError(w, err)
@@ -128,10 +129,20 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 		}
 		req = prepared
 		dkg = orchestration
+	} else {
+		if req.ImportMode != string(vault.MPCKeyImportModeRecovery) {
+			writeError(w, http.StatusBadRequest, "manual MPC key artifacts require import_mode \"recovery\"")
+			return
+		}
+		if len(req.Commitments) == 0 || len(req.Fragments) == 0 {
+			writeError(w, http.StatusBadRequest, "recovery MPC key import requires commitments and fragments")
+			return
+		}
 	}
 	key, err := session.CreateMPCKey(r.Context(), vault.MPCKeyCreate{
 		KeyID:       req.KeyID,
 		Algorithm:   req.Algorithm,
+		ImportMode:  vault.MPCKeyImportMode(req.ImportMode),
 		Threshold:   req.Threshold,
 		MemberIDs:   req.MemberIDs,
 		Commitments: req.Commitments,
@@ -315,6 +326,7 @@ func (a *API) RotateMPCKey(w http.ResponseWriter, r *http.Request) {
 	key, err := session.CreateMPCKey(r.Context(), vault.MPCKeyCreate{
 		KeyID:         prepared.KeyID,
 		Algorithm:     prepared.Algorithm,
+		ImportMode:    vault.MPCKeyImportModeOrchestrated,
 		Threshold:     prepared.Threshold,
 		MemberIDs:     prepared.MemberIDs,
 		Commitments:   prepared.Commitments,

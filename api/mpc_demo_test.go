@@ -67,6 +67,11 @@ func TestMPCDemoHarness(t *testing.T) {
 	prepared, dkg, err := api.orchestrateMPCDKG(ctx, session, v.ID(), CreateMPCKeyRequest{KeyID: "demo-mpc-key", Threshold: 2})
 	require.NoError(t, err)
 	require.NotNil(t, dkg)
+	for _, fragment := range prepared.Fragments {
+		require.NotNil(t, fragment.Attestation)
+		require.Equal(t, v.ID(), fragment.Attestation.VaultID)
+		require.Equal(t, dkg.SessionID, fragment.Attestation.DKGSessionID)
+	}
 	key, err := session.CreateMPCKey(ctx, vault.MPCKeyCreate{
 		KeyID:       prepared.KeyID,
 		Algorithm:   prepared.Algorithm,
@@ -286,6 +291,31 @@ func TestMPCCreateKeyDisablesKeyWhenSignerCommitFails(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, attempts, 1)
 	require.Equal(t, vault.MPCDKGStatusFailed, attempts[0].Status)
+}
+
+func TestMPCCreateKeyRejectsManualArtifactsWithoutRecoveryMode(t *testing.T) {
+	env := newDemoKeyEnv(t, "manual-import-mode")
+	require.NoError(t, env.api.saveAccountRecord(env.creds.SecretKey().String(), accountRecord{
+		SecretKeyID: env.creds.SecretKey().ID(),
+		CreatedAt:   time.Now().UTC(),
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/vaults/"+env.vault.ID()+"/mpc/keys", bytes.NewReader([]byte(`{
+		"key_id":"manual-key",
+		"threshold":2,
+		"commitments":[{"partyId":1}],
+		"fragments":{"member":{"key_id":"manual-key","party_id":1}}
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("vaultID", env.vault.ID())
+	reqCtx := context.WithValue(req.Context(), credentialsKey, env.creds)
+	reqCtx = context.WithValue(reqCtx, chi.RouteCtxKey, routeCtx)
+	rec := httptest.NewRecorder()
+
+	env.api.CreateMPCKey(rec, req.WithContext(reqCtx))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "import_mode")
 }
 
 func TestMPCProductionModeRejectsExperimentalProvider(t *testing.T) {

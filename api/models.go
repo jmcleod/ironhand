@@ -179,6 +179,7 @@ type RegisterMPCSignerRequest struct {
 type CreateMPCKeyRequest struct {
 	KeyID       string                           `json:"key_id,omitempty"`
 	Algorithm   string                           `json:"algorithm,omitempty"`
+	ImportMode  string                           `json:"import_mode,omitempty"`
 	Threshold   int                              `json:"threshold"`
 	MemberIDs   []string                         `json:"member_ids,omitempty"`
 	Commitments []mpc.PublicCommitment           `json:"commitments"`

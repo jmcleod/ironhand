@@ -103,6 +103,16 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "public share commitment")
 
+	_, err = session.CreateMPCKey(ctx, MPCKeyCreate{
+		KeyID:       "mpc-key-1",
+		ImportMode:  MPCKeyImportModeRecovery,
+		Threshold:   2,
+		MemberIDs:   []string{creds.MemberID(), "bob", "carol"},
+		Commitments: commitments,
+		Fragments:   fragments,
+	})
+	require.ErrorContains(t, err, "missing signer attestation")
+
 	keys, err := session.ListMPCKeys(ctx)
 	require.NoError(t, err)
 	require.Len(t, keys, 1)

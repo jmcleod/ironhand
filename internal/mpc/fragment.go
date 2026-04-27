@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,13 +26,26 @@ type SignerIdentity struct {
 }
 
 type EncryptedFragment struct {
-	KeyID                 string `json:"key_id"`
-	PartyID               int    `json:"party_id"`
-	Algorithm             string `json:"algorithm"`
-	EphemeralPublicKey    string `json:"ephemeral_public_key"`
-	Nonce                 string `json:"nonce"`
-	Ciphertext            string `json:"ciphertext"`
-	PublicShareCommitment Point  `json:"public_share_commitment"`
+	KeyID                 string               `json:"key_id"`
+	PartyID               int                  `json:"party_id"`
+	Algorithm             string               `json:"algorithm"`
+	EphemeralPublicKey    string               `json:"ephemeral_public_key"`
+	Nonce                 string               `json:"nonce"`
+	Ciphertext            string               `json:"ciphertext"`
+	PublicShareCommitment Point                `json:"public_share_commitment"`
+	Attestation           *FragmentAttestation `json:"attestation,omitempty"`
+}
+
+type FragmentAttestation struct {
+	VaultID               string    `json:"vault_id"`
+	DKGSessionID          string    `json:"dkg_session_id"`
+	KeyID                 string    `json:"key_id"`
+	PartyID               int       `json:"party_id"`
+	PublicShareCommitment Point     `json:"public_share_commitment"`
+	CommitmentsHash       string    `json:"commitments_hash"`
+	ApprovalPublicKey     string    `json:"approval_public_key"`
+	CreatedAt             time.Time `json:"created_at"`
+	Signature             string    `json:"signature"`
 }
 
 type Approval struct {
@@ -167,6 +181,52 @@ func VerifyApproval(publicKey string, approval Approval, now time.Time) bool {
 		return false
 	}
 	return ed25519.Verify(ed25519.PublicKey(pubBytes), []byte(ApprovalPayload(approval)), signature)
+}
+
+func CommitmentsHash(commitments []PublicCommitment) (string, error) {
+	payload, err := json.Marshal(commitments)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return base64.StdEncoding.EncodeToString(sum[:]), nil
+}
+
+func SignFragmentAttestation(privateKey ed25519.PrivateKey, attestation FragmentAttestation) (FragmentAttestation, error) {
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return FragmentAttestation{}, errors.New("invalid ed25519 private key")
+	}
+	attestation.Signature = ""
+	attestation.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(FragmentAttestationPayload(attestation))))
+	return attestation, nil
+}
+
+func VerifyFragmentAttestation(publicKey string, attestation FragmentAttestation) bool {
+	pubBytes, err := base64.StdEncoding.DecodeString(publicKey)
+	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
+		return false
+	}
+	signature, err := base64.StdEncoding.DecodeString(attestation.Signature)
+	if err != nil {
+		return false
+	}
+	unsigned := attestation
+	unsigned.Signature = ""
+	return ed25519.Verify(ed25519.PublicKey(pubBytes), []byte(FragmentAttestationPayload(unsigned)), signature)
+}
+
+func FragmentAttestationPayload(attestation FragmentAttestation) string {
+	return strings.Join([]string{
+		attestation.VaultID,
+		attestation.DKGSessionID,
+		attestation.KeyID,
+		fmt.Sprintf("%d", attestation.PartyID),
+		attestation.PublicShareCommitment.X,
+		attestation.PublicShareCommitment.Y,
+		attestation.CommitmentsHash,
+		attestation.ApprovalPublicKey,
+		attestation.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}, "\n")
 }
 
 func ApprovalPayload(approval Approval) string {
