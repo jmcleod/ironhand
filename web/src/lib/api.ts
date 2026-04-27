@@ -787,6 +787,16 @@ export async function finishStepUpPasskey(credential: unknown): Promise<StepUpRe
 
 export interface MPCPoint { x: string; y: string }
 export interface MPCPublicKey { curve: string; encoded: string; x: string; y: string; threshold: number; parties: number }
+export interface MPCProviderInfo {
+  algorithm: string;
+  curve: string;
+  status: string;
+  domain?: string;
+  production_ready: boolean;
+  supports_keygen: boolean;
+  supports_signing: boolean;
+  supports_reshare: boolean;
+}
 export interface MPCParticipant {
   member_id: string;
   party_id: number;
@@ -802,12 +812,28 @@ export interface MPCKey {
   vault_id: string;
   algorithm: string;
   curve: string;
+  provider?: MPCProviderInfo;
   threshold: number;
   status: string;
   created_at: string;
+  updated_at?: string;
   public_key: MPCPublicKey;
   participants: MPCParticipant[];
   policy?: MPCPolicy;
+}
+export interface MPCDKGAttempt {
+  dkg_session_id: string;
+  vault_id: string;
+  key_id: string;
+  algorithm: string;
+  threshold: number;
+  status: string;
+  members?: { member_id: string; party_id: number; url: string }[];
+  commitments?: unknown[];
+  fragments?: Record<string, unknown>;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
 }
 export interface MPCPolicy {
   approval_mode?: string;
@@ -875,6 +901,36 @@ export async function listMPCKeys(vaultID: string): Promise<MPCKey[]> {
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys`);
   const data = (await resp.json()) as { keys: MPCKey[] };
   return data.keys ?? [];
+}
+
+export async function listMPCProviders(vaultID: string): Promise<MPCProviderInfo[]> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/providers`);
+  const data = (await resp.json()) as { providers: MPCProviderInfo[] };
+  return data.providers ?? [];
+}
+
+export async function listMPCDKGAttempts(vaultID: string): Promise<MPCDKGAttempt[]> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/dkg`);
+  const data = (await resp.json()) as { attempts: MPCDKGAttempt[] };
+  return data.attempts ?? [];
+}
+
+export async function abortMPCDKGAttempt(vaultID: string, dkgSessionID: string): Promise<MPCDKGAttempt> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/dkg/${encodeURIComponent(dkgSessionID)}/abort`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  return (await resp.json()) as MPCDKGAttempt;
+}
+
+export async function updateMPCKeyStatus(vaultID: string, keyID: string, status: string): Promise<MPCKey> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys/${encodeURIComponent(keyID)}/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  return (await resp.json()) as MPCKey;
 }
 
 export async function createMPCKey(vaultID: string, req: { threshold: number; member_ids?: string[]; policy?: MPCPolicy }): Promise<MPCKey> {

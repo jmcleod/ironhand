@@ -12,14 +12,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import type { MemberInfo } from '@/types/vault';
 import {
+  abortMPCDKGAttempt,
   approveMPCSigningSession,
   completeMPCSigningSession,
   createMPCKey,
   createMPCSigningSession,
   isStepUpRequired,
+  listMPCDKGAttempts,
   listMPCKeys,
+  listMPCProviders,
   registerMPCSigner,
+  updateMPCKeyStatus,
+  type MPCDKGAttempt,
   type MPCKey,
+  type MPCProviderInfo,
   type MPCSigningSession,
 } from '@/lib/api';
 import StepUpAuthDialog from '@/components/StepUpAuthDialog';
@@ -37,6 +43,15 @@ type WorkflowPhase = 'idle' | 'dkg' | 'session' | 'approvals' | 'complete';
 const statusClass: Record<string, string> = {
   active: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30',
   disabled: 'bg-amber-500/10 text-amber-700 border-amber-500/30',
+  archived: 'bg-slate-500/10 text-slate-700 border-slate-500/30',
+  rotation_required: 'bg-orange-500/10 text-orange-700 border-orange-500/30',
+  reshare_required: 'bg-red-500/10 text-red-700 border-red-500/30',
+  destroyed: 'bg-zinc-500/10 text-zinc-700 border-zinc-500/30',
+  committed: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30',
+  failed: 'bg-red-500/10 text-red-700 border-red-500/30',
+  aborted: 'bg-zinc-500/10 text-zinc-700 border-zinc-500/30',
+  started: 'bg-blue-500/10 text-blue-700 border-blue-500/30',
+  finalizing: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/30',
   unregistered: 'bg-muted text-muted-foreground border-border',
 };
 
@@ -52,6 +67,8 @@ function signerCommand(member: MemberInfo) {
 export default function MPCDialog({ open, onOpenChange, vaultId, members, onChanged }: MPCDialogProps) {
   const { toast } = useToast();
   const [keys, setKeys] = useState<MPCKey[]>([]);
+  const [providers, setProviders] = useState<MPCProviderInfo[]>([]);
+  const [dkgAttempts, setDKGAttempts] = useState<MPCDKGAttempt[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<WorkflowPhase>('idle');
@@ -76,11 +93,17 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
   const readiness = activeMembers.length === 0 ? 0 : Math.round((mpcMembers.length / activeMembers.length) * 100);
   const phaseProgress = phase === 'idle' ? 0 : phase === 'dkg' ? 30 : phase === 'session' ? 50 : phase === 'approvals' ? 75 : 100;
 
-  const loadKeys = useCallback(async () => {
+  const loadMPCState = useCallback(async () => {
     setLoading(true);
     try {
-      const next = await listMPCKeys(vaultId);
+      const [next, nextProviders, nextDKG] = await Promise.all([
+        listMPCKeys(vaultId),
+        listMPCProviders(vaultId),
+        listMPCDKGAttempts(vaultId),
+      ]);
       setKeys(next);
+      setProviders(nextProviders);
+      setDKGAttempts(nextDKG);
       if (!selectedKeyID && next[0]) setSelectedKeyID(next[0].key_id);
     } catch (err) {
       toast({ title: 'MPC unavailable', description: (err as Error).message, variant: 'destructive' });
@@ -90,8 +113,8 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
   }, [selectedKeyID, toast, vaultId]);
 
   useEffect(() => {
-    if (open) void loadKeys();
-  }, [open, loadKeys]);
+    if (open) void loadMPCState();
+  }, [open, loadMPCState]);
 
   const runStepUp = (fn: () => void, err: unknown) => {
     if (isStepUpRequired(err)) {
@@ -133,6 +156,7 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
       const key = await createMPCKey(vaultId, { threshold, member_ids: selectedMemberIDs });
       setKeys((prev) => [key, ...prev]);
       setSelectedKeyID(key.key_id);
+      void loadMPCState();
       toast({ title: 'MPC key created', description: `${key.threshold} of ${key.participants.length} threshold key is ready.` });
     } catch (err) {
       if (!runStepUp(run, err)) toast({ title: 'Key creation failed', description: (err as Error).message, variant: 'destructive' });
@@ -177,6 +201,34 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
       if (!runStepUp(run, err)) toast({ title: 'Completion failed', description: (err as Error).message, variant: 'destructive' });
     } finally {
       setPhase('idle');
+      setBusy(false);
+    }
+  };
+
+  const handleKeyStatus = async (keyID: string, status: string) => {
+    const run = () => void handleKeyStatus(keyID, status);
+    setBusy(true);
+    try {
+      const updated = await updateMPCKeyStatus(vaultId, keyID, status);
+      setKeys((prev) => prev.map((key) => key.key_id === updated.key_id ? updated : key));
+      toast({ title: 'MPC key updated', description: `${shortID(keyID)} is now ${status}.` });
+    } catch (err) {
+      if (!runStepUp(run, err)) toast({ title: 'Status update failed', description: (err as Error).message, variant: 'destructive' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAbortDKG = async (dkgSessionID: string) => {
+    const run = () => void handleAbortDKG(dkgSessionID);
+    setBusy(true);
+    try {
+      const updated = await abortMPCDKGAttempt(vaultId, dkgSessionID);
+      setDKGAttempts((prev) => prev.map((attempt) => attempt.dkg_session_id === updated.dkg_session_id ? updated : attempt));
+      toast({ title: 'DKG aborted', description: shortID(dkgSessionID) });
+    } catch (err) {
+      if (!runStepUp(run, err)) toast({ title: 'Abort failed', description: (err as Error).message, variant: 'destructive' });
+    } finally {
       setBusy(false);
     }
   };
@@ -226,11 +278,34 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
 
           {loading ? <p className="text-sm text-muted-foreground">Loading MPC state...</p> : (
             <Tabs defaultValue="signers" className="mt-2">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-5">
+                <TabsTrigger value="providers"><ShieldCheck className="mr-2 h-4 w-4" /> Providers</TabsTrigger>
                 <TabsTrigger value="signers"><RadioTower className="mr-2 h-4 w-4" /> Signers</TabsTrigger>
                 <TabsTrigger value="keys"><UsersRound className="mr-2 h-4 w-4" /> Keys</TabsTrigger>
+                <TabsTrigger value="dkg"><Loader2 className="mr-2 h-4 w-4" /> DKG</TabsTrigger>
                 <TabsTrigger value="sessions"><Play className="mr-2 h-4 w-4" /> Sessions</TabsTrigger>
               </TabsList>
+
+              <TabsContent value="providers" className="space-y-3">
+                {providers.length === 0 ? <p className="text-sm text-muted-foreground">No MPC providers reported by the API.</p> : providers.map((provider) => (
+                  <section key={provider.algorithm} className="rounded-xl border border-border bg-muted/20 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-semibold">{provider.algorithm}</h3>
+                        <p className="text-xs text-muted-foreground">{provider.curve} · {provider.domain || 'no domain metadata'}</p>
+                      </div>
+                      <Badge variant="outline" className={provider.production_ready ? statusClass.active : statusClass.disabled}>
+                        {provider.production_ready ? 'production ready' : 'experimental'}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 md:grid-cols-3">
+                      <Badge variant="outline">keygen {provider.supports_keygen ? 'yes' : 'no'}</Badge>
+                      <Badge variant="outline">signing {provider.supports_signing ? 'yes' : 'no'}</Badge>
+                      <Badge variant="outline">reshare {provider.supports_reshare ? 'yes' : 'no'}</Badge>
+                    </div>
+                  </section>
+                ))}
+              </TabsContent>
 
               <TabsContent value="signers" className="space-y-4">
                 <div className="grid gap-4 md:grid-cols-[1.15fr_0.85fr]">
@@ -299,12 +374,44 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                     <button key={k.key_id} onClick={() => setSelectedKeyID(k.key_id)} className={`w-full rounded-lg border p-3 text-left text-xs transition ${selectedKeyID === k.key_id ? 'border-primary bg-primary/5' : 'border-border bg-background/60'}`}>
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono">{k.key_id}</span>
-                        <Badge variant="outline">{k.threshold} of {k.participants.length}</Badge>
+                        <div className="flex gap-2">
+                          <Badge variant="outline" className={statusClass[k.status] || ''}>{k.status}</Badge>
+                          <Badge variant="outline">{k.threshold} of {k.participants.length}</Badge>
+                        </div>
                       </div>
-                      <div className="mt-1 text-muted-foreground">{k.algorithm} · {shortID(k.public_key.encoded, 34)}</div>
+                      <div className="mt-1 text-muted-foreground">{k.provider?.status || 'unknown'} · {k.algorithm} · {shortID(k.public_key.encoded, 34)}</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'active'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'active'); }}>Enable</Button>
+                        <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'disabled'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'disabled'); }}>Disable</Button>
+                        <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'rotation_required'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'rotation_required'); }}>Rotation needed</Button>
+                        <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'archived'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'archived'); }}>Archive</Button>
+                      </div>
                     </button>
                   ))}
                 </section>
+              </TabsContent>
+
+              <TabsContent value="dkg" className="space-y-3">
+                {dkgAttempts.length === 0 ? <p className="text-sm text-muted-foreground">No DKG attempts recorded yet.</p> : dkgAttempts.map((attempt) => (
+                  <section key={attempt.dkg_session_id} className="rounded-xl border border-border bg-muted/20 p-4 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="font-mono">{attempt.key_id}</div>
+                        <div className="text-muted-foreground">{shortID(attempt.dkg_session_id, 32)}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className={statusClass[attempt.status] || ''}>{attempt.status}</Badge>
+                        <Badge variant="outline">{attempt.threshold} threshold</Badge>
+                        <Badge variant="outline">{attempt.members?.length ?? 0} members</Badge>
+                      </div>
+                    </div>
+                    {attempt.last_error ? <p className="mt-2 rounded-md border border-red-500/30 bg-red-500/5 p-2 text-red-700">{attempt.last_error}</p> : null}
+                    <div className="mt-3 flex gap-2">
+                      <Button type="button" size="sm" variant="outline" disabled={busy || ['committed', 'aborted'].includes(attempt.status)} onClick={() => void handleAbortDKG(attempt.dkg_session_id)}>Abort</Button>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => void loadMPCState()}>Refresh</Button>
+                    </div>
+                  </section>
+                ))}
               </TabsContent>
 
               <TabsContent value="sessions" className="space-y-4">
