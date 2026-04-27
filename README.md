@@ -152,6 +152,13 @@ ironhand signer approvals approve <request_id> --url http://127.0.0.1:8081
 ironhand signer approvals reject <request_id> --reason "not expected"
 ```
 
+Coordinator-side DKG attempts are sealed into the vault and can be inspected or aborted through the experimental MPC API:
+
+```sh
+curl -H "Cookie: ironhand_session=..." http://127.0.0.1:8080/api/v1/vaults/<vault_id>/mpc/dkg
+curl -X POST -H "X-CSRF-Token: <token>" http://127.0.0.1:8080/api/v1/vaults/<vault_id>/mpc/dkg/<dkg_session_id>/abort
+```
+
 The available algorithm is `experimental-p256-schnorr-v1`. It is suitable for protocol development and UX testing, not production funds. A production deployment should replace this boundary with a vetted threshold signature implementation such as FROST over the target production curve.
 
 ### Storage

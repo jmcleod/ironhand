@@ -186,6 +186,7 @@ const (
 	recordTypeMPCKey      = "MPC_KEY"
 	recordTypeMPCFragment = "MPC_FRAGMENT"
 	recordTypeMPCSession  = "MPC_SESSION"
+	recordTypeMPCDKG      = "MPC_DKG"
 )
 
 // Special record IDs

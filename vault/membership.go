@@ -314,6 +314,11 @@ func (s *Session) rotateEpoch(ctx context.Context, state *vaultState, addMember 
 			return err
 		}
 		writes = append(writes, mpcSessionWrites...)
+		mpcDKGWrites, err := rewrapRecordType(state.VaultID, s.vault.repo, recordTypeMPCDKG, recordKey, writeRecordKey, mpcRecordAAD)
+		if err != nil {
+			return err
+		}
+		writes = append(writes, mpcDKGWrites...)
 		auditWrites, err := rewrapRecordType(state.VaultID, s.vault.repo, "AUDIT", recordKey, writeRecordKey, auditRecordAAD)
 		if err != nil {
 			return err

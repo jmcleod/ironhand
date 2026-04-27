@@ -100,12 +100,22 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if dkg != nil {
 			a.abortMPCDKG(r.Context(), dkg)
+			if attempt, getErr := session.GetMPCDKGAttempt(r.Context(), dkg.SessionID); getErr == nil {
+				attempt.Status = vault.MPCDKGStatusAborted
+				attempt.LastError = err.Error()
+				_, _ = session.SaveMPCDKGAttempt(r.Context(), *attempt)
+			}
 		}
 		mapError(w, err)
 		return
 	}
 	if dkg != nil {
 		a.commitMPCDKG(r.Context(), dkg)
+		if attempt, err := session.GetMPCDKGAttempt(r.Context(), dkg.SessionID); err == nil {
+			attempt.Status = vault.MPCDKGStatusCommitted
+			attempt.LastError = ""
+			_, _ = session.SaveMPCDKGAttempt(r.Context(), *attempt)
+		}
 	}
 	a.audit.logEvent(AuditMPCKeyCreated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -153,6 +163,83 @@ func (a *API) GetMPCKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, MPCKeyResponse(*key))
+}
+
+func (a *API) ListMPCDKGAttempts(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	attempts, err := session.ListMPCDKGAttempts(r.Context())
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Attempts []vault.MPCDKGAttempt `json:"attempts"`
+	}{Attempts: attempts})
+}
+
+func (a *API) GetMPCDKGAttempt(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	dkgSessionID := chi.URLParam(r, "dkgSessionID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	attempt, err := session.GetMPCDKGAttempt(r.Context(), dkgSessionID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, MPCDKGAttemptResponse(*attempt))
+}
+
+func (a *API) AbortMPCDKGAttempt(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	dkgSessionID := chi.URLParam(r, "dkgSessionID")
+	creds := credentialsFromContext(r.Context())
+
+	if !a.requireStepUp(w, r) {
+		return
+	}
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	attempt, err := session.GetMPCDKGAttempt(r.Context(), dkgSessionID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	if attempt.Status == vault.MPCDKGStatusCommitted {
+		writeError(w, http.StatusConflict, "committed MPC DKG attempts cannot be aborted")
+		return
+	}
+	dkg := &mpcDKGOrchestration{SessionID: attempt.DKGSessionID, KeyID: attempt.KeyID, Members: signerMembersFromDKGAttempt(attempt)}
+	a.abortMPCDKG(r.Context(), dkg)
+	attempt.Status = vault.MPCDKGStatusAborted
+	attempt.LastError = "aborted by operator"
+	attempt, err = session.SaveMPCDKGAttempt(r.Context(), *attempt)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, MPCDKGAttemptResponse(*attempt))
 }
 
 func (a *API) CreateMPCSigningSession(w http.ResponseWriter, r *http.Request) {
@@ -343,27 +430,54 @@ func (a *API) orchestrateMPCDKG(ctx context.Context, session *vault.Session, vau
 		return req, nil, vault.ValidationError{Message: fmt.Sprintf("need at least %d active MPC signers, found %d", req.Threshold, len(selected))}
 	}
 	dkg := &mpcDKGOrchestration{SessionID: uuid.New(), KeyID: req.KeyID, Members: selected}
+	attempt := vault.MPCDKGAttempt{
+		DKGSessionID: dkg.SessionID,
+		VaultID:      vaultID,
+		KeyID:        req.KeyID,
+		Algorithm:    req.Algorithm,
+		Threshold:    req.Threshold,
+		Status:       vault.MPCDKGStatusStarted,
+		Members:      dkgAttemptMembers(selected),
+	}
+	savedAttempt, err := session.SaveMPCDKGAttempt(ctx, attempt)
+	if err != nil {
+		return req, nil, err
+	}
+	attempt = *savedAttempt
 	start := mpcsigner.StartDKGRequest{DKGSessionID: dkg.SessionID, VaultID: vaultID, KeyID: req.KeyID, Threshold: req.Threshold, Members: selected}
 	req.Commitments = make([]mpc.PublicCommitment, 0, len(selected))
 	for _, member := range selected {
 		var resp mpcsigner.StartDKGResponse
 		if err := a.mpcClient.PostJSON(member.URL+"/signer/dkg/start", start, &resp); err != nil {
 			a.abortMPCDKG(ctx, dkg)
+			attempt.Status = vault.MPCDKGStatusFailed
+			attempt.LastError = err.Error()
+			_, _ = session.SaveMPCDKGAttempt(ctx, attempt)
 			return req, nil, err
 		}
 		req.Commitments = append(req.Commitments, resp.Commitment)
+		attempt.Commitments = append([]mpc.PublicCommitment(nil), req.Commitments...)
+		_, _ = session.SaveMPCDKGAttempt(ctx, attempt)
 	}
 	finalize := mpcsigner.FinalizeDKGRequest{DKGSessionID: dkg.SessionID, VaultID: vaultID, KeyID: req.KeyID, Threshold: req.Threshold, Members: selected, Commitments: req.Commitments}
 	req.Fragments = make(map[string]mpc.EncryptedFragment, len(selected))
 	finalized := make([]mpcsigner.Member, 0, len(selected))
+	attempt.Status = vault.MPCDKGStatusFinalizing
+	attempt.Commitments = append([]mpc.PublicCommitment(nil), req.Commitments...)
+	_, _ = session.SaveMPCDKGAttempt(ctx, attempt)
 	for _, member := range selected {
 		var resp mpcsigner.FinalizeDKGResponse
 		if err := a.mpcClient.PostJSON(member.URL+"/signer/dkg/finalize", finalize, &resp); err != nil {
 			a.abortMPCDKG(ctx, &mpcDKGOrchestration{SessionID: dkg.SessionID, KeyID: req.KeyID, Members: selected})
+			attempt.Status = vault.MPCDKGStatusFailed
+			attempt.LastError = err.Error()
+			_, _ = session.SaveMPCDKGAttempt(ctx, attempt)
 			return req, nil, err
 		}
 		finalized = append(finalized, member)
 		req.Fragments[member.MemberID] = resp.EncryptedFragment
+		attempt.Fragments = copyMPCFragments(req.Fragments)
+		_, _ = session.SaveMPCDKGAttempt(ctx, attempt)
 	}
 	dkg.Members = append([]mpcsigner.Member(nil), finalized...)
 	return req, dkg, nil
@@ -564,4 +678,40 @@ func findMPCApproval(approvals []mpc.Approval, partyID uint32) (mpc.Approval, bo
 		}
 	}
 	return mpc.Approval{}, false
+}
+
+func dkgAttemptMembers(members []mpcsigner.Member) []vault.MPCDKGMember {
+	out := make([]vault.MPCDKGMember, 0, len(members))
+	for _, member := range members {
+		out = append(out, vault.MPCDKGMember{
+			MemberID:            member.MemberID,
+			PartyID:             member.PartyID,
+			URL:                 member.URL,
+			EncryptionPublicKey: member.EncryptionPublicKey,
+			ApprovalPublicKey:   member.ApprovalPublicKey,
+		})
+	}
+	return out
+}
+
+func signerMembersFromDKGAttempt(attempt *vault.MPCDKGAttempt) []mpcsigner.Member {
+	out := make([]mpcsigner.Member, 0, len(attempt.Members))
+	for _, member := range attempt.Members {
+		out = append(out, mpcsigner.Member{
+			MemberID:            member.MemberID,
+			PartyID:             member.PartyID,
+			URL:                 member.URL,
+			EncryptionPublicKey: member.EncryptionPublicKey,
+			ApprovalPublicKey:   member.ApprovalPublicKey,
+		})
+	}
+	return out
+}
+
+func copyMPCFragments(in map[string]mpc.EncryptedFragment) map[string]mpc.EncryptedFragment {
+	out := make(map[string]mpc.EncryptedFragment, len(in))
+	for memberID, fragment := range in {
+		out[memberID] = fragment
+	}
+	return out
 }

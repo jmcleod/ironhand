@@ -740,6 +740,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vaults/{vaultID}/mpc/dkg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List MPC DKG attempts */
+        get: operations["listMPCDKGAttempts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vaults/{vaultID}/mpc/dkg/{dkgSessionID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an MPC DKG attempt */
+        get: operations["getMPCDKGAttempt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vaults/{vaultID}/mpc/dkg/{dkgSessionID}/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Abort an MPC DKG attempt */
+        post: operations["abortMPCDKGAttempt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/vaults/{vaultID}/mpc/keys/{keyID}": {
         parameters: {
             query?: never;
@@ -1442,6 +1493,36 @@ export interface components {
             /** @enum {string} */
             signer_status?: "unregistered" | "active" | "disabled";
             public_share_commitment?: components["schemas"]["MPCPoint"];
+        };
+        MPCDKGMember: {
+            member_id?: string;
+            party_id?: number;
+            url?: string;
+            encryption_public_key?: string;
+            approval_public_key?: string;
+        };
+        MPCDKGAttempt: {
+            dkg_session_id?: string;
+            vault_id?: string;
+            key_id?: string;
+            /** @enum {string} */
+            algorithm?: "experimental-p256-schnorr-v1";
+            threshold?: number;
+            /** @enum {string} */
+            status?: "started" | "finalizing" | "committed" | "aborted" | "failed";
+            members?: components["schemas"]["MPCDKGMember"][];
+            commitments?: components["schemas"]["MPCPublicCommitment"][];
+            fragments?: {
+                [key: string]: components["schemas"]["MPCEncryptedFragment"];
+            };
+            last_error?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        ListMPCDKGAttemptsResponse: {
+            attempts?: components["schemas"]["MPCDKGAttempt"][];
         };
         MPCKey: {
             key_id?: string;
@@ -3422,6 +3503,119 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MPCKey"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled or step-up required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listMPCDKGAttempts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vaultID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MPC DKG attempts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListMPCDKGAttemptsResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMPCDKGAttempt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vaultID: string;
+                dkgSessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MPC DKG attempt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCDKGAttempt"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    abortMPCDKGAttempt: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF double-submit token. Must match the value of the `ironhand_csrf` cookie. Required on all mutating (POST/PUT/DELETE) requests that use cookie-based session authentication. GET/HEAD/OPTIONS requests and header-authenticated requests are exempt. */
+                "X-CSRF-Token": components["parameters"]["CSRFToken"];
+            };
+            path: {
+                vaultID: string;
+                dkgSessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MPC DKG attempt aborted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCDKGAttempt"];
                 };
             };
             /** @description Unauthorized */

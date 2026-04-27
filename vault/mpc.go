@@ -72,6 +72,16 @@ const (
 	MPCSigningSessionFailed    MPCSigningSessionStatus = "failed"
 )
 
+type MPCDKGStatus string
+
+const (
+	MPCDKGStatusStarted    MPCDKGStatus = "started"
+	MPCDKGStatusFinalizing MPCDKGStatus = "finalizing"
+	MPCDKGStatusCommitted  MPCDKGStatus = "committed"
+	MPCDKGStatusAborted    MPCDKGStatus = "aborted"
+	MPCDKGStatusFailed     MPCDKGStatus = "failed"
+)
+
 type MPCSignerRegistration struct {
 	URL                 string          `json:"url"`
 	EncryptionPublicKey string          `json:"encryption_public_key"`
@@ -139,6 +149,29 @@ type MPCSigningSession struct {
 	Signature    *mpc.Signature          `json:"signature,omitempty"`
 	CreatedAt    time.Time               `json:"created_at"`
 	ExpiresAt    time.Time               `json:"expires_at"`
+}
+
+type MPCDKGMember struct {
+	MemberID            string `json:"member_id"`
+	PartyID             uint32 `json:"party_id"`
+	URL                 string `json:"url"`
+	EncryptionPublicKey string `json:"encryption_public_key"`
+	ApprovalPublicKey   string `json:"approval_public_key"`
+}
+
+type MPCDKGAttempt struct {
+	DKGSessionID string                           `json:"dkg_session_id"`
+	VaultID      string                           `json:"vault_id"`
+	KeyID        string                           `json:"key_id"`
+	Algorithm    string                           `json:"algorithm"`
+	Threshold    int                              `json:"threshold"`
+	Status       MPCDKGStatus                     `json:"status"`
+	Members      []MPCDKGMember                   `json:"members"`
+	Commitments  []mpc.PublicCommitment           `json:"commitments,omitempty"`
+	Fragments    map[string]mpc.EncryptedFragment `json:"fragments,omitempty"`
+	LastError    string                           `json:"last_error,omitempty"`
+	CreatedAt    time.Time                        `json:"created_at"`
+	UpdatedAt    time.Time                        `json:"updated_at"`
 }
 
 func (s *Session) RegisterMPCSigner(ctx context.Context, memberID string, reg MPCSignerRegistration) error {
@@ -363,6 +396,108 @@ func (s *Session) GetMPCKey(ctx context.Context, keyID string) (*MPCKey, error) 
 		return nil, err
 	}
 	return loadMPCKey(s.vault.id, s.vault.repo, recBuf.Bytes(), keyID)
+}
+
+func (s *Session) SaveMPCDKGAttempt(ctx context.Context, attempt MPCDKGAttempt) (*MPCDKGAttempt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	if err := validateID(attempt.DKGSessionID, "MPC DKG session ID"); err != nil {
+		return nil, err
+	}
+	if err := validateID(attempt.KeyID, "MPC key ID"); err != nil {
+		return nil, err
+	}
+	if attempt.Algorithm == "" {
+		attempt.Algorithm = MPCAlgorithmExperimentalP256Schnorr
+	}
+	if attempt.Status == "" {
+		attempt.Status = MPCDKGStatusStarted
+	}
+	now := time.Now().UTC()
+	if attempt.CreatedAt.IsZero() {
+		attempt.CreatedAt = now
+	}
+	attempt.UpdatedAt = now
+	attempt.VaultID = s.vault.id
+
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	if _, err := s.authorize(ctx, accessAdmin, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+	env, err := sealMPCRecord(s.vault.id, recordTypeMPCDKG, attempt.DKGSessionID, recBuf.Bytes(), attempt)
+	if err != nil {
+		return nil, err
+	}
+	version := uint64(0)
+	if existing, err := s.vault.repo.Get(s.vault.id, recordTypeMPCDKG, attempt.DKGSessionID); err == nil {
+		version = existing.Version
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return nil, err
+	}
+	if err := s.vault.repo.PutCAS(s.vault.id, recordTypeMPCDKG, attempt.DKGSessionID, version, env); err != nil {
+		return nil, err
+	}
+	return &attempt, nil
+}
+
+func (s *Session) ListMPCDKGAttempts(ctx context.Context) ([]MPCDKGAttempt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+	ids, err := s.vault.repo.List(s.vault.id, recordTypeMPCDKG)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(ids)
+	attempts := make([]MPCDKGAttempt, 0, len(ids))
+	for _, id := range ids {
+		attempt, err := loadMPCDKGAttempt(s.vault.id, s.vault.repo, recBuf.Bytes(), id)
+		if err != nil {
+			return nil, err
+		}
+		attempts = append(attempts, *attempt)
+	}
+	return attempts, nil
+}
+
+func (s *Session) GetMPCDKGAttempt(ctx context.Context, dkgSessionID string) (*MPCDKGAttempt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	if err := validateID(dkgSessionID, "MPC DKG session ID"); err != nil {
+		return nil, err
+	}
+	recBuf, err := s.recordKey.Open()
+	if err != nil {
+		return nil, fmt.Errorf("opening record key enclave: %w", err)
+	}
+	defer recBuf.Destroy()
+	if _, err := s.authorize(ctx, accessRead, recBuf.Bytes()); err != nil {
+		return nil, err
+	}
+	return loadMPCDKGAttempt(s.vault.id, s.vault.repo, recBuf.Bytes(), dkgSessionID)
 }
 
 func (s *Session) GetMPCKeyFragment(ctx context.Context, keyID, memberID string) (*MPCKeyFragment, error) {
@@ -850,6 +985,14 @@ func loadMPCKey(vaultID string, repo storage.Repository, recordKey []byte, keyID
 		return nil, err
 	}
 	return openMPCRecord[MPCKey](vaultID, recordTypeMPCKey, keyID, recordKey, env)
+}
+
+func loadMPCDKGAttempt(vaultID string, repo storage.Repository, recordKey []byte, dkgSessionID string) (*MPCDKGAttempt, error) {
+	env, err := repo.Get(vaultID, recordTypeMPCDKG, dkgSessionID)
+	if err != nil {
+		return nil, err
+	}
+	return openMPCRecord[MPCDKGAttempt](vaultID, recordTypeMPCDKG, dkgSessionID, recordKey, env)
 }
 
 func sealMPCRecord(vaultID, recordType, recordID string, recordKey []byte, value any) (*storage.Envelope, error) {

@@ -211,6 +211,7 @@ type CompleteMPCSigningSessionRequest struct {
 
 type MPCKeyResponse = vault.MPCKey
 type MPCSigningSessionResponse = vault.MPCSigningSession
+type MPCDKGAttemptResponse = vault.MPCDKGAttempt
 
 // HistoryEntryResponse represents a single version in an item's history.
 type HistoryEntryResponse struct {

@@ -945,6 +945,66 @@ components:
         public_share_commitment:
           $ref: '#/components/schemas/MPCPoint'
 
+    MPCDKGMember:
+      type: object
+      properties:
+        member_id:
+          type: string
+        party_id:
+          type: integer
+        url:
+          type: string
+        encryption_public_key:
+          type: string
+        approval_public_key:
+          type: string
+
+    MPCDKGAttempt:
+      type: object
+      properties:
+        dkg_session_id:
+          type: string
+        vault_id:
+          type: string
+        key_id:
+          type: string
+        algorithm:
+          type: string
+          enum: [experimental-p256-schnorr-v1]
+        threshold:
+          type: integer
+        status:
+          type: string
+          enum: [started, finalizing, committed, aborted, failed]
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/MPCDKGMember'
+        commitments:
+          type: array
+          items:
+            $ref: '#/components/schemas/MPCPublicCommitment'
+        fragments:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/MPCEncryptedFragment'
+        last_error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ListMPCDKGAttemptsResponse:
+      type: object
+      properties:
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MPCDKGAttempt'
+
     MPCKey:
       type: object
       properties:
@@ -2536,6 +2596,89 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MPCKey'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Experimental MPC disabled or step-up required
+
+  /vaults/{vaultID}/mpc/dkg:
+    get:
+      summary: List MPC DKG attempts
+      operationId: listMPCDKGAttempts
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MPC DKG attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMPCDKGAttemptsResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Experimental MPC disabled
+
+  /vaults/{vaultID}/mpc/dkg/{dkgSessionID}:
+    get:
+      summary: Get an MPC DKG attempt
+      operationId: getMPCDKGAttempt
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: dkgSessionID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MPC DKG attempt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MPCDKGAttempt'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Experimental MPC disabled
+
+  /vaults/{vaultID}/mpc/dkg/{dkgSessionID}/abort:
+    post:
+      summary: Abort an MPC DKG attempt
+      operationId: abortMPCDKGAttempt
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: dkgSessionID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: MPC DKG attempt aborted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MPCDKGAttempt'
         '401':
           description: Unauthorized
         '403':
