@@ -32,6 +32,18 @@ func (a *API) ListMPCProviders(w http.ResponseWriter, r *http.Request) {
 	}{Providers: mpc.SupportedProviders()})
 }
 
+func (a *API) validateMPCProviderForUse(algorithm string) error {
+	provider, err := mpc.GetProvider(algorithm)
+	if err != nil {
+		return vault.ValidationError{Message: err.Error()}
+	}
+	info := provider.Info()
+	if a.mpcProductionMode && !info.ProductionReady {
+		return vault.ValidationError{Message: fmt.Sprintf("MPC provider %q is not production ready", info.Algorithm)}
+	}
+	return nil
+}
+
 func (a *API) RegisterMPCSigner(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	memberID := chi.URLParam(r, "memberID")
@@ -75,6 +87,10 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 	}
 	req, ok := decodeJSON[CreateMPCKeyRequest](w, r, maxSmallBodySize)
 	if !ok {
+		return
+	}
+	if err := a.validateMPCProviderForUse(req.Algorithm); err != nil {
+		mapError(w, err)
 		return
 	}
 	session, err := a.openSession(r.Context(), vaultID, creds)
@@ -227,6 +243,10 @@ func (a *API) RotateMPCKey(w http.ResponseWriter, r *http.Request) {
 
 	oldKey, err := session.GetMPCKey(r.Context(), keyID)
 	if err != nil {
+		mapError(w, err)
+		return
+	}
+	if err := a.validateMPCProviderForUse(oldKey.Algorithm); err != nil {
 		mapError(w, err)
 		return
 	}
@@ -392,6 +412,15 @@ func (a *API) CreateMPCSigningSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer session.Close()
+	key, err := session.GetMPCKey(r.Context(), keyID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	if err := a.validateMPCProviderForUse(key.Algorithm); err != nil {
+		mapError(w, err)
+		return
+	}
 
 	signingSession, err := session.CreateMPCSigningSessionWithOptions(r.Context(), keyID, vault.MPCSigningSessionCreate{
 		Message:      message,
@@ -494,6 +523,20 @@ func (a *API) CompleteMPCSigningSession(w http.ResponseWriter, r *http.Request) 
 			slog.String("mpc_key_id", completed.KeyID),
 			slog.String("mpc_session_id", completed.SessionID))
 		writeJSON(w, http.StatusOK, MPCSigningSessionResponse(*completed))
+		return
+	}
+	existingSession, err := session.GetMPCSigningSession(r.Context(), sessionID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	key, err := session.GetMPCKey(r.Context(), existingSession.KeyID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	if err := a.validateMPCProviderForUse(key.Algorithm); err != nil {
+		mapError(w, err)
 		return
 	}
 	signingSession, err := session.CompleteMPCSigningSession(r.Context(), sessionID, req.Commitments, req.Signature)
@@ -700,6 +743,9 @@ func (a *API) completeMPCSessionWithSigners(ctx context.Context, session *vault.
 	}
 	key, err := session.GetMPCKey(ctx, signingSession.KeyID)
 	if err != nil {
+		return nil, err
+	}
+	if err := a.validateMPCProviderForUse(key.Algorithm); err != nil {
 		return nil, err
 	}
 	signingSession, err = a.collectMPCApprovalsFromSigners(ctx, session, signingSession, key)

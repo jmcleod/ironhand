@@ -165,6 +165,8 @@ Available MPC providers are exposed at `GET /api/v1/vaults/<vault_id>/mpc/provid
 
 MPC keys have lifecycle statuses (`active`, `disabled`, `archived`, `rotation_required`, `reshare_required`, `destroyed`). Revoking a vault member automatically marks any MPC key that included that member as `reshare_required`; admins can also set status explicitly with `POST /api/v1/vaults/<vault_id>/mpc/keys/<key_id>/status`.
 
+Servers started with `--mpc-production-mode` reject providers that do not report `production_ready: true`; today that means the experimental P-256 provider cannot create or use signing sessions in production mode.
+
 ### Storage
 
 All records are stored as AES-256-GCM encrypted envelopes with AAD that binds the ciphertext to its vault, record type, record ID, epoch, and version. This prevents record swapping and cross-vault replay attacks.

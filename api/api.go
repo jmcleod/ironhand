@@ -53,6 +53,7 @@ type API struct {
 	noRateLimit                bool          // disables all rate limiters (for E2E testing only)
 	mpcClient                  *mpcclient.Client
 	experimentalMPCEnabled     bool
+	mpcProductionMode          bool
 }
 
 // DefaultIdleTimeout is the default session idle timeout (30 minutes).
@@ -221,6 +222,15 @@ func WithMPCSignerTransport(sharedKey []byte, tlsConfig *tls.Config) Option {
 func WithExperimentalMPC(enabled bool) Option {
 	return func(a *API) {
 		a.experimentalMPCEnabled = enabled
+	}
+}
+
+// WithMPCProductionMode rejects MPC providers that are not marked production
+// ready. The current experimental provider is intentionally refused in this
+// mode.
+func WithMPCProductionMode(enabled bool) Option {
+	return func(a *API) {
+		a.mpcProductionMode = enabled
 	}
 }
 

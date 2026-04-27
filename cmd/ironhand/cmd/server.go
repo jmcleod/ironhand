@@ -57,6 +57,7 @@ var (
 	mpcClientKey          string
 	mpcSignerCA           string
 	enableExperimentalMPC bool
+	mpcProductionMode     bool
 	allowInsecureMPCDev   bool
 )
 
@@ -186,8 +187,12 @@ var serverCmd = &cobra.Command{
 		}
 		apiOpts = append(apiOpts, api.WithMPCSignerTransport([]byte(mpcKey), mpcTLSConfig))
 		apiOpts = append(apiOpts, api.WithExperimentalMPC(enableExperimentalMPC))
+		apiOpts = append(apiOpts, api.WithMPCProductionMode(mpcProductionMode))
 		if enableExperimentalMPC {
 			fmt.Println("WARNING: experimental MPC enabled (experimental-p256-schnorr-v1); do not use for production funds")
+		}
+		if mpcProductionMode {
+			fmt.Println("MPC production mode enabled: non-production MPC providers will be refused")
 		}
 		if mpcKey == "" {
 			if enableExperimentalMPC && !allowInsecureMPCDev {
@@ -334,6 +339,7 @@ func init() {
 	serverCmd.Flags().StringVar(&mpcClientKey, "mpc-client-key", "", "Client private key presented to MPC signers that require mTLS")
 	serverCmd.Flags().StringVar(&mpcSignerCA, "mpc-signer-ca", "", "CA bundle used to verify MPC signer TLS certificates")
 	serverCmd.Flags().BoolVar(&enableExperimentalMPC, "enable-experimental-mpc", false, "Enable experimental-p256-schnorr-v1 MPC APIs (not production-vetted)")
+	serverCmd.Flags().BoolVar(&mpcProductionMode, "mpc-production-mode", false, "Reject MPC providers that are not marked production ready")
 	serverCmd.Flags().BoolVar(&allowInsecureMPCDev, "allow-insecure-mpc-local-dev", false, "Allow unsigned MPC signer calls for loopback-only local development")
 }
 

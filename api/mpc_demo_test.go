@@ -218,6 +218,12 @@ func TestMPCDKGFailureRecordsAttempt(t *testing.T) {
 	require.NotEmpty(t, attempts[0].LastError)
 }
 
+func TestMPCProductionModeRejectsExperimentalProvider(t *testing.T) {
+	api := New(memory.NewRepository(), vault.NewMemoryEpochCache(), WithExperimentalMPC(true), WithMPCProductionMode(true))
+	err := api.validateMPCProviderForUse("")
+	require.ErrorContains(t, err, "not production ready")
+}
+
 func TestMPCKeyLifecycleBlocksAndRevocationMarksReshare(t *testing.T) {
 	env := newDemoKeyEnv(t, "lifecycle")
 	_, err := env.session.SetMPCKeyStatus(context.Background(), env.key.KeyID, vault.MPCKeyStatusDisabled)
