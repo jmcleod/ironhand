@@ -22,6 +22,7 @@ import (
 type demoSigner struct {
 	memberID string
 	partyID  uint32
+	store    string
 	service  *mpcsigner.Service
 	server   *httptest.Server
 }
@@ -103,16 +104,33 @@ func TestMPCDemoHarness(t *testing.T) {
 
 func newDemoSigner(t *testing.T, memberID string, partyID uint32) *demoSigner {
 	t.Helper()
-	var service *mpcsigner.Service
+	return newDemoSignerWithStore(t, memberID, partyID, t.TempDir()+"/signer.sealed")
+}
+
+func newDemoSignerWithStore(t *testing.T, memberID string, partyID uint32, storePath string) *demoSigner {
+	t.Helper()
+	signer := &demoSigner{memberID: memberID, partyID: partyID, store: storePath}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		service.Handler().ServeHTTP(w, r)
+		signer.service.Handler().ServeHTTP(w, r)
 	}))
 	t.Cleanup(server.Close)
-	store, err := mpcsigner.NewFileStore(t.TempDir()+"/signer.sealed", "demo-signer-state-passphrase")
+	store, err := mpcsigner.NewFileStore(storePath, "demo-signer-state-passphrase")
 	require.NoError(t, err)
-	service, err = mpcsigner.NewWithStore(memberID, partyID, memberID, server.URL, nil, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := mpcsigner.NewWithStore(memberID, partyID, memberID, server.URL, nil, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.NoError(t, err)
-	return &demoSigner{memberID: memberID, partyID: partyID, service: service, server: server}
+	signer.service = service
+	signer.server = server
+	return signer
+}
+
+func restartDemoSigner(t *testing.T, signer *demoSigner) *demoSigner {
+	t.Helper()
+	store, err := mpcsigner.NewFileStore(signer.store, "demo-signer-state-passphrase")
+	require.NoError(t, err)
+	service, err := mpcsigner.NewWithStore(signer.memberID, signer.partyID, signer.memberID, signer.server.URL, nil, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	signer.service = service
+	return signer
 }
 
 func approveDemoRequest(t *testing.T, signerURL, sessionID string, partyID uint32) {
@@ -129,4 +147,122 @@ func approveDemoRequest(t *testing.T, signerURL, sessionID string, partyID uint3
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("approve signer request: status=%d body=%s", resp.StatusCode, string(data))
 	}
+}
+
+type demoKeyEnv struct {
+	api     *API
+	session *vault.Session
+	vault   *vault.Vault
+	key     *vault.MPCKey
+	signers []*demoSigner
+}
+
+func TestMPCSignerDurableRestartCompletesSigning(t *testing.T) {
+	env := newDemoKeyEnv(t, "restart")
+	restarted := restartDemoSigner(t, env.signers[1])
+	env.signers[1] = restarted
+	identity := restarted.service.Identity()
+	require.NoError(t, env.session.RegisterMPCSigner(context.Background(), restarted.memberID, vault.MPCSignerRegistration{
+		URL:                 restarted.server.URL,
+		EncryptionPublicKey: identity.EncryptionPublicKey,
+		ApprovalPublicKey:   identity.ApprovalPublicKey,
+		Status:              vault.MPCSignerStatusActive,
+	}))
+
+	signingSession, err := env.session.CreateMPCSigningSession(context.Background(), env.key.KeyID, []byte("restart signing payload"), []uint32{1, 2}, time.Minute)
+	require.NoError(t, err)
+	for _, partyID := range []uint32{1, 2} {
+		_, err := env.api.requestMPCSessionApprovalWithSigner(context.Background(), env.session, signingSession.SessionID, partyID)
+		require.NoError(t, err)
+		approveDemoRequest(t, env.signers[partyID-1].server.URL, signingSession.SessionID, partyID)
+	}
+	completed, err := env.api.completeMPCSessionWithSigners(context.Background(), env.session, signingSession.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, vault.MPCSigningSessionCompleted, completed.Status)
+}
+
+func TestMPCDKGFailureRecordsAttempt(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	api := New(repo, epochCache, WithExperimentalMPC(true), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	creds, err := vault.NewCredentials("mpc-failure-passphrase")
+	require.NoError(t, err)
+	defer creds.Destroy()
+	v := vault.New("mpc-failure-vault", repo, vault.WithEpochCache(epochCache))
+	session, err := v.Create(ctx, creds)
+	require.NoError(t, err)
+	defer session.Close()
+	bobKP, err := ihcrypto.GenerateX25519Keypair()
+	require.NoError(t, err)
+	require.NoError(t, session.AddMember(ctx, "bob", bobKP.Public, vault.RoleWriter))
+	signers := []*demoSigner{newDemoSigner(t, creds.MemberID(), 1), newDemoSigner(t, "bob", 2)}
+	for _, signer := range signers {
+		identity := signer.service.Identity()
+		require.NoError(t, session.RegisterMPCSigner(ctx, signer.memberID, vault.MPCSignerRegistration{
+			URL:                 signer.server.URL,
+			EncryptionPublicKey: identity.EncryptionPublicKey,
+			ApprovalPublicKey:   identity.ApprovalPublicKey,
+			Status:              vault.MPCSignerStatusActive,
+		}))
+	}
+	signers[1].server.Close()
+	_, _, err = api.orchestrateMPCDKG(ctx, session, v.ID(), CreateMPCKeyRequest{KeyID: "failed-key", Threshold: 2})
+	require.Error(t, err)
+	attempts, err := session.ListMPCDKGAttempts(ctx)
+	require.NoError(t, err)
+	require.Len(t, attempts, 1)
+	require.Equal(t, vault.MPCDKGStatusFailed, attempts[0].Status)
+	require.NotEmpty(t, attempts[0].LastError)
+}
+
+func TestMPCKeyLifecycleBlocksAndRevocationMarksReshare(t *testing.T) {
+	env := newDemoKeyEnv(t, "lifecycle")
+	_, err := env.session.SetMPCKeyStatus(context.Background(), env.key.KeyID, vault.MPCKeyStatusDisabled)
+	require.NoError(t, err)
+	_, err = env.session.CreateMPCSigningSession(context.Background(), env.key.KeyID, []byte("disabled payload"), []uint32{1, 2}, time.Minute)
+	require.ErrorContains(t, err, "is not active")
+	_, err = env.session.SetMPCKeyStatus(context.Background(), env.key.KeyID, vault.MPCKeyStatusActive)
+	require.NoError(t, err)
+	require.NoError(t, env.session.RevokeMember(context.Background(), "bob"))
+	key, err := env.session.GetMPCKey(context.Background(), env.key.KeyID)
+	require.NoError(t, err)
+	require.Equal(t, vault.MPCKeyStatusReshareRequired, key.Status)
+}
+
+func newDemoKeyEnv(t *testing.T, name string) *demoKeyEnv {
+	t.Helper()
+	ctx := context.Background()
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	api := New(repo, epochCache, WithExperimentalMPC(true), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	creds, err := vault.NewCredentials("mpc-" + name + "-passphrase")
+	require.NoError(t, err)
+	t.Cleanup(creds.Destroy)
+	v := vault.New("mpc-"+name+"-vault", repo, vault.WithEpochCache(epochCache))
+	session, err := v.Create(ctx, creds)
+	require.NoError(t, err)
+	t.Cleanup(session.Close)
+	bobKP, err := ihcrypto.GenerateX25519Keypair()
+	require.NoError(t, err)
+	carolKP, err := ihcrypto.GenerateX25519Keypair()
+	require.NoError(t, err)
+	require.NoError(t, session.AddMember(ctx, "bob", bobKP.Public, vault.RoleWriter))
+	require.NoError(t, session.AddMember(ctx, "carol", carolKP.Public, vault.RoleWriter))
+	signers := []*demoSigner{newDemoSigner(t, creds.MemberID(), 1), newDemoSigner(t, "bob", 2), newDemoSigner(t, "carol", 3)}
+	for _, signer := range signers {
+		identity := signer.service.Identity()
+		require.NoError(t, session.RegisterMPCSigner(ctx, signer.memberID, vault.MPCSignerRegistration{
+			URL:                 signer.server.URL,
+			EncryptionPublicKey: identity.EncryptionPublicKey,
+			ApprovalPublicKey:   identity.ApprovalPublicKey,
+			Status:              vault.MPCSignerStatusActive,
+		}))
+	}
+	prepared, dkg, err := api.orchestrateMPCDKG(ctx, session, v.ID(), CreateMPCKeyRequest{KeyID: "demo-" + name + "-key", Threshold: 2})
+	require.NoError(t, err)
+	key, err := session.CreateMPCKey(ctx, vault.MPCKeyCreate{KeyID: prepared.KeyID, Algorithm: prepared.Algorithm, Threshold: prepared.Threshold, MemberIDs: prepared.MemberIDs, Commitments: prepared.Commitments, Fragments: prepared.Fragments, Policy: prepared.Policy})
+	require.NoError(t, err)
+	api.commitMPCDKG(ctx, dkg)
+	return &demoKeyEnv{api: api, session: session, vault: v, key: key, signers: signers}
 }
