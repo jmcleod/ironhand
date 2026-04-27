@@ -1,6 +1,8 @@
 package mpc
 
 import (
+	"crypto/ecdh"
+	"encoding/base64"
 	"fmt"
 	"sort"
 )
@@ -32,6 +34,7 @@ type Provider interface {
 	ChallengeHex(publicKey, r Point, message []byte) (string, error)
 	CombineSignatureShares(shares []ShareProof) (string, error)
 	Verify(message []byte, publicKey Point, sig *Signature) bool
+	ValidateKeyFragments(keyID string, parties []PartyInfo, commitments []PublicCommitment, fragments []EncryptedFragment) error
 }
 
 var providers = map[string]Provider{
@@ -95,4 +98,48 @@ func (experimentalP256SchnorrProvider) CombineSignatureShares(shares []ShareProo
 
 func (experimentalP256SchnorrProvider) Verify(message []byte, publicKey Point, sig *Signature) bool {
 	return Verify(message, publicKey, sig)
+}
+
+func (experimentalP256SchnorrProvider) ValidateKeyFragments(keyID string, parties []PartyInfo, commitments []PublicCommitment, fragments []EncryptedFragment) error {
+	if len(fragments) != len(parties) {
+		return fmt.Errorf("%w: fragment count must match participant count", ErrInvalidKey)
+	}
+	allowed := make(map[int]struct{}, len(parties))
+	for _, party := range parties {
+		allowed[party.ID] = struct{}{}
+	}
+	seen := make(map[int]struct{}, len(fragments))
+	for _, fragment := range fragments {
+		if fragment.KeyID != keyID {
+			return fmt.Errorf("%w: fragment for party %d is bound to key %q, expected %q", ErrInvalidKey, fragment.PartyID, fragment.KeyID, keyID)
+		}
+		if _, ok := allowed[fragment.PartyID]; !ok {
+			return fmt.Errorf("%w: fragment party %d is not selected for this key", ErrInvalidKey, fragment.PartyID)
+		}
+		if _, ok := seen[fragment.PartyID]; ok {
+			return fmt.Errorf("%w: duplicate fragment for party %d", ErrInvalidKey, fragment.PartyID)
+		}
+		seen[fragment.PartyID] = struct{}{}
+		if fragment.Algorithm != FragmentEnvelope {
+			return fmt.Errorf("%w: unsupported fragment envelope %q", ErrInvalidKey, fragment.Algorithm)
+		}
+		if fragment.Nonce == "" || fragment.Ciphertext == "" || fragment.EphemeralPublicKey == "" {
+			return fmt.Errorf("%w: fragment for party %d is incomplete", ErrInvalidKey, fragment.PartyID)
+		}
+		ephemeral, err := base64.StdEncoding.DecodeString(fragment.EphemeralPublicKey)
+		if err != nil {
+			return fmt.Errorf("%w: fragment for party %d has invalid ephemeral public key: %v", ErrInvalidKey, fragment.PartyID, err)
+		}
+		if _, err := ecdh.P256().NewPublicKey(ephemeral); err != nil {
+			return fmt.Errorf("%w: fragment for party %d has invalid ephemeral public key: %v", ErrInvalidKey, fragment.PartyID, err)
+		}
+		expected, err := PublicShareCommitment(commitments, fragment.PartyID)
+		if err != nil {
+			return fmt.Errorf("%w: compute public share commitment for party %d: %v", ErrInvalidKey, fragment.PartyID, err)
+		}
+		if fragment.PublicShareCommitment != expected {
+			return fmt.Errorf("%w: fragment public share commitment for party %d does not match DKG commitments", ErrInvalidKey, fragment.PartyID)
+		}
+	}
+	return nil
 }

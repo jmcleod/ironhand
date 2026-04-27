@@ -87,6 +87,22 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	assert.Equal(t, 2, key.Threshold)
 	assert.Len(t, key.Participants, 3)
 
+	badFragments := make(map[string]mpc.EncryptedFragment, len(fragments))
+	for memberID, fragment := range fragments {
+		badFragments[memberID] = fragment
+	}
+	badFragment := badFragments["bob"]
+	badFragment.PublicShareCommitment = mpc.Point{X: "bad", Y: "bad"}
+	badFragments["bob"] = badFragment
+	_, err = session.CreateMPCKey(ctx, MPCKeyCreate{
+		KeyID:       "mpc-key-1",
+		Threshold:   2,
+		MemberIDs:   []string{creds.MemberID(), "bob", "carol"},
+		Commitments: commitments,
+		Fragments:   badFragments,
+	})
+	require.ErrorContains(t, err, "public share commitment")
+
 	keys, err := session.ListMPCKeys(ctx)
 	require.NoError(t, err)
 	require.Len(t, keys, 1)

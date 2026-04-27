@@ -292,6 +292,7 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 		return nil, err
 	}
 	parties := make([]mpc.PartyInfo, 0, len(selected))
+	keyFragments := make([]mpc.EncryptedFragment, 0, len(selected))
 	participants := make([]MPCParticipant, 0, len(selected))
 	for _, member := range selected {
 		parties = append(parties, mpc.PartyInfo{ID: int(member.MPCPartyID), URL: member.MPCSignerURL})
@@ -302,6 +303,7 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 		if fragment.KeyID != create.KeyID || fragment.PartyID != int(member.MPCPartyID) {
 			return nil, fmt.Errorf("fragment for member %q is bound to the wrong MPC key or party", member.MemberID)
 		}
+		keyFragments = append(keyFragments, fragment)
 		participants = append(participants, MPCParticipant{
 			MemberID:              member.MemberID,
 			PartyID:               member.MPCPartyID,
@@ -312,6 +314,9 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 			SignerStatus:          member.MPCSignerStatus,
 			PublicShareCommitment: fragment.PublicShareCommitment,
 		})
+	}
+	if err := provider.ValidateKeyFragments(create.KeyID, parties, create.Commitments, keyFragments); err != nil {
+		return nil, validationErrorf("%v", err)
 	}
 	meta, err := provider.NewKeyMeta(create.KeyID, create.Threshold, parties, create.Commitments)
 	if err != nil {
