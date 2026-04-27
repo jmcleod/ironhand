@@ -69,13 +69,17 @@ type CommitDKGRequest struct {
 }
 
 type ApprovalRequest struct {
-	VaultID      string    `json:"vault_id"`
-	SessionID    string    `json:"session_id"`
-	KeyID        string    `json:"key_id"`
-	Threshold    int       `json:"threshold"`
-	Participants []int     `json:"participants"`
-	MessageHash  string    `json:"message_hash"`
-	ExpiresAt    time.Time `json:"expires_at"`
+	VaultID           string    `json:"vault_id"`
+	SessionID         string    `json:"session_id"`
+	KeyID             string    `json:"key_id"`
+	Threshold         int       `json:"threshold"`
+	Participants      []int     `json:"participants"`
+	MessageHash       string    `json:"message_hash"`
+	MessageType       string    `json:"message_type,omitempty"`
+	Chain             string    `json:"chain,omitempty"`
+	Network           string    `json:"network,omitempty"`
+	TransactionDigest string    `json:"transaction_digest,omitempty"`
+	ExpiresAt         time.Time `json:"expires_at"`
 }
 
 type ApprovalRequestStatus string

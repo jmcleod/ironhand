@@ -35,15 +35,19 @@ type EncryptedFragment struct {
 }
 
 type Approval struct {
-	VaultID      string    `json:"vault_id"`
-	SessionID    string    `json:"session_id"`
-	KeyID        string    `json:"key_id"`
-	PartyID      int       `json:"party_id"`
-	Threshold    int       `json:"threshold"`
-	Participants []int     `json:"participants"`
-	MessageHash  string    `json:"message_hash"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	Signature    string    `json:"signature"`
+	VaultID           string    `json:"vault_id"`
+	SessionID         string    `json:"session_id"`
+	KeyID             string    `json:"key_id"`
+	PartyID           int       `json:"party_id"`
+	Threshold         int       `json:"threshold"`
+	Participants      []int     `json:"participants"`
+	MessageHash       string    `json:"message_hash"`
+	MessageType       string    `json:"message_type,omitempty"`
+	Chain             string    `json:"chain,omitempty"`
+	Network           string    `json:"network,omitempty"`
+	TransactionDigest string    `json:"transaction_digest,omitempty"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	Signature         string    `json:"signature"`
 }
 
 func GenerateSignerIdentity(partyID int, name, url string) (*ecdh.PrivateKey, ed25519.PrivateKey, SignerIdentity, error) {
@@ -178,6 +182,10 @@ func ApprovalPayload(approval Approval) string {
 		fmt.Sprintf("%d", approval.Threshold),
 		strings.Join(participants, ","),
 		approval.MessageHash,
+		approval.MessageType,
+		approval.Chain,
+		approval.Network,
+		approval.TransactionDigest,
 		approval.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	}, "\n")
 }

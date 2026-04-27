@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	icrypto "github.com/jmcleod/ironhand/internal/crypto"
@@ -24,9 +25,43 @@ const (
 type MPCKeyStatus string
 
 const (
-	MPCKeyStatusActive   MPCKeyStatus = "active"
-	MPCKeyStatusDisabled MPCKeyStatus = "disabled"
+	MPCKeyStatusActive           MPCKeyStatus = "active"
+	MPCKeyStatusDisabled         MPCKeyStatus = "disabled"
+	MPCKeyStatusArchived         MPCKeyStatus = "archived"
+	MPCKeyStatusRotationRequired MPCKeyStatus = "rotation_required"
+	MPCKeyStatusReshareRequired  MPCKeyStatus = "reshare_required"
+	MPCKeyStatusDestroyed        MPCKeyStatus = "destroyed"
 )
+
+type MPCApprovalMode string
+
+const (
+	MPCApprovalModeThreshold MPCApprovalMode = "threshold"
+	MPCApprovalModeAll       MPCApprovalMode = "all"
+)
+
+type MPCPolicy struct {
+	ApprovalMode        MPCApprovalMode `json:"approval_mode,omitempty"`
+	AllowedRoles        []MemberRole    `json:"allowed_roles,omitempty"`
+	AllowedDestinations []string        `json:"allowed_destinations,omitempty"`
+	DeniedDestinations  []string        `json:"denied_destinations,omitempty"`
+	MaxValue            string          `json:"max_value,omitempty"`
+}
+
+type MPCTransactionMetadata struct {
+	MessageType string         `json:"message_type"`
+	Chain       string         `json:"chain,omitempty"`
+	Network     string         `json:"network,omitempty"`
+	Digest      string         `json:"digest"`
+	Destination string         `json:"destination,omitempty"`
+	Value       string         `json:"value,omitempty"`
+	Fields      map[string]any `json:"fields,omitempty"`
+}
+
+type MPCPolicyDecision struct {
+	Allowed bool     `json:"allowed"`
+	Reasons []string `json:"reasons,omitempty"`
+}
 
 type MPCSigningSessionStatus string
 
@@ -62,6 +97,7 @@ type MPCKeyCreate struct {
 	MemberIDs   []string                         `json:"member_ids,omitempty"`
 	Commitments []mpc.PublicCommitment           `json:"commitments"`
 	Fragments   map[string]mpc.EncryptedFragment `json:"fragments"`
+	Policy      MPCPolicy                        `json:"policy,omitempty"`
 }
 
 type MPCKey struct {
@@ -75,6 +111,7 @@ type MPCKey struct {
 	PublicKey    mpc.PublicKey          `json:"public_key"`
 	Participants []MPCParticipant       `json:"participants"`
 	Commitments  []mpc.PublicCommitment `json:"commitments"`
+	Policy       MPCPolicy              `json:"policy"`
 }
 
 type MPCKeyFragment struct {
@@ -91,6 +128,11 @@ type MPCSigningSession struct {
 	Status       MPCSigningSessionStatus `json:"status"`
 	Message      []byte                  `json:"message"`
 	MessageHash  string                  `json:"message_hash"`
+	MessageType  string                  `json:"message_type"`
+	Chain        string                  `json:"chain,omitempty"`
+	Network      string                  `json:"network,omitempty"`
+	Transaction  MPCTransactionMetadata  `json:"transaction"`
+	Policy       MPCPolicyDecision       `json:"policy"`
 	Participants []uint32                `json:"participants"`
 	Commitments  []mpc.Commitment        `json:"commitments,omitempty"`
 	Approvals    []mpc.Approval          `json:"approvals,omitempty"`
@@ -234,6 +276,7 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 		PublicKey:    meta.Public(),
 		Participants: participants,
 		Commitments:  append([]mpc.PublicCommitment(nil), create.Commitments...),
+		Policy:       normalizeMPCPolicy(create.Policy),
 	}
 	keyEnv, err := sealMPCRecord(s.vault.id, recordTypeMPCKey, key.KeyID, recBuf.Bytes(), key)
 	if err != nil {
@@ -351,7 +394,23 @@ func (s *Session) GetMPCKeyFragment(ctx context.Context, keyID, memberID string)
 	return openMPCRecord[MPCKeyFragment](s.vault.id, recordTypeMPCFragment, recordID, recBuf.Bytes(), env)
 }
 
+type MPCSigningSessionCreate struct {
+	MessageBase64 string         `json:"-"`
+	Message       []byte         `json:"message,omitempty"`
+	Participants  []uint32       `json:"participants,omitempty"`
+	TTL           time.Duration  `json:"ttl,omitempty"`
+	MessageType   string         `json:"message_type,omitempty"`
+	Chain         string         `json:"chain,omitempty"`
+	Network       string         `json:"network,omitempty"`
+	Transaction   map[string]any `json:"transaction_metadata,omitempty"`
+}
+
 func (s *Session) CreateMPCSigningSession(ctx context.Context, keyID string, message []byte, participants []uint32, ttl time.Duration) (*MPCSigningSession, error) {
+	return s.CreateMPCSigningSessionWithOptions(ctx, keyID, MPCSigningSessionCreate{Message: message, Participants: participants, TTL: ttl})
+}
+
+func (s *Session) CreateMPCSigningSessionWithOptions(ctx context.Context, keyID string, create MPCSigningSessionCreate) (*MPCSigningSession, error) {
+	message := create.Message
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -364,10 +423,10 @@ func (s *Session) CreateMPCSigningSession(ctx context.Context, keyID string, mes
 	if len(message) == 0 {
 		return nil, validationErrorf("MPC signing message must not be empty")
 	}
-	if ttl <= 0 {
-		ttl = DefaultMPCSigningSessionTTL
+	if create.TTL <= 0 {
+		create.TTL = DefaultMPCSigningSessionTTL
 	}
-	if ttl > MaxMPCSigningSessionTTL {
+	if create.TTL > MaxMPCSigningSessionTTL {
 		return nil, validationErrorf("MPC signing session TTL must not exceed %s", MaxMPCSigningSessionTTL)
 	}
 	recBuf, err := s.recordKey.Open()
@@ -382,12 +441,15 @@ func (s *Session) CreateMPCSigningSession(ctx context.Context, keyID string, mes
 	if err != nil {
 		return nil, err
 	}
+	if key.Status != MPCKeyStatusActive {
+		return nil, validationErrorf("MPC key %q is not active", keyID)
+	}
 	partyIDs := make([]int, 0, len(key.Participants))
 	for _, participant := range key.Participants {
 		partyIDs = append(partyIDs, int(participant.PartyID))
 	}
-	requested := make([]int, 0, len(participants))
-	for _, partyID := range participants {
+	requested := make([]int, 0, len(create.Participants))
+	for _, partyID := range create.Participants {
 		requested = append(requested, int(partyID))
 	}
 	normalized, err := mpc.NormalizeParticipants(requested, key.Threshold, partyIDs)
@@ -398,6 +460,14 @@ func (s *Session) CreateMPCSigningSession(ctx context.Context, keyID string, mes
 	for _, partyID := range normalized {
 		normalizedU32 = append(normalizedU32, uint32(partyID))
 	}
+	transaction, err := decodeMPCTransaction(message, create.MessageType, create.Chain, create.Network, create.Transaction)
+	if err != nil {
+		return nil, err
+	}
+	decision := evaluateMPCPolicy(key, normalizedU32, transaction)
+	if !decision.Allowed {
+		return nil, validationErrorf("MPC policy denied signing session: %v", decision.Reasons)
+	}
 	now := time.Now().UTC()
 	session := &MPCSigningSession{
 		SessionID:    uuid.New(),
@@ -406,9 +476,14 @@ func (s *Session) CreateMPCSigningSession(ctx context.Context, keyID string, mes
 		Status:       MPCSigningSessionPending,
 		Message:      append([]byte(nil), message...),
 		MessageHash:  mpc.MessageHash(message),
+		MessageType:  transaction.MessageType,
+		Chain:        transaction.Chain,
+		Network:      transaction.Network,
+		Transaction:  transaction,
+		Policy:       decision,
 		Participants: normalizedU32,
 		CreatedAt:    now,
-		ExpiresAt:    now.Add(ttl),
+		ExpiresAt:    now.Add(create.TTL),
 	}
 	env, err := sealMPCRecord(s.vault.id, recordTypeMPCSession, session.SessionID, recBuf.Bytes(), session)
 	if err != nil {
@@ -456,6 +531,9 @@ func (s *Session) AddMPCApproval(ctx context.Context, sessionID string, approval
 		}
 		if approval.VaultID != session.VaultID || approval.SessionID != session.SessionID || approval.KeyID != session.KeyID || approval.MessageHash != session.MessageHash {
 			return fmt.Errorf("approval is not bound to this MPC signing session")
+		}
+		if approval.MessageType != session.MessageType || approval.Chain != session.Chain || approval.Network != session.Network || approval.TransactionDigest != session.Transaction.Digest {
+			return fmt.Errorf("approval transaction context is not bound to this MPC signing session")
 		}
 		key, err := loadMPCKey(s.vault.id, s.vault.repo, recKey, session.KeyID)
 		if err != nil {
@@ -554,6 +632,9 @@ func countValidSessionApprovals(session *MPCSigningSession, key *MPCKey) int {
 		if approval.Threshold != key.Threshold || !samePartySet(approval.Participants, session.Participants) {
 			continue
 		}
+		if approval.MessageType != session.MessageType || approval.Chain != session.Chain || approval.Network != session.Network || approval.TransactionDigest != session.Transaction.Digest {
+			continue
+		}
 		if !mpc.VerifyApproval(participant.ApprovalPublicKey, approval, now) {
 			continue
 		}
@@ -577,6 +658,91 @@ func samePartySet(left []int, right []uint32) bool {
 		}
 	}
 	return true
+}
+
+func normalizeMPCPolicy(policy MPCPolicy) MPCPolicy {
+	if policy.ApprovalMode == "" {
+		policy.ApprovalMode = MPCApprovalModeThreshold
+	}
+	return policy
+}
+
+func decodeMPCTransaction(message []byte, messageType, chain, network string, metadata map[string]any) (MPCTransactionMetadata, error) {
+	if messageType == "" {
+		messageType = "raw"
+	}
+	tx := MPCTransactionMetadata{
+		MessageType: messageType,
+		Chain:       chain,
+		Network:     network,
+		Digest:      mpc.MessageHash(message),
+		Fields:      metadata,
+	}
+	if destination, ok := metadata["destination"].(string); ok {
+		tx.Destination = destination
+	}
+	if value, ok := metadata["value"].(string); ok {
+		tx.Value = value
+	}
+	switch messageType {
+	case "raw":
+		return tx, nil
+	case "evm_tx_hash":
+		if len(message) != 32 {
+			return MPCTransactionMetadata{}, validationErrorf("evm_tx_hash messages must be 32 bytes")
+		}
+		tx.Digest = mpc.MessageHash(append([]byte("evm_tx_hash:"), message...))
+		return tx, nil
+	default:
+		return MPCTransactionMetadata{}, validationErrorf("unsupported MPC message_type %q", messageType)
+	}
+}
+
+func evaluateMPCPolicy(key *MPCKey, participants []uint32, tx MPCTransactionMetadata) MPCPolicyDecision {
+	policy := normalizeMPCPolicy(key.Policy)
+	reasons := make([]string, 0)
+	if policy.ApprovalMode != MPCApprovalModeThreshold && policy.ApprovalMode != MPCApprovalModeAll {
+		reasons = append(reasons, fmt.Sprintf("unsupported approval mode %q", policy.ApprovalMode))
+	}
+	if policy.ApprovalMode == MPCApprovalModeAll && len(participants) < len(key.Participants) {
+		reasons = append(reasons, "all approval mode requires every key participant")
+	}
+	if len(policy.AllowedRoles) > 0 {
+		allowed := make(map[MemberRole]struct{}, len(policy.AllowedRoles))
+		for _, role := range policy.AllowedRoles {
+			allowed[role] = struct{}{}
+		}
+		for _, partyID := range participants {
+			participant, ok := key.participantByPartyID(partyID)
+			if !ok {
+				reasons = append(reasons, fmt.Sprintf("party %d is not part of key", partyID))
+				continue
+			}
+			if _, ok := allowed[participant.Role]; !ok {
+				reasons = append(reasons, fmt.Sprintf("party %d role %q is not allowed", partyID, participant.Role))
+			}
+		}
+	}
+	if tx.Destination != "" {
+		for _, denied := range policy.DeniedDestinations {
+			if strings.EqualFold(tx.Destination, denied) {
+				reasons = append(reasons, "destination is denied by policy")
+			}
+		}
+		if len(policy.AllowedDestinations) > 0 {
+			found := false
+			for _, allowed := range policy.AllowedDestinations {
+				if strings.EqualFold(tx.Destination, allowed) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				reasons = append(reasons, "destination is not allowed by policy")
+			}
+		}
+	}
+	return MPCPolicyDecision{Allowed: len(reasons) == 0, Reasons: reasons}
 }
 
 func (s *Session) updateMPCSigningSession(ctx context.Context, sessionID string, update func(recordKey []byte, session *MPCSigningSession) error) (*MPCSigningSession, error) {

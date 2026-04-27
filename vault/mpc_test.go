@@ -123,14 +123,16 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 			continue
 		}
 		approval, err := mpc.SignApproval(signer.approval, mpc.Approval{
-			VaultID:      signSession.VaultID,
-			SessionID:    signSession.SessionID,
-			KeyID:        signSession.KeyID,
-			PartyID:      signer.partyID,
-			Threshold:    key.Threshold,
-			Participants: participants,
-			MessageHash:  signSession.MessageHash,
-			ExpiresAt:    signSession.ExpiresAt,
+			VaultID:           signSession.VaultID,
+			SessionID:         signSession.SessionID,
+			KeyID:             signSession.KeyID,
+			PartyID:           signer.partyID,
+			Threshold:         key.Threshold,
+			Participants:      participants,
+			MessageHash:       signSession.MessageHash,
+			MessageType:       signSession.MessageType,
+			TransactionDigest: signSession.Transaction.Digest,
+			ExpiresAt:         signSession.ExpiresAt,
 		})
 		require.NoError(t, err)
 		_, err = session.AddMPCApproval(ctx, signSession.SessionID, approval)
@@ -172,14 +174,16 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 			continue
 		}
 		approval, err := mpc.SignApproval(signer.approval, mpc.Approval{
-			VaultID:      thresholdSession.VaultID,
-			SessionID:    thresholdSession.SessionID,
-			KeyID:        thresholdSession.KeyID,
-			PartyID:      signer.partyID,
-			Threshold:    key.Threshold,
-			Participants: []int{1, 2, 3},
-			MessageHash:  thresholdSession.MessageHash,
-			ExpiresAt:    thresholdSession.ExpiresAt,
+			VaultID:           thresholdSession.VaultID,
+			SessionID:         thresholdSession.SessionID,
+			KeyID:             thresholdSession.KeyID,
+			PartyID:           signer.partyID,
+			Threshold:         key.Threshold,
+			Participants:      []int{1, 2, 3},
+			MessageHash:       thresholdSession.MessageHash,
+			MessageType:       thresholdSession.MessageType,
+			TransactionDigest: thresholdSession.Transaction.Digest,
+			ExpiresAt:         thresholdSession.ExpiresAt,
 		})
 		require.NoError(t, err)
 		_, err = session.AddMPCApproval(ctx, thresholdSession.SessionID, approval)

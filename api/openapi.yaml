@@ -821,11 +821,70 @@ components:
             type: integer
         message_hash:
           type: string
+        message_type:
+          type: string
+        chain:
+          type: string
+        network:
+          type: string
+        transaction_digest:
+          type: string
         expires_at:
           type: string
           format: date-time
         signature:
           type: string
+
+    MPCPolicy:
+      type: object
+      properties:
+        approval_mode:
+          type: string
+          enum: [threshold, all]
+        allowed_roles:
+          type: array
+          items:
+            type: string
+            enum: [owner, writer, reader]
+        allowed_destinations:
+          type: array
+          items:
+            type: string
+        denied_destinations:
+          type: array
+          items:
+            type: string
+        max_value:
+          type: string
+
+    MPCTransactionMetadata:
+      type: object
+      properties:
+        message_type:
+          type: string
+        chain:
+          type: string
+        network:
+          type: string
+        digest:
+          type: string
+        destination:
+          type: string
+        value:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+
+    MPCPolicyDecision:
+      type: object
+      properties:
+        allowed:
+          type: boolean
+        reasons:
+          type: array
+          items:
+            type: string
 
     MPCSignature:
       type: object
@@ -902,7 +961,7 @@ components:
           type: integer
         status:
           type: string
-          enum: [active, disabled]
+          enum: [active, disabled, archived, rotation_required, reshare_required, destroyed]
         created_at:
           type: string
           format: date-time
@@ -916,6 +975,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MPCPublicCommitment'
+        policy:
+          $ref: '#/components/schemas/MPCPolicy'
 
     ListMPCKeysResponse:
       type: object
@@ -952,6 +1013,8 @@ components:
           description: Optional encrypted fragments keyed by member ID.
           additionalProperties:
             $ref: '#/components/schemas/MPCEncryptedFragment'
+        policy:
+          $ref: '#/components/schemas/MPCPolicy'
 
     CreateMPCSigningSessionRequest:
       type: object
@@ -970,6 +1033,16 @@ components:
           format: int64
           maximum: 1800
           description: Optional signing approval lifetime in seconds. Defaults to 900 and is capped at 1800.
+        message_type:
+          type: string
+          enum: [raw, evm_tx_hash]
+        chain:
+          type: string
+        network:
+          type: string
+        transaction_metadata:
+          type: object
+          additionalProperties: true
 
     AddMPCApprovalRequest:
       type: object
@@ -1008,6 +1081,16 @@ components:
           description: Base64-encoded message bytes.
         message_hash:
           type: string
+        message_type:
+          type: string
+        chain:
+          type: string
+        network:
+          type: string
+        transaction:
+          $ref: '#/components/schemas/MPCTransactionMetadata'
+        policy:
+          $ref: '#/components/schemas/MPCPolicyDecision'
         participants:
           type: array
           items:

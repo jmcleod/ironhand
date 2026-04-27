@@ -1385,9 +1385,36 @@ export interface components {
             threshold?: number;
             participants?: number[];
             message_hash?: string;
+            message_type?: string;
+            chain?: string;
+            network?: string;
+            transaction_digest?: string;
             /** Format: date-time */
             expires_at?: string;
             signature?: string;
+        };
+        MPCPolicy: {
+            /** @enum {string} */
+            approval_mode?: "threshold" | "all";
+            allowed_roles?: ("owner" | "writer" | "reader")[];
+            allowed_destinations?: string[];
+            denied_destinations?: string[];
+            max_value?: string;
+        };
+        MPCTransactionMetadata: {
+            message_type?: string;
+            chain?: string;
+            network?: string;
+            digest?: string;
+            destination?: string;
+            value?: string;
+            fields?: {
+                [key: string]: unknown;
+            };
+        };
+        MPCPolicyDecision: {
+            allowed?: boolean;
+            reasons?: string[];
         };
         MPCSignature: {
             curve?: string;
@@ -1424,12 +1451,13 @@ export interface components {
             curve?: string;
             threshold?: number;
             /** @enum {string} */
-            status?: "active" | "disabled";
+            status?: "active" | "disabled" | "archived" | "rotation_required" | "reshare_required" | "destroyed";
             /** Format: date-time */
             created_at?: string;
             public_key?: components["schemas"]["MPCPublicKey"];
             participants?: components["schemas"]["MPCParticipant"][];
             commitments?: components["schemas"]["MPCPublicCommitment"][];
+            policy?: components["schemas"]["MPCPolicy"];
         };
         ListMPCKeysResponse: {
             keys?: components["schemas"]["MPCKey"][];
@@ -1446,6 +1474,7 @@ export interface components {
             fragments?: {
                 [key: string]: components["schemas"]["MPCEncryptedFragment"];
             };
+            policy?: components["schemas"]["MPCPolicy"];
         };
         CreateMPCSigningSessionRequest: {
             /** @description Base64-encoded message to sign. */
@@ -1456,6 +1485,13 @@ export interface components {
              * @description Optional signing approval lifetime in seconds. Defaults to 900 and is capped at 1800.
              */
             ttl_seconds?: number;
+            /** @enum {string} */
+            message_type?: "raw" | "evm_tx_hash";
+            chain?: string;
+            network?: string;
+            transaction_metadata?: {
+                [key: string]: unknown;
+            };
         };
         AddMPCApprovalRequest: {
             approval?: components["schemas"]["MPCApproval"];
@@ -1478,6 +1514,11 @@ export interface components {
              */
             message?: string;
             message_hash?: string;
+            message_type?: string;
+            chain?: string;
+            network?: string;
+            transaction?: components["schemas"]["MPCTransactionMetadata"];
+            policy?: components["schemas"]["MPCPolicyDecision"];
             participants?: number[];
             commitments?: components["schemas"]["MPCCommitment"][];
             approvals?: components["schemas"]["MPCApproval"][];

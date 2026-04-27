@@ -807,6 +807,23 @@ export interface MPCKey {
   created_at: string;
   public_key: MPCPublicKey;
   participants: MPCParticipant[];
+  policy?: MPCPolicy;
+}
+export interface MPCPolicy {
+  approval_mode?: string;
+  allowed_roles?: string[];
+  allowed_destinations?: string[];
+  denied_destinations?: string[];
+  max_value?: string;
+}
+export interface MPCTransactionMetadata {
+  message_type: string;
+  chain?: string;
+  network?: string;
+  digest: string;
+  destination?: string;
+  value?: string;
+  fields?: Record<string, unknown>;
 }
 export interface MPCSigningSession {
   session_id: string;
@@ -815,6 +832,11 @@ export interface MPCSigningSession {
   status: string;
   message: string;
   message_hash: string;
+  message_type: string;
+  chain?: string;
+  network?: string;
+  transaction: MPCTransactionMetadata;
+  policy: { allowed: boolean; reasons?: string[] };
   participants: number[];
   approvals?: {
     vault_id: string;
@@ -824,6 +846,10 @@ export interface MPCSigningSession {
     threshold: number;
     participants: number[];
     message_hash: string;
+    message_type?: string;
+    chain?: string;
+    network?: string;
+    transaction_digest?: string;
     expires_at: string;
     signature: string;
   }[];
@@ -851,7 +877,7 @@ export async function listMPCKeys(vaultID: string): Promise<MPCKey[]> {
   return data.keys ?? [];
 }
 
-export async function createMPCKey(vaultID: string, req: { threshold: number; member_ids?: string[] }): Promise<MPCKey> {
+export async function createMPCKey(vaultID: string, req: { threshold: number; member_ids?: string[]; policy?: MPCPolicy }): Promise<MPCKey> {
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -860,13 +886,13 @@ export async function createMPCKey(vaultID: string, req: { threshold: number; me
   return (await resp.json()) as MPCKey;
 }
 
-export async function createMPCSigningSession(vaultID: string, keyID: string, req: { message: string; participants?: number[] }): Promise<MPCSigningSession> {
+export async function createMPCSigningSession(vaultID: string, keyID: string, req: { message: string; participants?: number[]; message_type?: string; chain?: string; network?: string; transaction_metadata?: Record<string, unknown> }): Promise<MPCSigningSession> {
   const messageBase64 = btoa(unescape(encodeURIComponent(req.message)));
-  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys/${encodeURIComponent(keyID)}/sessions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message_base64: messageBase64, participants: req.participants ?? [] }),
-  });
+	const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys/${encodeURIComponent(keyID)}/sessions`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ message_base64: messageBase64, participants: req.participants ?? [], message_type: req.message_type ?? 'raw', chain: req.chain ?? '', network: req.network ?? '', transaction_metadata: req.transaction_metadata ?? {} }),
+	});
   return (await resp.json()) as MPCSigningSession;
 }
 

@@ -183,13 +183,18 @@ type CreateMPCKeyRequest struct {
 	MemberIDs   []string                         `json:"member_ids,omitempty"`
 	Commitments []mpc.PublicCommitment           `json:"commitments"`
 	Fragments   map[string]mpc.EncryptedFragment `json:"fragments"`
+	Policy      vault.MPCPolicy                  `json:"policy,omitempty"`
 }
 
 // CreateMPCSigningSessionRequest starts a new signing session for an MPC key.
 type CreateMPCSigningSessionRequest struct {
-	MessageBase64 string   `json:"message_base64"`
-	Participants  []uint32 `json:"participants,omitempty"`
-	TTLSeconds    int64    `json:"ttl_seconds,omitempty"`
+	MessageBase64       string         `json:"message_base64"`
+	Participants        []uint32       `json:"participants,omitempty"`
+	TTLSeconds          int64          `json:"ttl_seconds,omitempty"`
+	MessageType         string         `json:"message_type,omitempty"`
+	Chain               string         `json:"chain,omitempty"`
+	Network             string         `json:"network,omitempty"`
+	TransactionMetadata map[string]any `json:"transaction_metadata,omitempty"`
 }
 
 // AddMPCApprovalRequest stores a signed approval from a participating signer.

@@ -95,6 +95,7 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 		MemberIDs:   req.MemberIDs,
 		Commitments: req.Commitments,
 		Fragments:   req.Fragments,
+		Policy:      req.Policy,
 	})
 	if err != nil {
 		if dkg != nil {
@@ -180,7 +181,15 @@ func (a *API) CreateMPCSigningSession(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	signingSession, err := session.CreateMPCSigningSession(r.Context(), keyID, message, req.Participants, ttl)
+	signingSession, err := session.CreateMPCSigningSessionWithOptions(r.Context(), keyID, vault.MPCSigningSessionCreate{
+		Message:      message,
+		Participants: req.Participants,
+		TTL:          ttl,
+		MessageType:  req.MessageType,
+		Chain:        req.Chain,
+		Network:      req.Network,
+		Transaction:  req.TransactionMetadata,
+	})
 	if err != nil {
 		mapError(w, err)
 		return
@@ -418,13 +427,17 @@ func (a *API) requestMPCSessionApprovalWithSigner(ctx context.Context, session *
 		participants = append(participants, int(participantID))
 	}
 	payload := mpcsigner.ApprovalRequest{
-		VaultID:      signingSession.VaultID,
-		SessionID:    signingSession.SessionID,
-		KeyID:        signingSession.KeyID,
-		Threshold:    key.Threshold,
-		Participants: participants,
-		MessageHash:  signingSession.MessageHash,
-		ExpiresAt:    signingSession.ExpiresAt,
+		VaultID:           signingSession.VaultID,
+		SessionID:         signingSession.SessionID,
+		KeyID:             signingSession.KeyID,
+		Threshold:         key.Threshold,
+		Participants:      participants,
+		MessageHash:       signingSession.MessageHash,
+		MessageType:       signingSession.MessageType,
+		Chain:             signingSession.Chain,
+		Network:           signingSession.Network,
+		TransactionDigest: signingSession.Transaction.Digest,
+		ExpiresAt:         signingSession.ExpiresAt,
 	}
 	var resp mpcsigner.CreateApprovalRequestResponse
 	if err := a.mpcClient.PostJSON(participant.SignerURL+"/signer/approval-requests", payload, &resp); err != nil {

@@ -626,14 +626,18 @@ func (s *Service) handleApproveApprovalRequest(w http.ResponseWriter, r *http.Re
 	s.mu.Unlock()
 
 	approval, err := mpc.SignApproval(s.edPriv, mpc.Approval{
-		VaultID:      req.VaultID,
-		SessionID:    req.SessionID,
-		KeyID:        req.KeyID,
-		PartyID:      int(s.partyID),
-		Threshold:    req.Threshold,
-		Participants: append([]int(nil), req.Participants...),
-		MessageHash:  req.MessageHash,
-		ExpiresAt:    req.ExpiresAt.UTC(),
+		VaultID:           req.VaultID,
+		SessionID:         req.SessionID,
+		KeyID:             req.KeyID,
+		PartyID:           int(s.partyID),
+		Threshold:         req.Threshold,
+		Participants:      append([]int(nil), req.Participants...),
+		MessageHash:       req.MessageHash,
+		MessageType:       req.MessageType,
+		Chain:             req.Chain,
+		Network:           req.Network,
+		TransactionDigest: req.TransactionDigest,
+		ExpiresAt:         req.ExpiresAt.UTC(),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1019,6 +1023,9 @@ func sameApprovalRequest(left, right ApprovalRequest) bool {
 		return false
 	}
 	if left.Threshold != right.Threshold || left.MessageHash != right.MessageHash || !left.ExpiresAt.Equal(right.ExpiresAt) {
+		return false
+	}
+	if left.MessageType != right.MessageType || left.Chain != right.Chain || left.Network != right.Network || left.TransactionDigest != right.TransactionDigest {
 		return false
 	}
 	if len(left.Participants) != len(right.Participants) {
