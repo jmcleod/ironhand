@@ -7,7 +7,10 @@ import (
 	"sort"
 )
 
-const AlgorithmExperimentalP256Schnorr = "experimental-p256-schnorr-v1"
+const (
+	AlgorithmExperimentalP256Schnorr = "experimental-p256-schnorr-v1"
+	AlgorithmFROSTSecp256k1          = "frost-secp256k1-v1"
+)
 
 type ProviderStatus string
 
@@ -17,14 +20,17 @@ const (
 )
 
 type ProviderInfo struct {
-	Algorithm       string         `json:"algorithm"`
-	Curve           string         `json:"curve"`
-	Status          ProviderStatus `json:"status"`
-	Domain          string         `json:"domain"`
-	ProductionReady bool           `json:"production_ready"`
-	SupportsKeygen  bool           `json:"supports_keygen"`
-	SupportsSigning bool           `json:"supports_signing"`
-	SupportsReshare bool           `json:"supports_reshare"`
+	Algorithm                          string         `json:"algorithm"`
+	Curve                              string         `json:"curve"`
+	Status                             ProviderStatus `json:"status"`
+	Domain                             string         `json:"domain"`
+	ProductionReady                    bool           `json:"production_ready"`
+	SupportsKeygen                     bool           `json:"supports_keygen"`
+	SupportsSigning                    bool           `json:"supports_signing"`
+	SupportsReshare                    bool           `json:"supports_reshare"`
+	SupportsRecoveryImportAttestations bool           `json:"supports_recovery_import_attestations"`
+	DeterministicTranscriptValidation  bool           `json:"deterministic_transcript_validation"`
+	ChainCompatibility                 []string       `json:"chain_compatibility,omitempty"`
 }
 
 type Provider interface {
@@ -69,14 +75,17 @@ type experimentalP256SchnorrProvider struct{}
 
 func (experimentalP256SchnorrProvider) Info() ProviderInfo {
 	return ProviderInfo{
-		Algorithm:       AlgorithmExperimentalP256Schnorr,
-		Curve:           CurveName,
-		Status:          ProviderStatusExperimental,
-		Domain:          domain,
-		ProductionReady: false,
-		SupportsKeygen:  true,
-		SupportsSigning: true,
-		SupportsReshare: false,
+		Algorithm:                          AlgorithmExperimentalP256Schnorr,
+		Curve:                              CurveName,
+		Status:                             ProviderStatusExperimental,
+		Domain:                             domain,
+		ProductionReady:                    false,
+		SupportsKeygen:                     true,
+		SupportsSigning:                    true,
+		SupportsReshare:                    false,
+		SupportsRecoveryImportAttestations: true,
+		DeterministicTranscriptValidation:  true,
+		ChainCompatibility:                 []string{"development", "p256-demo"},
 	}
 }
 
