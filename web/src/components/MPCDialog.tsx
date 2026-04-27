@@ -189,7 +189,7 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
             <AlertTriangle className="h-4 w-4 text-amber-600" />
             <AlertTitle>Experimental threshold signing</AlertTitle>
             <AlertDescription>
-              This flow uses experimental-p256-schnorr-v1 and must be explicitly enabled on the server. Use it for protocol testing, not production funds.
+              This flow uses experimental-p256-schnorr-v1 and must be explicitly enabled on the server. DKG attempts are abortable, approvals are bound to one vault session and expiry, and completion uses a threshold approval subset.
             </AlertDescription>
           </Alert>
 
@@ -309,6 +309,7 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                         <Badge variant="outline">{session.status}</Badge>
                         <Badge variant="outline">{session.participants.length} participants</Badge>
                         <Badge variant="outline">{session.approvals?.length ?? 0} approvals</Badge>
+                        <Badge variant="outline">expires {new Date(session.expires_at).toLocaleTimeString()}</Badge>
                       </div>
                       <div className="mt-2 font-mono text-muted-foreground">{session.session_id}</div>
                     </div>

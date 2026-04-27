@@ -34,12 +34,24 @@ type Service struct {
 }
 
 type keyState struct {
-	threshold   int
-	members     []Member
-	commitments map[int]mpc.PublicCommitment
-	inbox       map[int]string
-	publicKey   mpc.Point
-	nonces      map[string]*big.Int
+	vaultID        string
+	dkgSessionID   string
+	dkgStatus      string
+	threshold      int
+	members        []Member
+	commitments    map[int]mpc.PublicCommitment
+	inbox          map[int]string
+	outgoingShares map[int]string
+	fragment       mpc.EncryptedFragment
+	publicKey      mpc.Point
+	nonces         map[string]*nonceState
+}
+
+type nonceState struct {
+	KeyID       string
+	SessionID   string
+	MessageHash string
+	Nonce       *big.Int
 }
 
 func New(memberID string, partyID uint32, name, url string, sharedKey []byte, logger *slog.Logger) (*Service, error) {
@@ -118,6 +130,8 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /signer/dkg/start", s.handleStartDKG)
 	mux.HandleFunc("POST /signer/dkg/share", s.handleReceiveShare)
 	mux.HandleFunc("POST /signer/dkg/finalize", s.handleFinalizeDKG)
+	mux.HandleFunc("POST /signer/dkg/abort", s.handleAbortDKG)
+	mux.HandleFunc("POST /signer/dkg/commit", s.handleCommitDKG)
 	mux.HandleFunc("POST /signer/approve", s.handleApprove)
 	mux.HandleFunc("POST /signer/sign/commit", s.handleNonceCommit)
 	mux.HandleFunc("POST /signer/sign/share", s.handleSignShare)
@@ -142,6 +156,44 @@ func (s *Service) handleStartDKG(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.DKGSessionID == "" || req.VaultID == "" {
+		writeError(w, http.StatusBadRequest, "dkg_session_id and vault_id are required")
+		return
+	}
+	s.mu.Lock()
+	if state, ok := s.keys[req.KeyID]; ok {
+		if state.dkgSessionID != req.DKGSessionID {
+			s.mu.Unlock()
+			writeError(w, http.StatusConflict, "MPC key is already bound to a different DKG session")
+			return
+		}
+		if state.dkgStatus == "aborted" {
+			s.mu.Unlock()
+			writeError(w, http.StatusConflict, "DKG session was aborted")
+			return
+		}
+		if commitment, ok := state.commitments[int(s.partyID)]; ok {
+			if state.dkgStatus == "finalized" || state.dkgStatus == "committed" || len(state.outgoingShares) == 0 {
+				s.mu.Unlock()
+				writeJSON(w, http.StatusOK, StartDKGResponse{PartyID: s.partyID, Commitment: commitment})
+				return
+			}
+			outgoing := make(map[int]string, len(state.outgoingShares))
+			for partyID, share := range state.outgoingShares {
+				outgoing[partyID] = share
+			}
+			members := append([]Member(nil), state.members...)
+			s.mu.Unlock()
+			if err := s.sendDKGShares(req, members, commitment, outgoing); err != nil {
+				writeError(w, http.StatusBadGateway, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, StartDKGResponse{PartyID: s.partyID, Commitment: commitment})
+			return
+		}
+	}
+	s.mu.Unlock()
+
 	poly, err := mpc.GeneratePolynomial(req.Threshold)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -150,11 +202,24 @@ func (s *Service) handleStartDKG(w http.ResponseWriter, r *http.Request) {
 	defer mpc.ZeroScalars(poly)
 	commitment := mpc.CommitmentsForPolynomial(int(s.partyID), poly)
 	selfShare := mpc.EvalPolynomial(poly, big.NewInt(int64(s.partyID)))
+	outgoing := make(map[int]string, len(req.Members)-1)
+	for _, recipient := range req.Members {
+		if recipient.PartyID == s.partyID {
+			continue
+		}
+		share := mpc.EvalPolynomial(poly, big.NewInt(int64(recipient.PartyID)))
+		outgoing[int(recipient.PartyID)] = mpc.EncodeScalar(share)
+		share.SetInt64(0)
+	}
 
 	s.mu.Lock()
 	state := s.ensureStateLocked(req.KeyID, req.Threshold, req.Members)
+	state.vaultID = req.VaultID
+	state.dkgSessionID = req.DKGSessionID
+	state.dkgStatus = "pending"
 	state.commitments[int(s.partyID)] = commitment
 	state.inbox[int(s.partyID)] = mpc.EncodeScalar(selfShare)
+	state.outgoingShares = outgoing
 	if err := s.saveLocked(); err != nil {
 		s.mu.Unlock()
 		selfShare.SetInt64(0)
@@ -164,17 +229,9 @@ func (s *Service) handleStartDKG(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	selfShare.SetInt64(0)
 
-	for _, recipient := range req.Members {
-		if recipient.PartyID == s.partyID {
-			continue
-		}
-		share := mpc.EvalPolynomial(poly, big.NewInt(int64(recipient.PartyID)))
-		payload := DKGShareRequest{KeyID: req.KeyID, Threshold: req.Threshold, Members: req.Members, FromPartyID: s.partyID, ToPartyID: recipient.PartyID, Share: mpc.EncodeScalar(share), Commitment: commitment}
-		share.SetInt64(0)
-		if err := s.client.PostJSON(recipient.URL+"/signer/dkg/share", payload, nil); err != nil {
-			writeError(w, http.StatusBadGateway, fmt.Sprintf("send share to party %d: %v", recipient.PartyID, err))
-			return
-		}
+	if err := s.sendDKGShares(req, req.Members, commitment, outgoing); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, StartDKGResponse{PartyID: s.partyID, Commitment: commitment})
 }
@@ -193,12 +250,40 @@ func (s *Service) handleReceiveShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.DKGSessionID == "" || req.VaultID == "" {
+		writeError(w, http.StatusBadRequest, "dkg_session_id and vault_id are required")
+		return
+	}
+	if _, ok := memberByPartyID(req.Members, req.FromPartyID); !ok {
+		writeError(w, http.StatusBadRequest, "share sender is not a DKG member")
+		return
+	}
 	if !mpc.VerifyPolynomialShare(req.Share, int(s.partyID), req.Commitment) {
 		writeError(w, http.StatusBadRequest, "share does not match public commitment")
 		return
 	}
 	s.mu.Lock()
 	state := s.ensureStateLocked(req.KeyID, req.Threshold, req.Members)
+	if state.dkgSessionID != "" && state.dkgSessionID != req.DKGSessionID {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "MPC key is already bound to a different DKG session")
+		return
+	}
+	if state.dkgStatus == "aborted" {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "DKG session was aborted")
+		return
+	}
+	if state.dkgStatus == "finalized" || state.dkgStatus == "committed" {
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "stored"})
+		return
+	}
+	state.vaultID = req.VaultID
+	state.dkgSessionID = req.DKGSessionID
+	if state.dkgStatus == "" {
+		state.dkgStatus = "pending"
+	}
 	state.commitments[int(req.FromPartyID)] = req.Commitment
 	state.inbox[int(req.FromPartyID)] = req.Share
 	if err := s.saveLocked(); err != nil {
@@ -220,6 +305,10 @@ func (s *Service) handleFinalizeDKG(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if req.DKGSessionID == "" || req.VaultID == "" {
+		writeError(w, http.StatusBadRequest, "dkg_session_id and vault_id are required")
+		return
+	}
 	publicKey, err := mpc.CombinePublicKey(req.Commitments)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -227,6 +316,24 @@ func (s *Service) handleFinalizeDKG(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	state := s.ensureStateLocked(req.KeyID, req.Threshold, req.Members)
+	if state.dkgSessionID != "" && state.dkgSessionID != req.DKGSessionID {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "MPC key is already bound to a different DKG session")
+		return
+	}
+	if state.dkgStatus == "aborted" {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "DKG session was aborted")
+		return
+	}
+	if (state.dkgStatus == "finalized" || state.dkgStatus == "committed") && state.fragment.KeyID != "" {
+		fragment := state.fragment
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, FinalizeDKGResponse{PartyID: s.partyID, PublicKey: publicKey, EncryptedFragment: fragment})
+		return
+	}
+	state.vaultID = req.VaultID
+	state.dkgSessionID = req.DKGSessionID
 	for _, commitment := range req.Commitments {
 		state.commitments[commitment.PartyID] = commitment
 	}
@@ -258,15 +365,6 @@ func (s *Service) handleFinalizeDKG(w http.ResponseWriter, r *http.Request) {
 		share.Mod(share, mpc.CurveOrder())
 		value.SetInt64(0)
 	}
-	state.publicKey = publicKey
-	state.nonces = make(map[string]*big.Int)
-	state.inbox = make(map[int]string)
-	if err := s.saveLocked(); err != nil {
-		s.mu.Unlock()
-		share.SetInt64(0)
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
-		return
-	}
 	s.mu.Unlock()
 
 	publicShare, err := mpc.PublicShareCommitment(req.Commitments, int(s.partyID))
@@ -281,7 +379,95 @@ func (s *Service) handleFinalizeDKG(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.mu.Lock()
+	state, ok := s.keys[req.KeyID]
+	if !ok || state.dkgSessionID != req.DKGSessionID {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "DKG session is no longer active")
+		return
+	}
+	if state.dkgStatus == "aborted" {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "DKG session was aborted")
+		return
+	}
+	state.vaultID = req.VaultID
+	state.dkgSessionID = req.DKGSessionID
+	state.dkgStatus = "finalized"
+	state.publicKey = publicKey
+	state.fragment = fragment
+	state.nonces = make(map[string]*nonceState)
+	state.inbox = make(map[int]string)
+	state.outgoingShares = nil
+	if err := s.saveLocked(); err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
+		return
+	}
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, FinalizeDKGResponse{PartyID: s.partyID, PublicKey: publicKey, EncryptedFragment: fragment})
+}
+
+func (s *Service) handleAbortDKG(w http.ResponseWriter, r *http.Request) {
+	var req AbortDKGRequest
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.KeyID == "" || req.DKGSessionID == "" {
+		writeError(w, http.StatusBadRequest, "key_id and dkg_session_id are required")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.keys[req.KeyID]
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "absent"})
+		return
+	}
+	if state.dkgSessionID != req.DKGSessionID {
+		writeError(w, http.StatusConflict, "MPC key is bound to a different DKG session")
+		return
+	}
+	if state.dkgStatus == "committed" {
+		writeError(w, http.StatusConflict, "DKG session is already committed")
+		return
+	}
+	delete(s.keys, req.KeyID)
+	if err := s.saveLocked(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "aborted"})
+}
+
+func (s *Service) handleCommitDKG(w http.ResponseWriter, r *http.Request) {
+	var req CommitDKGRequest
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.KeyID == "" || req.DKGSessionID == "" {
+		writeError(w, http.StatusBadRequest, "key_id and dkg_session_id are required")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.keys[req.KeyID]
+	if !ok || state.publicKey.X == "" {
+		writeError(w, http.StatusNotFound, "key metadata not found")
+		return
+	}
+	if state.dkgSessionID != req.DKGSessionID {
+		writeError(w, http.StatusConflict, "MPC key is bound to a different DKG session")
+		return
+	}
+	state.dkgStatus = "committed"
+	if err := s.saveLocked(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "committed"})
 }
 
 func (s *Service) handleApprove(w http.ResponseWriter, r *http.Request) {
@@ -290,14 +476,54 @@ func (s *Service) handleApprove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.KeyID == "" || req.SessionID == "" || req.MessageHash == "" {
-		writeError(w, http.StatusBadRequest, "key_id, session_id, and message_hash are required")
+	if req.VaultID == "" || req.KeyID == "" || req.SessionID == "" || req.MessageHash == "" {
+		writeError(w, http.StatusBadRequest, "vault_id, key_id, session_id, and message_hash are required")
+		return
+	}
+	if req.Threshold < 2 || len(req.Participants) < req.Threshold {
+		writeError(w, http.StatusBadRequest, "threshold and threshold-sized participants are required")
 		return
 	}
 	if req.ExpiresAt.IsZero() {
 		req.ExpiresAt = time.Now().UTC().Add(5 * time.Minute)
 	}
-	approval, err := mpc.SignApproval(s.edPriv, mpc.Approval{SessionID: req.SessionID, KeyID: req.KeyID, PartyID: int(s.partyID), MessageHash: req.MessageHash, ExpiresAt: req.ExpiresAt.UTC()})
+	if time.Now().UTC().After(req.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, "approval request is expired")
+		return
+	}
+	s.mu.Lock()
+	state, ok := s.keys[req.KeyID]
+	if !ok || state.publicKey.X == "" || state.dkgStatus == "aborted" {
+		s.mu.Unlock()
+		writeError(w, http.StatusNotFound, "key metadata not found")
+		return
+	}
+	if state.vaultID != "" && state.vaultID != req.VaultID {
+		s.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, "approval vault does not match signer key state")
+		return
+	}
+	if state.threshold != req.Threshold {
+		s.mu.Unlock()
+		writeError(w, http.StatusBadRequest, "approval threshold does not match signer key state")
+		return
+	}
+	if err := validateApprovalParticipants(req.Participants, state.members, s.partyID); err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.mu.Unlock()
+	approval, err := mpc.SignApproval(s.edPriv, mpc.Approval{
+		VaultID:      req.VaultID,
+		SessionID:    req.SessionID,
+		KeyID:        req.KeyID,
+		PartyID:      int(s.partyID),
+		Threshold:    req.Threshold,
+		Participants: append([]int(nil), req.Participants...),
+		MessageHash:  req.MessageHash,
+		ExpiresAt:    req.ExpiresAt.UTC(),
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -311,20 +537,35 @@ func (s *Service) handleNonceCommit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	nonce, err := mpc.RandomScalar()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if req.KeyID == "" || req.SessionID == "" || req.MessageHash == "" {
+		writeError(w, http.StatusBadRequest, "key_id, session_id, and message_hash are required")
 		return
 	}
 	s.mu.Lock()
 	state, ok := s.keys[req.KeyID]
-	if !ok || state.publicKey.X == "" {
+	if !ok || state.publicKey.X == "" || state.dkgStatus == "aborted" {
 		s.mu.Unlock()
-		nonce.SetInt64(0)
 		writeError(w, http.StatusNotFound, "key metadata not found")
 		return
 	}
-	state.nonces[req.SessionID] = nonce
+	if existing, ok := state.nonces[req.SessionID]; ok {
+		if existing.KeyID != req.KeyID || existing.MessageHash != req.MessageHash {
+			s.mu.Unlock()
+			writeError(w, http.StatusConflict, "nonce session is already bound to a different transcript")
+			return
+		}
+		commitment := mpc.Commitment{PartyID: int(s.partyID), R: mpc.ScalarBasePoint(existing.Nonce)}
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, commitment)
+		return
+	}
+	nonce, err := mpc.RandomScalar()
+	if err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	state.nonces[req.SessionID] = &nonceState{KeyID: req.KeyID, SessionID: req.SessionID, MessageHash: req.MessageHash, Nonce: nonce}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, mpc.Commitment{PartyID: int(s.partyID), R: mpc.ScalarBasePoint(nonce)})
 }
@@ -358,17 +599,43 @@ func (s *Service) handleSignShare(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	state, ok := s.keys[req.KeyID]
-	if !ok || state.publicKey.X == "" {
+	if !ok || state.publicKey.X == "" || state.dkgStatus == "aborted" {
 		s.mu.Unlock()
 		writeError(w, http.StatusNotFound, "key metadata not found")
 		return
 	}
-	nonce, ok := state.nonces[req.SessionID]
+	if state.vaultID != "" && req.Approval.VaultID != state.vaultID {
+		s.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, "approval vault does not match signer key state")
+		return
+	}
+	if req.Approval.Threshold != state.threshold {
+		s.mu.Unlock()
+		writeError(w, http.StatusBadRequest, "approval threshold does not match signer key state")
+		return
+	}
+	if err := validateApprovalParticipants(req.Approval.Participants, state.members, s.partyID); err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateSigningParticipants(req.Participants, req.Approval.Participants, req.Approval.Threshold, s.partyID); err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	nonceRecord, ok := state.nonces[req.SessionID]
 	if !ok {
 		s.mu.Unlock()
 		writeError(w, http.StatusConflict, "nonce commitment not found for session")
 		return
 	}
+	if nonceRecord.KeyID != req.KeyID || nonceRecord.MessageHash != req.Approval.MessageHash {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "nonce commitment is bound to a different transcript")
+		return
+	}
+	nonce := nonceRecord.Nonce
 	delete(state.nonces, req.SessionID)
 	publicKey := state.publicKey
 	s.mu.Unlock()
@@ -405,7 +672,7 @@ func (s *Service) handleSignShare(w http.ResponseWriter, r *http.Request) {
 func (s *Service) ensureStateLocked(keyID string, threshold int, members []Member) *keyState {
 	state, ok := s.keys[keyID]
 	if !ok {
-		state = &keyState{threshold: threshold, members: append([]Member(nil), members...), commitments: make(map[int]mpc.PublicCommitment), inbox: make(map[int]string), nonces: make(map[string]*big.Int)}
+		state = &keyState{threshold: threshold, members: append([]Member(nil), members...), commitments: make(map[int]mpc.PublicCommitment), inbox: make(map[int]string), outgoingShares: make(map[int]string), nonces: make(map[string]*nonceState)}
 		s.keys[keyID] = state
 		return state
 	}
@@ -417,10 +684,40 @@ func (s *Service) ensureStateLocked(keyID string, threshold int, members []Membe
 	if state.inbox == nil {
 		state.inbox = make(map[int]string)
 	}
+	if state.outgoingShares == nil {
+		state.outgoingShares = make(map[int]string)
+	}
 	if state.nonces == nil {
-		state.nonces = make(map[string]*big.Int)
+		state.nonces = make(map[string]*nonceState)
 	}
 	return state
+}
+
+func (s *Service) sendDKGShares(req StartDKGRequest, members []Member, commitment mpc.PublicCommitment, outgoing map[int]string) error {
+	for _, recipient := range members {
+		if recipient.PartyID == s.partyID {
+			continue
+		}
+		share, ok := outgoing[int(recipient.PartyID)]
+		if !ok {
+			return fmt.Errorf("missing outgoing share for party %d", recipient.PartyID)
+		}
+		payload := DKGShareRequest{
+			DKGSessionID: req.DKGSessionID,
+			VaultID:      req.VaultID,
+			KeyID:        req.KeyID,
+			Threshold:    req.Threshold,
+			Members:      req.Members,
+			FromPartyID:  s.partyID,
+			ToPartyID:    recipient.PartyID,
+			Share:        share,
+			Commitment:   commitment,
+		}
+		if err := s.client.PostJSON(recipient.URL+"/signer/dkg/share", payload, nil); err != nil {
+			return fmt.Errorf("send share to party %d: %w", recipient.PartyID, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) saveLocked() error {
@@ -469,6 +766,68 @@ func validateRequest(keyID string, threshold int, members []Member, selfID uint3
 		}
 	}
 	return fmt.Errorf("party %d is not in the requested vault MPC group", selfID)
+}
+
+func memberByPartyID(members []Member, partyID uint32) (Member, bool) {
+	for _, member := range members {
+		if member.PartyID == partyID {
+			return member, true
+		}
+	}
+	return Member{}, false
+}
+
+func validateApprovalParticipants(participants []int, members []Member, selfID uint32) error {
+	allowed := make(map[int]struct{}, len(members))
+	for _, member := range members {
+		allowed[int(member.PartyID)] = struct{}{}
+	}
+	seen := make(map[int]struct{}, len(participants))
+	hasSelf := false
+	for _, partyID := range participants {
+		if _, ok := allowed[partyID]; !ok {
+			return fmt.Errorf("approval participant %d is not part of this key", partyID)
+		}
+		if _, ok := seen[partyID]; ok {
+			return fmt.Errorf("approval participant %d was provided more than once", partyID)
+		}
+		seen[partyID] = struct{}{}
+		if uint32(partyID) == selfID {
+			hasSelf = true
+		}
+	}
+	if !hasSelf {
+		return fmt.Errorf("approval participants do not include this signer party %d", selfID)
+	}
+	return nil
+}
+
+func validateSigningParticipants(signing, approved []int, threshold int, selfID uint32) error {
+	if len(signing) < threshold {
+		return fmt.Errorf("signing request needs at least %d participants", threshold)
+	}
+	approvedSet := make(map[int]struct{}, len(approved))
+	for _, partyID := range approved {
+		approvedSet[partyID] = struct{}{}
+	}
+	seen := make(map[int]struct{}, len(signing))
+	hasSelf := false
+	for _, partyID := range signing {
+		if _, ok := approvedSet[partyID]; !ok {
+			return fmt.Errorf("signing participant %d is not approved for this session", partyID)
+		}
+		if _, ok := seen[partyID]; ok {
+			return fmt.Errorf("signing participant %d was provided more than once", partyID)
+		}
+		seen[partyID] = struct{}{}
+		if uint32(partyID) == selfID {
+			hasSelf = true
+		}
+	}
+	if !hasSelf {
+		return fmt.Errorf("signing participants do not include this signer party %d", selfID)
+	}
+	return nil
 }
 
 func zeroBytes(bytes []byte) {

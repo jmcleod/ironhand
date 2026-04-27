@@ -816,7 +816,17 @@ export interface MPCSigningSession {
   message: string;
   message_hash: string;
   participants: number[];
-  approvals?: { party_id: number; signature: string }[];
+  approvals?: {
+    vault_id: string;
+    session_id: string;
+    key_id: string;
+    party_id: number;
+    threshold: number;
+    participants: number[];
+    message_hash: string;
+    expires_at: string;
+    signature: string;
+  }[];
   signature?: unknown;
   created_at: string;
   expires_at: string;

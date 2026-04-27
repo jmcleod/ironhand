@@ -446,12 +446,18 @@ func (s *Session) AddMPCApproval(ctx context.Context, sessionID string, approval
 			session.Status = MPCSigningSessionExpired
 			return fmt.Errorf("MPC signing session %q expired", sessionID)
 		}
-		if approval.SessionID != session.SessionID || approval.KeyID != session.KeyID || approval.MessageHash != session.MessageHash {
+		if approval.VaultID != session.VaultID || approval.SessionID != session.SessionID || approval.KeyID != session.KeyID || approval.MessageHash != session.MessageHash {
 			return fmt.Errorf("approval is not bound to this MPC signing session")
 		}
 		key, err := loadMPCKey(s.vault.id, s.vault.repo, recKey, session.KeyID)
 		if err != nil {
 			return err
+		}
+		if approval.Threshold != key.Threshold {
+			return fmt.Errorf("approval threshold is not bound to this MPC key")
+		}
+		if !samePartySet(approval.Participants, session.Participants) {
+			return fmt.Errorf("approval participants are not bound to this MPC signing session")
 		}
 		participant, ok := key.participantByPartyID(uint32(approval.PartyID))
 		if !ok {
@@ -479,12 +485,16 @@ func (s *Session) CompleteMPCSigningSession(ctx context.Context, sessionID strin
 		if session.Status != MPCSigningSessionPending {
 			return fmt.Errorf("MPC signing session %q is not pending", sessionID)
 		}
-		if len(session.Approvals) < len(session.Participants) {
-			return fmt.Errorf("MPC signing session %q needs %d approvals", sessionID, len(session.Participants))
+		if time.Now().UTC().After(session.ExpiresAt) {
+			return fmt.Errorf("MPC signing session %q expired", sessionID)
 		}
 		key, err := loadMPCKey(s.vault.id, s.vault.repo, recKey, session.KeyID)
 		if err != nil {
 			return err
+		}
+		approvalCount := countValidSessionApprovals(session, key)
+		if approvalCount < key.Threshold {
+			return fmt.Errorf("MPC signing session %q needs %d approvals, has %d", sessionID, key.Threshold, approvalCount)
 		}
 		if signature == nil || !mpc.Verify(session.Message, key.PublicKeyPoint(), signature) {
 			session.Status = MPCSigningSessionFailed
@@ -517,6 +527,48 @@ func (s *MPCSigningSession) hasParticipant(partyID uint32) bool {
 		}
 	}
 	return false
+}
+
+func countValidSessionApprovals(session *MPCSigningSession, key *MPCKey) int {
+	seen := make(map[int]struct{}, len(session.Approvals))
+	now := time.Now().UTC()
+	for _, approval := range session.Approvals {
+		if _, ok := seen[approval.PartyID]; ok {
+			continue
+		}
+		participant, ok := key.participantByPartyID(uint32(approval.PartyID))
+		if !ok || !session.hasParticipant(uint32(approval.PartyID)) {
+			continue
+		}
+		if approval.VaultID != session.VaultID || approval.SessionID != session.SessionID || approval.KeyID != session.KeyID || approval.MessageHash != session.MessageHash {
+			continue
+		}
+		if approval.Threshold != key.Threshold || !samePartySet(approval.Participants, session.Participants) {
+			continue
+		}
+		if !mpc.VerifyApproval(participant.ApprovalPublicKey, approval, now) {
+			continue
+		}
+		seen[approval.PartyID] = struct{}{}
+	}
+	return len(seen)
+}
+
+func samePartySet(left []int, right []uint32) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[int]int, len(left))
+	for _, partyID := range left {
+		counts[partyID]++
+	}
+	for _, partyID := range right {
+		counts[int(partyID)]--
+		if counts[int(partyID)] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Session) updateMPCSigningSession(ctx context.Context, sessionID string, update func(recordKey []byte, session *MPCSigningSession) error) (*MPCSigningSession, error) {

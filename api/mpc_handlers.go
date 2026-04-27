@@ -78,13 +78,15 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
+	var dkg *mpcDKGOrchestration
 	if len(req.Commitments) == 0 && len(req.Fragments) == 0 {
-		prepared, err := a.orchestrateMPCDKG(r.Context(), session, vaultID, req)
+		prepared, orchestration, err := a.orchestrateMPCDKG(r.Context(), session, vaultID, req)
 		if err != nil {
 			mapError(w, err)
 			return
 		}
 		req = prepared
+		dkg = orchestration
 	}
 	key, err := session.CreateMPCKey(r.Context(), vault.MPCKeyCreate{
 		KeyID:       req.KeyID,
@@ -95,8 +97,14 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 		Fragments:   req.Fragments,
 	})
 	if err != nil {
+		if dkg != nil {
+			a.abortMPCDKG(r.Context(), dkg)
+		}
 		mapError(w, err)
 		return
+	}
+	if dkg != nil {
+		a.commitMPCDKG(r.Context(), dkg)
 	}
 	a.audit.logEvent(AuditMPCKeyCreated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -273,16 +281,25 @@ func (a *API) CompleteMPCSigningSession(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, MPCSigningSessionResponse(*signingSession))
 }
 
-func (a *API) orchestrateMPCDKG(ctx context.Context, session *vault.Session, vaultID string, req CreateMPCKeyRequest) (CreateMPCKeyRequest, error) {
+type mpcDKGOrchestration struct {
+	SessionID string
+	KeyID     string
+	Members   []mpcsigner.Member
+}
+
+func (a *API) orchestrateMPCDKG(ctx context.Context, session *vault.Session, vaultID string, req CreateMPCKeyRequest) (CreateMPCKeyRequest, *mpcDKGOrchestration, error) {
 	if req.KeyID == "" {
 		req.KeyID = uuid.New()
 	}
 	if req.Threshold == 0 {
 		req.Threshold = 2
 	}
+	if req.Threshold < 2 {
+		return req, nil, vault.ValidationError{Message: "MPC threshold must be at least 2"}
+	}
 	members, err := session.ListMembers(ctx)
 	if err != nil {
-		return req, err
+		return req, nil, err
 	}
 	selected := make([]mpcsigner.Member, 0, len(members))
 	allowed := make(map[string]bool, len(req.MemberIDs))
@@ -296,6 +313,9 @@ func (a *API) orchestrateMPCDKG(ctx context.Context, session *vault.Session, vau
 		if member.Status != vault.StatusActive || member.MPCSignerStatus != vault.MPCSignerStatusActive {
 			continue
 		}
+		if member.MPCSignerURL == "" || member.MPCEncryptionPublicKey == "" || member.MPCApprovalPublicKey == "" {
+			continue
+		}
 		selected = append(selected, mpcsigner.Member{
 			MemberID:            member.MemberID,
 			PartyID:             member.MPCPartyID,
@@ -304,25 +324,66 @@ func (a *API) orchestrateMPCDKG(ctx context.Context, session *vault.Session, vau
 			ApprovalPublicKey:   member.MPCApprovalPublicKey,
 		})
 	}
-	start := mpcsigner.StartDKGRequest{KeyID: req.KeyID, Threshold: req.Threshold, Members: selected}
+	if len(selected) < req.Threshold {
+		return req, nil, vault.ValidationError{Message: fmt.Sprintf("need at least %d active MPC signers, found %d", req.Threshold, len(selected))}
+	}
+	dkg := &mpcDKGOrchestration{SessionID: uuid.New(), KeyID: req.KeyID, Members: selected}
+	start := mpcsigner.StartDKGRequest{DKGSessionID: dkg.SessionID, VaultID: vaultID, KeyID: req.KeyID, Threshold: req.Threshold, Members: selected}
 	req.Commitments = make([]mpc.PublicCommitment, 0, len(selected))
 	for _, member := range selected {
 		var resp mpcsigner.StartDKGResponse
 		if err := a.mpcClient.PostJSON(member.URL+"/signer/dkg/start", start, &resp); err != nil {
-			return req, err
+			a.abortMPCDKG(ctx, dkg)
+			return req, nil, err
 		}
 		req.Commitments = append(req.Commitments, resp.Commitment)
 	}
-	finalize := mpcsigner.FinalizeDKGRequest{KeyID: req.KeyID, Threshold: req.Threshold, Members: selected, Commitments: req.Commitments}
+	finalize := mpcsigner.FinalizeDKGRequest{DKGSessionID: dkg.SessionID, VaultID: vaultID, KeyID: req.KeyID, Threshold: req.Threshold, Members: selected, Commitments: req.Commitments}
 	req.Fragments = make(map[string]mpc.EncryptedFragment, len(selected))
+	finalized := make([]mpcsigner.Member, 0, len(selected))
 	for _, member := range selected {
 		var resp mpcsigner.FinalizeDKGResponse
 		if err := a.mpcClient.PostJSON(member.URL+"/signer/dkg/finalize", finalize, &resp); err != nil {
-			return req, err
+			a.abortMPCDKG(ctx, &mpcDKGOrchestration{SessionID: dkg.SessionID, KeyID: req.KeyID, Members: selected})
+			return req, nil, err
 		}
+		finalized = append(finalized, member)
 		req.Fragments[member.MemberID] = resp.EncryptedFragment
 	}
-	return req, nil
+	dkg.Members = append([]mpcsigner.Member(nil), finalized...)
+	return req, dkg, nil
+}
+
+func (a *API) abortMPCDKG(ctx context.Context, dkg *mpcDKGOrchestration) {
+	if dkg == nil {
+		return
+	}
+	payload := mpcsigner.AbortDKGRequest{DKGSessionID: dkg.SessionID, KeyID: dkg.KeyID}
+	for _, member := range dkg.Members {
+		if err := a.mpcClient.PostJSON(member.URL+"/signer/dkg/abort", payload, nil); err != nil {
+			a.audit.logger.WarnContext(ctx, "failed to abort MPC DKG signer state",
+				slog.String("mpc_key_id", dkg.KeyID),
+				slog.String("dkg_session_id", dkg.SessionID),
+				slog.Uint64("party_id", uint64(member.PartyID)),
+				slog.String("error", err.Error()))
+		}
+	}
+}
+
+func (a *API) commitMPCDKG(ctx context.Context, dkg *mpcDKGOrchestration) {
+	if dkg == nil {
+		return
+	}
+	payload := mpcsigner.CommitDKGRequest{DKGSessionID: dkg.SessionID, KeyID: dkg.KeyID}
+	for _, member := range dkg.Members {
+		if err := a.mpcClient.PostJSON(member.URL+"/signer/dkg/commit", payload, nil); err != nil {
+			a.audit.logger.WarnContext(ctx, "failed to commit MPC DKG signer state",
+				slog.String("mpc_key_id", dkg.KeyID),
+				slog.String("dkg_session_id", dkg.SessionID),
+				slog.Uint64("party_id", uint64(member.PartyID)),
+				slog.String("error", err.Error()))
+		}
+	}
 }
 
 func (a *API) approveMPCSessionWithSigner(ctx context.Context, session *vault.Session, sessionID string, partyID uint32) (*mpc.Approval, error) {
@@ -346,7 +407,19 @@ func (a *API) approveMPCSessionWithSigner(ctx context.Context, session *vault.Se
 	if !found {
 		return nil, vault.ValidationError{Message: fmt.Sprintf("party %d is not part of this MPC key", partyID)}
 	}
-	payload := mpcsigner.ApprovalRequest{SessionID: signingSession.SessionID, KeyID: signingSession.KeyID, MessageHash: signingSession.MessageHash, ExpiresAt: signingSession.ExpiresAt}
+	participants := make([]int, 0, len(signingSession.Participants))
+	for _, participantID := range signingSession.Participants {
+		participants = append(participants, int(participantID))
+	}
+	payload := mpcsigner.ApprovalRequest{
+		VaultID:      signingSession.VaultID,
+		SessionID:    signingSession.SessionID,
+		KeyID:        signingSession.KeyID,
+		Threshold:    key.Threshold,
+		Participants: participants,
+		MessageHash:  signingSession.MessageHash,
+		ExpiresAt:    signingSession.ExpiresAt,
+	}
 	var approval mpc.Approval
 	if err := a.mpcClient.PostJSON(participant.SignerURL+"/signer/approve", payload, &approval); err != nil {
 		return nil, err
@@ -382,7 +455,7 @@ func (a *API) completeMPCSessionWithSigners(ctx context.Context, session *vault.
 	for _, partyID := range approved {
 		participant, _ := findMPCParticipant(key.Participants, partyID)
 		var commitment mpc.Commitment
-		if err := a.mpcClient.PostJSON(participant.SignerURL+"/signer/sign/commit", mpcsigner.NonceCommitRequest{KeyID: key.KeyID, SessionID: signingSession.SessionID}, &commitment); err != nil {
+		if err := a.mpcClient.PostJSON(participant.SignerURL+"/signer/sign/commit", mpcsigner.NonceCommitRequest{KeyID: key.KeyID, SessionID: signingSession.SessionID, MessageHash: signingSession.MessageHash}, &commitment); err != nil {
 			return nil, err
 		}
 		commitments = append(commitments, commitment)

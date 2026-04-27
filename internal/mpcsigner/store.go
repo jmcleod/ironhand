@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,11 +42,16 @@ type signerSnapshot struct {
 }
 
 type keySnapshot struct {
-	Threshold   int                    `json:"threshold"`
-	Members     []Member               `json:"members"`
-	Commitments []mpc.PublicCommitment `json:"commitments,omitempty"`
-	Inbox       map[string]string      `json:"inbox,omitempty"`
-	PublicKey   mpc.Point              `json:"public_key,omitempty"`
+	VaultID        string                 `json:"vault_id,omitempty"`
+	DKGSessionID   string                 `json:"dkg_session_id,omitempty"`
+	DKGStatus      string                 `json:"dkg_status,omitempty"`
+	Threshold      int                    `json:"threshold"`
+	Members        []Member               `json:"members"`
+	Commitments    []mpc.PublicCommitment `json:"commitments,omitempty"`
+	Inbox          map[string]string      `json:"inbox,omitempty"`
+	OutgoingShares map[string]string      `json:"outgoing_shares,omitempty"`
+	Fragment       mpc.EncryptedFragment  `json:"fragment,omitempty"`
+	PublicKey      mpc.Point              `json:"public_key,omitempty"`
 }
 
 func NewFileStore(path, passphrase string) (*FileStore, error) {
@@ -158,12 +162,21 @@ func snapshotFromService(s *Service) signerSnapshot {
 		for partyID, share := range state.inbox {
 			inbox[strconv.Itoa(partyID)] = share
 		}
+		outgoing := make(map[string]string, len(state.outgoingShares))
+		for partyID, share := range state.outgoingShares {
+			outgoing[strconv.Itoa(partyID)] = share
+		}
 		keys[keyID] = keySnapshot{
-			Threshold:   state.threshold,
-			Members:     append([]Member(nil), state.members...),
-			Commitments: commitments,
-			Inbox:       inbox,
-			PublicKey:   state.publicKey,
+			VaultID:        state.vaultID,
+			DKGSessionID:   state.dkgSessionID,
+			DKGStatus:      state.dkgStatus,
+			Threshold:      state.threshold,
+			Members:        append([]Member(nil), state.members...),
+			Commitments:    commitments,
+			Inbox:          inbox,
+			OutgoingShares: outgoing,
+			Fragment:       state.fragment,
+			PublicKey:      state.publicKey,
 		}
 	}
 	return signerSnapshot{
@@ -206,17 +219,30 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 			}
 			inbox[partyID] = share
 		}
+		outgoing := make(map[int]string, len(state.OutgoingShares))
+		for rawPartyID, share := range state.OutgoingShares {
+			partyID, err := strconv.Atoi(rawPartyID)
+			if err != nil {
+				return nil, nil, mpc.SignerIdentity{}, nil, fmt.Errorf("invalid saved outgoing DKG party ID %q: %w", rawPartyID, err)
+			}
+			outgoing[partyID] = share
+		}
 		commitments := make(map[int]mpc.PublicCommitment, len(state.Commitments))
 		for _, commitment := range state.Commitments {
 			commitments[commitment.PartyID] = commitment
 		}
 		keys[keyID] = &keyState{
-			threshold:   state.Threshold,
-			members:     append([]Member(nil), state.Members...),
-			commitments: commitments,
-			inbox:       inbox,
-			publicKey:   state.PublicKey,
-			nonces:      make(map[string]*big.Int),
+			vaultID:        state.VaultID,
+			dkgSessionID:   state.DKGSessionID,
+			dkgStatus:      state.DKGStatus,
+			threshold:      state.Threshold,
+			members:        append([]Member(nil), state.Members...),
+			commitments:    commitments,
+			inbox:          inbox,
+			outgoingShares: outgoing,
+			fragment:       state.Fragment,
+			publicKey:      state.PublicKey,
+			nonces:         make(map[string]*nonceState),
 		}
 	}
 	return ecdhPriv, ed25519.PrivateKey(edBytes), snapshot.Identity, keys, nil

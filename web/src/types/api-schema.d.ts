@@ -1378,9 +1378,12 @@ export interface components {
             public_share_commitment?: components["schemas"]["MPCPoint"];
         };
         MPCApproval: {
+            vault_id?: string;
             session_id?: string;
             key_id?: string;
             party_id?: number;
+            threshold?: number;
+            participants?: number[];
             message_hash?: string;
             /** Format: date-time */
             expires_at?: string;

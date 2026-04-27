@@ -19,9 +19,11 @@ type IdentityResponse struct {
 }
 
 type StartDKGRequest struct {
-	KeyID     string   `json:"key_id"`
-	Threshold int      `json:"threshold"`
-	Members   []Member `json:"members"`
+	DKGSessionID string   `json:"dkg_session_id"`
+	VaultID      string   `json:"vault_id"`
+	KeyID        string   `json:"key_id"`
+	Threshold    int      `json:"threshold"`
+	Members      []Member `json:"members"`
 }
 
 type StartDKGResponse struct {
@@ -30,20 +32,24 @@ type StartDKGResponse struct {
 }
 
 type DKGShareRequest struct {
-	KeyID       string               `json:"key_id"`
-	Threshold   int                  `json:"threshold"`
-	Members     []Member             `json:"members"`
-	FromPartyID uint32               `json:"from_party_id"`
-	ToPartyID   uint32               `json:"to_party_id"`
-	Share       string               `json:"share"`
-	Commitment  mpc.PublicCommitment `json:"commitment"`
+	DKGSessionID string               `json:"dkg_session_id"`
+	VaultID      string               `json:"vault_id"`
+	KeyID        string               `json:"key_id"`
+	Threshold    int                  `json:"threshold"`
+	Members      []Member             `json:"members"`
+	FromPartyID  uint32               `json:"from_party_id"`
+	ToPartyID    uint32               `json:"to_party_id"`
+	Share        string               `json:"share"`
+	Commitment   mpc.PublicCommitment `json:"commitment"`
 }
 
 type FinalizeDKGRequest struct {
-	KeyID       string                 `json:"key_id"`
-	Threshold   int                    `json:"threshold"`
-	Members     []Member               `json:"members"`
-	Commitments []mpc.PublicCommitment `json:"commitments"`
+	DKGSessionID string                 `json:"dkg_session_id"`
+	VaultID      string                 `json:"vault_id"`
+	KeyID        string                 `json:"key_id"`
+	Threshold    int                    `json:"threshold"`
+	Members      []Member               `json:"members"`
+	Commitments  []mpc.PublicCommitment `json:"commitments"`
 }
 
 type FinalizeDKGResponse struct {
@@ -52,16 +58,30 @@ type FinalizeDKGResponse struct {
 	EncryptedFragment mpc.EncryptedFragment `json:"encrypted_fragment"`
 }
 
+type AbortDKGRequest struct {
+	DKGSessionID string `json:"dkg_session_id"`
+	KeyID        string `json:"key_id"`
+}
+
+type CommitDKGRequest struct {
+	DKGSessionID string `json:"dkg_session_id"`
+	KeyID        string `json:"key_id"`
+}
+
 type ApprovalRequest struct {
-	SessionID   string    `json:"session_id"`
-	KeyID       string    `json:"key_id"`
-	MessageHash string    `json:"message_hash"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	VaultID      string    `json:"vault_id"`
+	SessionID    string    `json:"session_id"`
+	KeyID        string    `json:"key_id"`
+	Threshold    int       `json:"threshold"`
+	Participants []int     `json:"participants"`
+	MessageHash  string    `json:"message_hash"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 type NonceCommitRequest struct {
-	KeyID     string `json:"key_id"`
-	SessionID string `json:"session_id"`
+	KeyID       string `json:"key_id"`
+	SessionID   string `json:"session_id"`
+	MessageHash string `json:"message_hash"`
 }
 
 type SignShareRequest struct {

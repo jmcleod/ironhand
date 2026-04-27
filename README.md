@@ -140,6 +140,8 @@ IronHand can run vault-scoped MPC flows where each active vault member maps to a
 - Start each signer with `ironhand signer --state-file ./signer-N.sealed --state-passphrase ...` so signer identity and finalized key metadata survive restarts.
 - Set `--mpc-shared-key` or `IRONHAND_MPC_SHARED_KEY` on both server and signers to HMAC-sign internal signer calls.
 - Use `--mpc-client-cert`, `--mpc-client-key`, `--mpc-signer-ca`, `--tls-cert`, `--tls-key`, and `--client-ca` when signers require mTLS.
+- Coordinator-run DKG uses a per-attempt `dkg_session_id`; failed ceremonies are aborted on touched signers and committed only after the vault stores the key.
+- Signing approvals are bound to the vault, key, session, threshold, participant set, message hash, and expiry. Completion requires a valid threshold-sized approval subset before the session expiry.
 
 The available algorithm is `experimental-p256-schnorr-v1`. It is suitable for protocol development and UX testing, not production funds. A production deployment should replace this boundary with a vetted threshold signature implementation such as FROST over the target production curve.
 

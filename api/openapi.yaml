@@ -805,12 +805,20 @@ components:
     MPCApproval:
       type: object
       properties:
+        vault_id:
+          type: string
         session_id:
           type: string
         key_id:
           type: string
         party_id:
           type: integer
+        threshold:
+          type: integer
+        participants:
+          type: array
+          items:
+            type: integer
         message_hash:
           type: string
         expires_at:

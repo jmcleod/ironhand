@@ -123,11 +123,14 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 			continue
 		}
 		approval, err := mpc.SignApproval(signer.approval, mpc.Approval{
-			SessionID:   signSession.SessionID,
-			KeyID:       signSession.KeyID,
-			PartyID:     signer.partyID,
-			MessageHash: signSession.MessageHash,
-			ExpiresAt:   signSession.ExpiresAt,
+			VaultID:      signSession.VaultID,
+			SessionID:    signSession.SessionID,
+			KeyID:        signSession.KeyID,
+			PartyID:      signer.partyID,
+			Threshold:    key.Threshold,
+			Participants: participants,
+			MessageHash:  signSession.MessageHash,
+			ExpiresAt:    signSession.ExpiresAt,
 		})
 		require.NoError(t, err)
 		_, err = session.AddMPCApproval(ctx, signSession.SessionID, approval)
@@ -139,4 +142,56 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	assert.Equal(t, MPCSigningSessionCompleted, completed.Status)
 	require.NotNil(t, completed.Signature)
 	assert.True(t, mpc.Verify(signSession.Message, key.PublicKeyPoint(), completed.Signature))
+
+	thresholdSession, err := session.CreateMPCSigningSession(ctx, key.KeyID, []byte("threshold subset payload"), []uint32{1, 2, 3}, time.Minute)
+	require.NoError(t, err)
+	subsetParticipants := []int{1, 2}
+	subsetCommitments := make([]mpc.Commitment, 0, len(subsetParticipants))
+	subsetNonces := make(map[int]*big.Int, len(subsetParticipants))
+	for _, partyID := range subsetParticipants {
+		nonce, err := mpc.RandomScalar()
+		require.NoError(t, err)
+		subsetNonces[partyID] = nonce
+		subsetCommitments = append(subsetCommitments, mpc.Commitment{PartyID: partyID, R: mpc.ScalarBasePoint(nonce)})
+	}
+	subsetR, err := mpc.AggregateCommitments(subsetCommitments)
+	require.NoError(t, err)
+	subsetChallenge, err := mpc.Challenge(key.PublicKeyPoint(), subsetR, thresholdSession.Message)
+	require.NoError(t, err)
+	subsetShares := make([]mpc.ShareProof, 0, len(subsetParticipants))
+	for _, partyID := range subsetParticipants {
+		z, err := mpc.SignShare(localShares[partyID], subsetNonces[partyID], subsetChallenge, partyID, subsetParticipants)
+		require.NoError(t, err)
+		subsetShares = append(subsetShares, mpc.ShareProof{PartyID: partyID, Z: mpc.EncodeScalar(z)})
+	}
+	subsetZ, err := mpc.CombineSignatureShares(subsetShares)
+	require.NoError(t, err)
+	subsetSig := &mpc.Signature{Curve: mpc.CurveName, R: subsetR, Z: subsetZ, Commitments: subsetCommitments, Shares: subsetShares}
+	for _, signer := range signers {
+		if signer.partyID != 1 && signer.partyID != 2 {
+			continue
+		}
+		approval, err := mpc.SignApproval(signer.approval, mpc.Approval{
+			VaultID:      thresholdSession.VaultID,
+			SessionID:    thresholdSession.SessionID,
+			KeyID:        thresholdSession.KeyID,
+			PartyID:      signer.partyID,
+			Threshold:    key.Threshold,
+			Participants: []int{1, 2, 3},
+			MessageHash:  thresholdSession.MessageHash,
+			ExpiresAt:    thresholdSession.ExpiresAt,
+		})
+		require.NoError(t, err)
+		_, err = session.AddMPCApproval(ctx, thresholdSession.SessionID, approval)
+		require.NoError(t, err)
+	}
+	completedThreshold, err := session.CompleteMPCSigningSession(ctx, thresholdSession.SessionID, subsetCommitments, subsetSig)
+	require.NoError(t, err)
+	assert.Equal(t, MPCSigningSessionCompleted, completedThreshold.Status)
+
+	expiredSession, err := session.CreateMPCSigningSession(ctx, key.KeyID, []byte("expired payload"), []uint32{1, 2}, time.Nanosecond)
+	require.NoError(t, err)
+	time.Sleep(time.Millisecond)
+	_, err = session.CompleteMPCSigningSession(ctx, expiredSession.SessionID, nil, nil)
+	require.ErrorContains(t, err, "expired")
 }
