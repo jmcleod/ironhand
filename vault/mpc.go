@@ -838,15 +838,66 @@ func (s *Session) CompleteMPCSigningSession(ctx context.Context, sessionID strin
 		if approvalCount < key.Threshold {
 			return fmt.Errorf("MPC signing session %q needs %d approvals, has %d", sessionID, key.Threshold, approvalCount)
 		}
-		if signature == nil || !provider.Verify(session.Message, key.PublicKeyPoint(), signature) {
+		if err := validateMPCCompletionTranscript(session, key, commitments, signature); err != nil {
+			return err
+		}
+		if !provider.Verify(session.Message, key.PublicKeyPoint(), signature) {
 			session.Status = MPCSigningSessionFailed
 			return fmt.Errorf("MPC signature verification failed")
 		}
-		session.Commitments = append([]mpc.Commitment(nil), commitments...)
+		session.Commitments = append([]mpc.Commitment(nil), signature.Commitments...)
 		session.Signature = signature
 		session.Status = MPCSigningSessionCompleted
 		return nil
 	})
+}
+
+func validateMPCCompletionTranscript(session *MPCSigningSession, key *MPCKey, commitments []mpc.Commitment, signature *mpc.Signature) error {
+	if signature == nil {
+		return fmt.Errorf("MPC signature is required")
+	}
+	if len(commitments) != len(signature.Commitments) {
+		return fmt.Errorf("MPC completion commitments do not match signature transcript")
+	}
+	for i := range commitments {
+		if commitments[i] != signature.Commitments[i] {
+			return fmt.Errorf("MPC completion commitments do not match signature transcript")
+		}
+	}
+	if len(signature.Commitments) < key.Threshold {
+		return fmt.Errorf("MPC signature transcript needs at least %d commitments, has %d", key.Threshold, len(signature.Commitments))
+	}
+	if len(signature.Shares) != len(signature.Commitments) {
+		return fmt.Errorf("MPC signature transcript needs one share per commitment")
+	}
+	sessionParties := make(map[uint32]struct{}, len(session.Participants))
+	for _, partyID := range session.Participants {
+		sessionParties[partyID] = struct{}{}
+	}
+	commitmentParties := make(map[int]struct{}, len(signature.Commitments))
+	for _, commitment := range signature.Commitments {
+		if commitment.PartyID <= 0 {
+			return fmt.Errorf("MPC signature transcript has invalid party %d", commitment.PartyID)
+		}
+		if _, ok := sessionParties[uint32(commitment.PartyID)]; !ok {
+			return fmt.Errorf("MPC signature transcript party %d was not selected for session", commitment.PartyID)
+		}
+		if _, ok := commitmentParties[commitment.PartyID]; ok {
+			return fmt.Errorf("MPC signature transcript has duplicate commitment for party %d", commitment.PartyID)
+		}
+		commitmentParties[commitment.PartyID] = struct{}{}
+	}
+	shareParties := make(map[int]struct{}, len(signature.Shares))
+	for _, share := range signature.Shares {
+		if _, ok := commitmentParties[share.PartyID]; !ok {
+			return fmt.Errorf("MPC signature share party %d has no matching commitment", share.PartyID)
+		}
+		if _, ok := shareParties[share.PartyID]; ok {
+			return fmt.Errorf("MPC signature transcript has duplicate share for party %d", share.PartyID)
+		}
+		shareParties[share.PartyID] = struct{}{}
+	}
+	return nil
 }
 
 func (k *MPCKey) PublicKeyPoint() mpc.Point {

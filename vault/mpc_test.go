@@ -250,3 +250,61 @@ func TestEvaluateMPCPolicyMaxValue(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateMPCCompletionTranscript(t *testing.T) {
+	session := &MPCSigningSession{Participants: []uint32{1, 2, 3}}
+	key := &MPCKey{Threshold: 2}
+	c1 := mpc.Commitment{PartyID: 1, R: mpc.Point{X: "1", Y: "2"}}
+	c2 := mpc.Commitment{PartyID: 2, R: mpc.Point{X: "3", Y: "4"}}
+	validCommitments := []mpc.Commitment{c1, c2}
+	validSignature := &mpc.Signature{
+		Commitments: validCommitments,
+		Shares:      []mpc.ShareProof{{PartyID: 1, Z: "a"}, {PartyID: 2, Z: "b"}},
+	}
+
+	require.NoError(t, validateMPCCompletionTranscript(session, key, validCommitments, validSignature))
+
+	tests := []struct {
+		name        string
+		commitments []mpc.Commitment
+		signature   *mpc.Signature
+		err         string
+	}{
+		{
+			name:        "mismatched caller commitments",
+			commitments: []mpc.Commitment{c2, c1},
+			signature:   validSignature,
+			err:         "do not match",
+		},
+		{
+			name:        "too few commitments",
+			commitments: []mpc.Commitment{c1},
+			signature:   &mpc.Signature{Commitments: []mpc.Commitment{c1}, Shares: []mpc.ShareProof{{PartyID: 1, Z: "a"}}},
+			err:         "needs at least 2",
+		},
+		{
+			name:        "unselected party",
+			commitments: []mpc.Commitment{c1, {PartyID: 4, R: mpc.Point{X: "5", Y: "6"}}},
+			signature:   &mpc.Signature{Commitments: []mpc.Commitment{c1, {PartyID: 4, R: mpc.Point{X: "5", Y: "6"}}}, Shares: []mpc.ShareProof{{PartyID: 1, Z: "a"}, {PartyID: 4, Z: "d"}}},
+			err:         "was not selected",
+		},
+		{
+			name:        "duplicate commitment",
+			commitments: []mpc.Commitment{c1, c1},
+			signature:   &mpc.Signature{Commitments: []mpc.Commitment{c1, c1}, Shares: []mpc.ShareProof{{PartyID: 1, Z: "a"}, {PartyID: 1, Z: "b"}}},
+			err:         "duplicate commitment",
+		},
+		{
+			name:        "share without commitment",
+			commitments: validCommitments,
+			signature:   &mpc.Signature{Commitments: validCommitments, Shares: []mpc.ShareProof{{PartyID: 1, Z: "a"}, {PartyID: 3, Z: "c"}}},
+			err:         "no matching commitment",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMPCCompletionTranscript(session, key, tt.commitments, tt.signature)
+			require.ErrorContains(t, err, tt.err)
+		})
+	}
+}
