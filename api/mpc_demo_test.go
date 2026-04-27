@@ -222,6 +222,72 @@ func TestMPCDKGFailureRecordsAttempt(t *testing.T) {
 	require.NotEmpty(t, attempts[0].LastError)
 }
 
+func TestMPCCreateKeyDisablesKeyWhenSignerCommitFails(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.NewRepository()
+	epochCache := vault.NewMemoryEpochCache()
+	api := New(repo, epochCache, WithExperimentalMPC(true), WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	creds, err := vault.NewCredentials("mpc-create-commit-failure-passphrase")
+	require.NoError(t, err)
+	defer creds.Destroy()
+	v := vault.New("mpc-create-commit-failure-vault", repo, vault.WithEpochCache(epochCache))
+	session, err := v.Create(ctx, creds)
+	require.NoError(t, err)
+	defer session.Close()
+	bobKP, err := ihcrypto.GenerateX25519Keypair()
+	require.NoError(t, err)
+	require.NoError(t, session.AddMember(ctx, "bob", bobKP.Public, vault.RoleWriter))
+	signers := []*demoSigner{newDemoSigner(t, creds.MemberID(), 1), newDemoSigner(t, "bob", 2)}
+	for _, signer := range signers {
+		identity := signer.service.Identity()
+		require.NoError(t, session.RegisterMPCSigner(ctx, signer.memberID, vault.MPCSignerRegistration{
+			URL:                 signer.server.URL,
+			EncryptionPublicKey: identity.EncryptionPublicKey,
+			ApprovalPublicKey:   identity.ApprovalPublicKey,
+			Status:              vault.MPCSignerStatusActive,
+		}))
+	}
+	failingSigner := signers[1]
+	failingCommitServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/signer/dkg/commit" {
+			writeError(w, http.StatusInternalServerError, "forced signer commit failure")
+			return
+		}
+		failingSigner.service.Handler().ServeHTTP(w, r)
+	}))
+	t.Cleanup(failingCommitServer.Close)
+	identity := failingSigner.service.Identity()
+	require.NoError(t, session.RegisterMPCSigner(ctx, failingSigner.memberID, vault.MPCSignerRegistration{
+		URL:                 failingCommitServer.URL,
+		EncryptionPublicKey: identity.EncryptionPublicKey,
+		ApprovalPublicKey:   identity.ApprovalPublicKey,
+		Status:              vault.MPCSignerStatusActive,
+	}))
+	require.NoError(t, api.saveAccountRecord(creds.SecretKey().String(), accountRecord{
+		SecretKeyID: creds.SecretKey().ID(),
+		CreatedAt:   time.Now().UTC(),
+	}))
+
+	const failedKeyID = "create-commit-failed-key"
+	req := httptest.NewRequest(http.MethodPost, "/vaults/"+v.ID()+"/mpc/keys", bytes.NewReader([]byte(`{"key_id":"`+failedKeyID+`","threshold":2}`)))
+	req.Header.Set("Content-Type", "application/json")
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("vaultID", v.ID())
+	reqCtx := context.WithValue(req.Context(), credentialsKey, creds)
+	reqCtx = context.WithValue(reqCtx, chi.RouteCtxKey, routeCtx)
+	rec := httptest.NewRecorder()
+
+	api.CreateMPCKey(rec, req.WithContext(reqCtx))
+	require.NotEqual(t, http.StatusCreated, rec.Code, rec.Body.String())
+	key, err := session.GetMPCKey(ctx, failedKeyID)
+	require.NoError(t, err)
+	require.Equal(t, vault.MPCKeyStatusDisabled, key.Status)
+	attempts, err := session.ListMPCDKGAttempts(ctx)
+	require.NoError(t, err)
+	require.Len(t, attempts, 1)
+	require.Equal(t, vault.MPCDKGStatusFailed, attempts[0].Status)
+}
+
 func TestMPCProductionModeRejectsExperimentalProvider(t *testing.T) {
 	api := New(memory.NewRepository(), vault.NewMemoryEpochCache(), WithExperimentalMPC(true), WithMPCProductionMode(true))
 	err := api.validateMPCProviderForUse("")

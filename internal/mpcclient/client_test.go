@@ -64,6 +64,18 @@ func TestSignedRequestBindsBodyAndHost(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestSignedRequestRejectsStaleTimestamp(t *testing.T) {
+	shared := []byte("shared-secret")
+	body := []byte(`{"ok":true}`)
+	req := httptest.NewRequest(http.MethodPost, "https://signer-1.internal/sign", bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.2:12345"
+	SignRequest(req, shared, body, time.Now().Add(-10*time.Minute))
+
+	_, ok, err := VerifyRequest(req, shared, 2*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
 func ioNopCloser(body []byte) *readCloser {
 	return &readCloser{bytes.NewReader(body)}
 }

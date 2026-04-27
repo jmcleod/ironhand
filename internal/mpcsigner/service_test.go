@@ -62,6 +62,37 @@ func TestSignerApprovalBindsSessionContext(t *testing.T) {
 	assert.True(t, mpc.VerifyApproval(service.Identity().ApprovalPublicKey, approval, time.Now().UTC()))
 }
 
+func TestSignerRejectsExpiredAndConflictingApprovalRequests(t *testing.T) {
+	service := newTestSignerService(t)
+	installTestSignerKey(service, "vault-1", "key-1")
+
+	expired := postSignerJSON(t, service, "/signer/approval-requests", ApprovalRequest{
+		VaultID:      "vault-1",
+		KeyID:        "key-1",
+		SessionID:    "expired-session",
+		Threshold:    2,
+		Participants: []int{1, 2},
+		MessageHash:  "hash",
+		ExpiresAt:    time.Now().Add(-time.Minute),
+	})
+	require.Equal(t, http.StatusBadRequest, expired.Code)
+
+	req := ApprovalRequest{
+		VaultID:      "vault-1",
+		KeyID:        "key-1",
+		SessionID:    "session-1",
+		Threshold:    2,
+		Participants: []int{1, 2},
+		MessageHash:  "hash-1",
+		ExpiresAt:    time.Now().Add(time.Minute).UTC(),
+	}
+	first := postSignerJSON(t, service, "/signer/approval-requests", req)
+	require.Equal(t, http.StatusAccepted, first.Code)
+	req.MessageHash = "hash-2"
+	conflict := postSignerJSON(t, service, "/signer/approval-requests", req)
+	require.Equal(t, http.StatusConflict, conflict.Code)
+}
+
 func TestNonceCommitIsIdempotentAndTranscriptBound(t *testing.T) {
 	service := newTestSignerService(t)
 	installTestSignerKey(service, "vault-1", "key-1")
@@ -75,6 +106,19 @@ func TestNonceCommitIsIdempotentAndTranscriptBound(t *testing.T) {
 
 	conflict := postSignerJSON(t, service, "/signer/sign/commit", NonceCommitRequest{KeyID: "key-1", SessionID: "session-1", MessageHash: "hash-2"})
 	assert.Equal(t, http.StatusConflict, conflict.Code)
+}
+
+func TestSignerRejectsWrongPartySignShare(t *testing.T) {
+	service := newTestSignerService(t)
+	installTestSignerKey(service, "vault-1", "key-1")
+
+	resp := postSignerJSON(t, service, "/signer/sign/share", SignShareRequest{
+		KeyID:     "key-1",
+		SessionID: "session-1",
+		Fragment:  mpc.EncryptedFragment{KeyID: "key-1", PartyID: 2},
+		Approval:  mpc.Approval{KeyID: "key-1", SessionID: "session-1", PartyID: 1},
+	})
+	require.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
 func TestSignerHealthAndReadyExposeOperationalState(t *testing.T) {

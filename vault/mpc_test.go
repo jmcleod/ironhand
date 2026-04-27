@@ -155,6 +155,53 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 		_, err = session.AddMPCApproval(ctx, signSession.SessionID, approval)
 		require.NoError(t, err)
 	}
+	expiredApproval, err := mpc.SignApproval(signers[0].approval, mpc.Approval{
+		VaultID:           signSession.VaultID,
+		SessionID:         signSession.SessionID,
+		KeyID:             signSession.KeyID,
+		PartyID:           1,
+		Threshold:         key.Threshold,
+		Participants:      participants,
+		MessageHash:       signSession.MessageHash,
+		MessageType:       signSession.MessageType,
+		TransactionDigest: signSession.Transaction.Digest,
+		ExpiresAt:         time.Now().Add(-time.Minute),
+	})
+	require.NoError(t, err)
+	_, err = session.AddMPCApproval(ctx, signSession.SessionID, expiredApproval)
+	require.ErrorContains(t, err, "invalid MPC approval")
+
+	wrongSessionApproval, err := mpc.SignApproval(signers[0].approval, mpc.Approval{
+		VaultID:           signSession.VaultID,
+		SessionID:         "wrong-session",
+		KeyID:             signSession.KeyID,
+		PartyID:           1,
+		Threshold:         key.Threshold,
+		Participants:      participants,
+		MessageHash:       signSession.MessageHash,
+		MessageType:       signSession.MessageType,
+		TransactionDigest: signSession.Transaction.Digest,
+		ExpiresAt:         signSession.ExpiresAt,
+	})
+	require.NoError(t, err)
+	_, err = session.AddMPCApproval(ctx, signSession.SessionID, wrongSessionApproval)
+	require.ErrorContains(t, err, "not bound")
+
+	unselectedPartyApproval, err := mpc.SignApproval(signers[1].approval, mpc.Approval{
+		VaultID:           signSession.VaultID,
+		SessionID:         signSession.SessionID,
+		KeyID:             signSession.KeyID,
+		PartyID:           2,
+		Threshold:         key.Threshold,
+		Participants:      participants,
+		MessageHash:       signSession.MessageHash,
+		MessageType:       signSession.MessageType,
+		TransactionDigest: signSession.Transaction.Digest,
+		ExpiresAt:         signSession.ExpiresAt,
+	})
+	require.NoError(t, err)
+	_, err = session.AddMPCApproval(ctx, signSession.SessionID, unselectedPartyApproval)
+	require.ErrorContains(t, err, "not part of this signing session")
 
 	completed, err := session.CompleteMPCSigningSession(ctx, signSession.SessionID, signCommitments, sig)
 	require.NoError(t, err)
@@ -224,6 +271,31 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	updatedKey, err = session.SetMPCKeyStatus(ctx, key.KeyID, MPCKeyStatusActive)
 	require.NoError(t, err)
 	assert.Equal(t, MPCKeyStatusActive, updatedKey.Status)
+
+	_, err = session.updateMPCKey(ctx, key.KeyID, func(key *MPCKey) error {
+		key.Policy.MaxValue = "100"
+		return nil
+	})
+	require.NoError(t, err)
+	_, err = session.CreateMPCSigningSessionWithOptions(ctx, key.KeyID, MPCSigningSessionCreate{
+		Message:      []byte("over max value payload"),
+		Participants: []uint32{1, 2},
+		Transaction:  map[string]any{"value": "101"},
+		TTL:          time.Minute,
+	})
+	require.ErrorContains(t, err, "exceeds max_value")
+	_, err = session.CreateMPCSigningSessionWithOptions(ctx, key.KeyID, MPCSigningSessionCreate{
+		Message:      []byte("equal max value payload"),
+		Participants: []uint32{1, 2},
+		Transaction:  map[string]any{"value": "100"},
+		TTL:          time.Minute,
+	})
+	require.NoError(t, err)
+	_, err = session.updateMPCKey(ctx, key.KeyID, func(key *MPCKey) error {
+		key.Policy = MPCPolicy{}
+		return nil
+	})
+	require.NoError(t, err)
 
 	require.NoError(t, session.RevokeMember(ctx, "bob"))
 	updatedKey, err = session.GetMPCKey(ctx, key.KeyID)
