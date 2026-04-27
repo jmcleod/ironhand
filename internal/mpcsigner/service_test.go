@@ -97,6 +97,7 @@ func postSignerJSON(t *testing.T, service *Service, path string, payload any) *h
 	body, err := json.Marshal(payload)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:12345"
 	rec := httptest.NewRecorder()
 	service.Handler().ServeHTTP(rec, req)
 	return rec

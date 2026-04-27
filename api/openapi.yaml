@@ -968,6 +968,8 @@ components:
         ttl_seconds:
           type: integer
           format: int64
+          maximum: 1800
+          description: Optional signing approval lifetime in seconds. Defaults to 900 and is capped at 1800.
 
     AddMPCApprovalRequest:
       type: object

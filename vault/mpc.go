@@ -16,6 +16,11 @@ import (
 
 const MPCAlgorithmExperimentalP256Schnorr = "experimental-p256-schnorr-v1"
 
+const (
+	DefaultMPCSigningSessionTTL = 15 * time.Minute
+	MaxMPCSigningSessionTTL     = 30 * time.Minute
+)
+
 type MPCKeyStatus string
 
 const (
@@ -360,7 +365,10 @@ func (s *Session) CreateMPCSigningSession(ctx context.Context, keyID string, mes
 		return nil, validationErrorf("MPC signing message must not be empty")
 	}
 	if ttl <= 0 {
-		ttl = 15 * time.Minute
+		ttl = DefaultMPCSigningSessionTTL
+	}
+	if ttl > MaxMPCSigningSessionTTL {
+		return nil, validationErrorf("MPC signing session TTL must not exceed %s", MaxMPCSigningSessionTTL)
 	}
 	recBuf, err := s.recordKey.Open()
 	if err != nil {

@@ -24,6 +24,7 @@ type Service struct {
 	logger   *slog.Logger
 	client   *mpcclient.Client
 	shared   []byte
+	replay   *mpcclient.ReplayCache
 	store    *FileStore
 	ecdhPriv *ecdh.PrivateKey
 	edPriv   ed25519.PrivateKey
@@ -102,6 +103,7 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 		logger:   logger,
 		client:   mpcclient.New(sharedKey, nil),
 		shared:   append([]byte(nil), sharedKey...),
+		replay:   mpcclient.NewReplayCache(2 * time.Minute),
 		store:    store,
 		ecdhPriv: ecdhPriv,
 		edPriv:   edPriv,
@@ -729,7 +731,7 @@ func (s *Service) saveLocked() error {
 
 func (s *Service) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, ok, err := mpcclient.VerifyRequest(r, s.shared, 2*time.Minute)
+		_, ok, err := mpcclient.VerifyRequestWithReplay(r, s.shared, 2*time.Minute, s.replay)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

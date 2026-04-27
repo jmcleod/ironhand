@@ -1451,7 +1451,10 @@ export interface components {
             /** @description Base64-encoded message to sign. */
             message_base64: string;
             participants?: number[];
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Optional signing approval lifetime in seconds. Defaults to 900 and is capped at 1800.
+             */
             ttl_seconds?: number;
         };
         AddMPCApprovalRequest: {

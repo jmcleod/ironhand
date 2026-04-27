@@ -19,17 +19,19 @@ import (
 )
 
 var (
-	signerListen    string
-	signerMemberID  string
-	signerPartyID   uint32
-	signerName      string
-	signerURL       string
-	signerShared    string
-	signerTLSCert   string
-	signerTLSKey    string
-	signerClientCA  string
-	signerStateFile string
-	signerStatePass string
+	signerListen           string
+	signerMemberID         string
+	signerPartyID          uint32
+	signerName             string
+	signerURL              string
+	signerShared           string
+	signerTLSCert          string
+	signerTLSKey           string
+	signerClientCA         string
+	signerStateFile        string
+	signerStatePass        string
+	signerDevMemory        bool
+	signerAllowInsecureDev bool
 )
 
 var signerCmd = &cobra.Command{
@@ -50,7 +52,10 @@ var signerCmd = &cobra.Command{
 			shared = os.Getenv("IRONHAND_MPC_SHARED_KEY")
 		}
 		if shared == "" {
-			fmt.Println("WARNING: MPC signer request signing is disabled; set --mpc-shared-key or IRONHAND_MPC_SHARED_KEY")
+			if !signerAllowInsecureDev {
+				return fmt.Errorf("MPC signer requires --mpc-shared-key or IRONHAND_MPC_SHARED_KEY; use --allow-insecure-mpc-local-dev only for loopback development")
+			}
+			fmt.Println("WARNING: MPC signer request signing is disabled for loopback-only local development")
 		}
 		statePass := signerStatePass
 		if statePass == "" {
@@ -58,14 +63,20 @@ var signerCmd = &cobra.Command{
 		}
 		var store *mpcsigner.FileStore
 		var err error
+		if signerStateFile == "" && !signerDevMemory {
+			return fmt.Errorf("MPC signer requires --state-file for durable sealed identity and key state; use --dev-in-memory only for tests")
+		}
+		if signerStateFile != "" && statePass == "" {
+			return fmt.Errorf("--state-file requires --state-passphrase or IRONHAND_MPC_SIGNER_STATE_KEY")
+		}
 		if signerStateFile != "" {
-			if statePass == "" {
-				return fmt.Errorf("--state-file requires --state-passphrase or IRONHAND_MPC_SIGNER_STATE_KEY")
-			}
 			store, err = mpcsigner.NewFileStore(signerStateFile, statePass)
 			if err != nil {
 				return err
 			}
+		}
+		if signerDevMemory {
+			fmt.Println("WARNING: signer state is in-memory only; identity and MPC key metadata will be lost on restart")
 		}
 		service, err := mpcsigner.NewWithStore(signerMemberID, signerPartyID, signerName, signerURL, []byte(shared), store, slog.Default())
 		if err != nil {
@@ -149,4 +160,6 @@ func init() {
 	signerCmd.Flags().StringVar(&signerClientCA, "client-ca", "", "CA bundle for requiring/verifying coordinator mTLS client certificates")
 	signerCmd.Flags().StringVar(&signerStateFile, "state-file", "", "Path to a sealed signer state file for durable identity and key metadata")
 	signerCmd.Flags().StringVar(&signerStatePass, "state-passphrase", "", "Passphrase for sealing signer state (or IRONHAND_MPC_SIGNER_STATE_KEY)")
+	signerCmd.Flags().BoolVar(&signerDevMemory, "dev-in-memory", false, "Run signer with volatile in-memory state for tests only")
+	signerCmd.Flags().BoolVar(&signerAllowInsecureDev, "allow-insecure-mpc-local-dev", false, "Allow unsigned MPC signer calls from loopback clients only")
 }

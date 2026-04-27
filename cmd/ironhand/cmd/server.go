@@ -57,6 +57,7 @@ var (
 	mpcClientKey          string
 	mpcSignerCA           string
 	enableExperimentalMPC bool
+	allowInsecureMPCDev   bool
 )
 
 var serverCmd = &cobra.Command{
@@ -189,7 +190,10 @@ var serverCmd = &cobra.Command{
 			fmt.Println("WARNING: experimental MPC enabled (experimental-p256-schnorr-v1); do not use for production funds")
 		}
 		if mpcKey == "" {
-			fmt.Println("WARNING: MPC signer request signing is disabled; set --mpc-shared-key or IRONHAND_MPC_SHARED_KEY")
+			if enableExperimentalMPC && !allowInsecureMPCDev {
+				return fmt.Errorf("experimental MPC requires --mpc-shared-key or IRONHAND_MPC_SHARED_KEY; use --allow-insecure-mpc-local-dev only for loopback development")
+			}
+			fmt.Println("WARNING: MPC signer request signing is disabled for loopback-only local development")
 		}
 		switch sessionStorage {
 		case "memory":
@@ -330,6 +334,7 @@ func init() {
 	serverCmd.Flags().StringVar(&mpcClientKey, "mpc-client-key", "", "Client private key presented to MPC signers that require mTLS")
 	serverCmd.Flags().StringVar(&mpcSignerCA, "mpc-signer-ca", "", "CA bundle used to verify MPC signer TLS certificates")
 	serverCmd.Flags().BoolVar(&enableExperimentalMPC, "enable-experimental-mpc", false, "Enable experimental-p256-schnorr-v1 MPC APIs (not production-vetted)")
+	serverCmd.Flags().BoolVar(&allowInsecureMPCDev, "allow-insecure-mpc-local-dev", false, "Allow unsigned MPC signer calls for loopback-only local development")
 }
 
 func resolveMPCSignerTLSConfig() (*tls.Config, error) {
