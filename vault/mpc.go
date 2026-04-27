@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -997,7 +998,39 @@ func evaluateMPCPolicy(key *MPCKey, participants []uint32, tx MPCTransactionMeta
 			}
 		}
 	}
+	if policy.MaxValue != "" {
+		maxValue, err := parseMPCPolicyValue(policy.MaxValue)
+		if err != nil {
+			reasons = append(reasons, fmt.Sprintf("invalid max_value policy: %v", err))
+		} else if tx.Value == "" {
+			reasons = append(reasons, "transaction value is required by max_value policy")
+		} else {
+			txValue, err := parseMPCPolicyValue(tx.Value)
+			if err != nil {
+				reasons = append(reasons, fmt.Sprintf("invalid transaction value: %v", err))
+			} else if txValue.Cmp(maxValue) > 0 {
+				reasons = append(reasons, "transaction value exceeds max_value policy")
+			}
+		}
+	}
 	return MPCPolicyDecision{Allowed: len(reasons) == 0, Reasons: reasons}
+}
+
+func parseMPCPolicyValue(value string) (*big.Int, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, fmt.Errorf("value is empty")
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return nil, fmt.Errorf("value must be a non-negative decimal integer")
+		}
+	}
+	parsed, ok := new(big.Int).SetString(trimmed, 10)
+	if !ok {
+		return nil, fmt.Errorf("value must be a non-negative decimal integer")
+	}
+	return parsed, nil
 }
 
 func (s *Session) updateMPCSigningSession(ctx context.Context, sessionID string, update func(recordKey []byte, session *MPCSigningSession) error) (*MPCSigningSession, error) {

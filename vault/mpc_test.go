@@ -2,6 +2,7 @@ package vault
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,4 +213,40 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	updatedKey, err = session.GetMPCKey(ctx, key.KeyID)
 	require.NoError(t, err)
 	assert.Equal(t, MPCKeyStatusReshareRequired, updatedKey.Status)
+}
+
+func TestEvaluateMPCPolicyMaxValue(t *testing.T) {
+	key := &MPCKey{
+		Policy:       MPCPolicy{ApprovalMode: MPCApprovalModeThreshold, MaxValue: "1000"},
+		Participants: []MPCParticipant{{PartyID: 1, Role: RoleOwner}, {PartyID: 2, Role: RoleWriter}},
+	}
+	tests := []struct {
+		name    string
+		policy  MPCPolicy
+		value   string
+		allowed bool
+		reason  string
+	}{
+		{name: "under limit", value: "999", allowed: true},
+		{name: "equal limit", value: "1000", allowed: true},
+		{name: "over limit", value: "1001", allowed: false, reason: "exceeds max_value"},
+		{name: "missing transaction value", value: "", allowed: false, reason: "required by max_value"},
+		{name: "invalid transaction value", value: "1.5", allowed: false, reason: "invalid transaction value"},
+		{name: "invalid policy value", policy: MPCPolicy{ApprovalMode: MPCApprovalModeThreshold, MaxValue: "abc"}, value: "1", allowed: false, reason: "invalid max_value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := tt.policy
+			if policy.MaxValue == "" {
+				policy = key.Policy
+			}
+			key.Policy = policy
+			decision := evaluateMPCPolicy(key, []uint32{1, 2}, MPCTransactionMetadata{Value: tt.value})
+			require.Equal(t, tt.allowed, decision.Allowed)
+			if tt.reason != "" {
+				require.NotEmpty(t, decision.Reasons)
+				assert.Contains(t, strings.Join(decision.Reasons, "\n"), tt.reason)
+			}
+		})
+	}
 }
