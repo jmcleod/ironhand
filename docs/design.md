@@ -803,7 +803,7 @@ The API layer logs security-relevant events:
 | Category | Events |
 |---|---|
 | Authentication | `login_success`, `login_failure`, `login_rate_limited`, `register`, `register_rate_limited`, `logout` |
-| 2FA | `two_factor_setup`, `two_factor_enabled`, `two_factor_disabled` |
+| 2FA | `2fa_setup`, `2fa_enabled`, `2fa_disabled` |
 | Auth Settings | `auth_settings_changed` |
 | Step-Up | `step_up_totp`, `step_up_passkey` |
 | Recovery | `recovery_codes_generated`, `recovery_code_used` |
@@ -815,8 +815,9 @@ The API layer logs security-relevant events:
 | Items | `item_created`, `item_updated`, `item_deleted` |
 | Credentials | `vault_exported`, `vault_imported` |
 | PKI | `ca_initialized`, `cert_issued`, `cert_revoked`, `cert_renewed`, `crl_generated`, `csr_signed`, `private_key_accessed` |
+| Experimental MPC | `mpc_signer_registered`, `mpc_key_created`, `mpc_signing_requested`, `mpc_signing_approved`, `mpc_signing_completed` |
 
-Audit entries include timestamp, client IP, account ID (secret key ID, not the raw key), and event-specific context. They are written as structured JSON via `log/slog` and stored as AES-256-GCM encrypted records under the `AUDIT` record type. Each entry contains a `prev_hash` field forming a tamper-evident hash chain (SHA-256). The audit entry and chain tip are written atomically via `repo.Batch()`. Exported audit logs include an HMAC-SHA256 signature for forensic integrity verification.
+Security events include timestamp, client IP, account ID (secret key ID, not the raw key), and event-specific context. They are written as structured JSON via `log/slog`. Vault-scoped data events are additionally stored as AES-256-GCM encrypted records under the `AUDIT` record type. Each persisted vault audit entry contains a `prev_hash` field forming a tamper-evident hash chain (SHA-256). The audit entry and chain tip are written atomically via `repo.Batch()`. Exported audit logs include an HMAC-SHA256 signature for forensic integrity verification.
 
 ### Audit Webhook
 

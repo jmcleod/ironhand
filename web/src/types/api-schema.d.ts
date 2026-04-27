@@ -385,7 +385,7 @@ export interface paths {
         put?: never;
         /**
          * Accept a vault invite
-         * @description Accepts a pending invite using the passphrase shared by the creator. The passphrase decrypts the credential blob (Argon2id + AES-256-GCM). Wrong passphrase = decryption failure = 403.
+         * @description Accepts a pending invite using the passphrase shared by the creator. The passphrase decrypts an encrypted vault invite grant (Argon2id + AES-256-GCM). Wrong passphrase = decryption failure = 403.
          */
         post: operations["acceptInvite"];
         delete?: never;
@@ -679,7 +679,7 @@ export interface paths {
         put?: never;
         /**
          * Create a vault invite
-         * @description Creates a pending invite for the vault. Returns a token and a one-time passphrase that must be shared with the invitee out-of-band. The passphrase is the Argon2id encryption key for the credential blob — it is NOT stored server-side.
+         * @description Creates a pending invite for the vault. Returns a token and a one-time passphrase that must be shared with the invitee out-of-band. The passphrase encrypts a vault invite grant; it is NOT stored server-side.
          */
         post: operations["createInvite"];
         delete?: never;
@@ -700,6 +700,109 @@ export interface paths {
         post?: never;
         /** Cancel a vault invite */
         delete: operations["cancelInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vaults/{vaultID}/mpc/signers/{memberID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register a vault member's MPC signer identity */
+        post: operations["registerMPCSigner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vaults/{vaultID}/mpc/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List vault MPC keys */
+        get: operations["listMPCKeys"];
+        put?: never;
+        /** Store a vault-scoped MPC key from a DKG ceremony */
+        post: operations["createMPCKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vaults/{vaultID}/mpc/keys/{keyID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a vault MPC key */
+        get: operations["getMPCKey"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vaults/{vaultID}/mpc/keys/{keyID}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an MPC signing session */
+        post: operations["createMPCSigningSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vaults/{vaultID}/mpc/sessions/{sessionID}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add an MPC signing approval */
+        post: operations["addMPCApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vaults/{vaultID}/mpc/sessions/{sessionID}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete and verify an MPC signing session */
+        post: operations["completeMPCSigningSession"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1072,7 +1175,7 @@ export interface components {
             id?: string;
             item_id?: string;
             /** @enum {string} */
-            action?: "item_accessed" | "item_created" | "item_updated" | "item_deleted" | "vault_exported" | "vault_imported" | "ca_initialized" | "cert_issued" | "cert_revoked" | "cert_renewed" | "crl_generated" | "csr_signed" | "private_key_accessed" | "webauthn_registered" | "webauthn_login_success";
+            action?: "item_accessed" | "item_created" | "item_updated" | "item_deleted" | "vault_exported" | "vault_imported" | "ca_initialized" | "cert_issued" | "cert_revoked" | "cert_renewed" | "crl_generated" | "csr_signed" | "private_key_accessed";
             member_id?: string;
             /** Format: date-time */
             created_at?: string;
@@ -1224,6 +1327,13 @@ export interface components {
             status?: string;
             /** Format: int64 */
             added_epoch?: number;
+            /** Format: int32 */
+            mpc_party_id?: number;
+            mpc_signer_url?: string;
+            mpc_encryption_public_key?: string;
+            mpc_approval_public_key?: string;
+            /** @enum {string} */
+            mpc_signer_status?: "unregistered" | "active" | "disabled";
         };
         ListMembersResponse: {
             members?: components["schemas"]["MemberSummary"][];
@@ -1232,13 +1342,152 @@ export interface components {
             /** @enum {string} */
             role: "owner" | "writer" | "reader";
         };
+        MPCPoint: {
+            x?: string;
+            y?: string;
+        };
+        MPCCommitment: {
+            partyId?: number;
+            r?: components["schemas"]["MPCPoint"];
+        };
+        MPCShareProof: {
+            partyId?: number;
+            z?: string;
+        };
+        MPCPublicCommitment: {
+            partyId?: number;
+            coefficients?: components["schemas"]["MPCPoint"][];
+        };
+        MPCPublicKey: {
+            curve?: string;
+            encoded?: string;
+            x?: string;
+            y?: string;
+            threshold?: number;
+            parties?: number;
+            partyIdBase?: number;
+        };
+        MPCEncryptedFragment: {
+            key_id?: string;
+            party_id?: number;
+            /** @enum {string} */
+            algorithm?: "ecdh-p256-aes-256-gcm-v1";
+            ephemeral_public_key?: string;
+            nonce?: string;
+            ciphertext?: string;
+            public_share_commitment?: components["schemas"]["MPCPoint"];
+        };
+        MPCApproval: {
+            session_id?: string;
+            key_id?: string;
+            party_id?: number;
+            message_hash?: string;
+            /** Format: date-time */
+            expires_at?: string;
+            signature?: string;
+        };
+        MPCSignature: {
+            curve?: string;
+            r?: components["schemas"]["MPCPoint"];
+            z?: string;
+            challenge?: string;
+            commitments?: components["schemas"]["MPCCommitment"][];
+            shares?: components["schemas"]["MPCShareProof"][];
+        };
+        RegisterMPCSignerRequest: {
+            url: string;
+            encryption_public_key: string;
+            approval_public_key: string;
+            /** @enum {string} */
+            status?: "unregistered" | "active" | "disabled";
+        };
+        MPCParticipant: {
+            member_id?: string;
+            party_id?: number;
+            /** @enum {string} */
+            role?: "owner" | "writer" | "reader";
+            signer_url?: string;
+            encryption_public_key?: string;
+            approval_public_key?: string;
+            /** @enum {string} */
+            signer_status?: "unregistered" | "active" | "disabled";
+            public_share_commitment?: components["schemas"]["MPCPoint"];
+        };
+        MPCKey: {
+            key_id?: string;
+            vault_id?: string;
+            /** @enum {string} */
+            algorithm?: "experimental-p256-schnorr-v1";
+            curve?: string;
+            threshold?: number;
+            /** @enum {string} */
+            status?: "active" | "disabled";
+            /** Format: date-time */
+            created_at?: string;
+            public_key?: components["schemas"]["MPCPublicKey"];
+            participants?: components["schemas"]["MPCParticipant"][];
+            commitments?: components["schemas"]["MPCPublicCommitment"][];
+        };
+        ListMPCKeysResponse: {
+            keys?: components["schemas"]["MPCKey"][];
+        };
+        CreateMPCKeyRequest: {
+            key_id?: string;
+            /** @enum {string} */
+            algorithm?: "experimental-p256-schnorr-v1";
+            threshold: number;
+            member_ids?: string[];
+            /** @description Optional precomputed DKG commitments. If omitted with fragments, the coordinator orchestrates DKG through registered signers. */
+            commitments?: components["schemas"]["MPCPublicCommitment"][];
+            /** @description Optional encrypted fragments keyed by member ID. */
+            fragments?: {
+                [key: string]: components["schemas"]["MPCEncryptedFragment"];
+            };
+        };
+        CreateMPCSigningSessionRequest: {
+            /** @description Base64-encoded message to sign. */
+            message_base64: string;
+            participants?: number[];
+            /** Format: int64 */
+            ttl_seconds?: number;
+        };
+        AddMPCApprovalRequest: {
+            approval?: components["schemas"]["MPCApproval"];
+            /** @description Party ID to request approval from when approval is omitted. */
+            party_id?: number;
+        };
+        CompleteMPCSigningSessionRequest: {
+            commitments?: components["schemas"]["MPCCommitment"][];
+            signature?: components["schemas"]["MPCSignature"];
+        };
+        MPCSigningSession: {
+            session_id?: string;
+            vault_id?: string;
+            key_id?: string;
+            /** @enum {string} */
+            status?: "pending" | "completed" | "expired" | "failed";
+            /**
+             * Format: byte
+             * @description Base64-encoded message bytes.
+             */
+            message?: string;
+            message_hash?: string;
+            participants?: number[];
+            commitments?: components["schemas"]["MPCCommitment"][];
+            approvals?: components["schemas"]["MPCApproval"][];
+            signature?: components["schemas"]["MPCSignature"];
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            expires_at?: string;
+        };
         CreateInviteRequest: {
             /** @enum {string} */
             role: "owner" | "writer" | "reader";
         };
         CreateInviteResponse: {
             token?: string;
-            /** @description One-time passphrase for the invitee. Must be shared out-of-band. The server does NOT store this — it is used as the Argon2id encryption key for the credential blob. */
+            /** @description One-time passphrase for the invitee. Must be shared out-of-band. The server does NOT store this; it decrypts an invite grant containing the minimum vault material needed to add the invitee as their own member. */
             passphrase?: string;
             /** Format: date-time */
             expires_at?: string;
@@ -3016,6 +3265,296 @@ export interface operations {
             };
             /** @description Invite not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    registerMPCSigner: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF double-submit token. Must match the value of the `ironhand_csrf` cookie. Required on all mutating (POST/PUT/DELETE) requests that use cookie-based session authentication. GET/HEAD/OPTIONS requests and header-authenticated requests are exempt. */
+                "X-CSRF-Token": components["parameters"]["CSRFToken"];
+            };
+            path: {
+                vaultID: string;
+                memberID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterMPCSignerRequest"];
+            };
+        };
+        responses: {
+            /** @description MPC signer registered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled or step-up required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listMPCKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vaultID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MPC key list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListMPCKeysResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createMPCKey: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF double-submit token. Must match the value of the `ironhand_csrf` cookie. Required on all mutating (POST/PUT/DELETE) requests that use cookie-based session authentication. GET/HEAD/OPTIONS requests and header-authenticated requests are exempt. */
+                "X-CSRF-Token": components["parameters"]["CSRFToken"];
+            };
+            path: {
+                vaultID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMPCKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description MPC key created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCKey"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled or step-up required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMPCKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vaultID: string;
+                keyID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MPC key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCKey"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createMPCSigningSession: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF double-submit token. Must match the value of the `ironhand_csrf` cookie. Required on all mutating (POST/PUT/DELETE) requests that use cookie-based session authentication. GET/HEAD/OPTIONS requests and header-authenticated requests are exempt. */
+                "X-CSRF-Token": components["parameters"]["CSRFToken"];
+            };
+            path: {
+                vaultID: string;
+                keyID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMPCSigningSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description MPC signing session created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCSigningSession"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled or step-up required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    addMPCApproval: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF double-submit token. Must match the value of the `ironhand_csrf` cookie. Required on all mutating (POST/PUT/DELETE) requests that use cookie-based session authentication. GET/HEAD/OPTIONS requests and header-authenticated requests are exempt. */
+                "X-CSRF-Token": components["parameters"]["CSRFToken"];
+            };
+            path: {
+                vaultID: string;
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddMPCApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description MPC approval recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCSigningSession"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled or step-up required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    completeMPCSigningSession: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF double-submit token. Must match the value of the `ironhand_csrf` cookie. Required on all mutating (POST/PUT/DELETE) requests that use cookie-based session authentication. GET/HEAD/OPTIONS requests and header-authenticated requests are exempt. */
+                "X-CSRF-Token": components["parameters"]["CSRFToken"];
+            };
+            path: {
+                vaultID: string;
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteMPCSigningSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description MPC signing session completed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCSigningSession"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled or step-up required */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

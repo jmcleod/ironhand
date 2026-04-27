@@ -206,7 +206,7 @@ export interface HistoryEntry {
 export interface AuditEntry {
   id: string;
   item_id: string;
-  action: 'item_accessed' | 'item_created' | 'item_updated' | 'item_deleted' | 'vault_exported' | 'vault_imported' | 'ca_initialized' | 'cert_issued' | 'cert_revoked' | 'cert_renewed' | 'crl_generated' | 'csr_signed';
+  action: 'item_accessed' | 'item_created' | 'item_updated' | 'item_deleted' | 'vault_exported' | 'vault_imported' | 'ca_initialized' | 'cert_issued' | 'cert_revoked' | 'cert_renewed' | 'crl_generated' | 'csr_signed' | 'private_key_accessed';
   member_id: string;
   created_at: string;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Vault, ItemType, VaultItem, itemName, itemType } from '@/types/vault';
 import { useVault } from '@/contexts/VaultContext';
 import { CAInfo } from '@/types/vault';
@@ -58,10 +58,10 @@ export default function VaultDetail({ vault, onBack }: VaultDetailProps) {
   const [showMPC, setShowMPC] = useState(false);
 
   // Fetch CA info on mount / refresh.
-  const refreshCAInfo = () => {
+  const refreshCAInfo = useCallback(() => {
     getCAInfo(vault.id).then(setCAInfo).catch(() => setCAInfo(null));
-  };
-  useEffect(() => { refreshCAInfo(); }, [vault.id]);
+  }, [vault.id]);
+  useEffect(() => { refreshCAInfo(); }, [refreshCAInfo]);
 
   const handleDownloadCACert = async () => {
     try {

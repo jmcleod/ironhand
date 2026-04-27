@@ -584,7 +584,7 @@ IronHand uses memguard to protect sensitive key material in process memory.
 
 ### Enclaves
 
-The MUK, KEK, and record key are stored in `memguard.Enclave` objects, which encrypt the data at rest in memory using a session key. Data is decrypted into `LockedBuffer` instances only when needed for cryptographic operations:
+The MUK in credentials and the vault root key, KEK, and record key in sessions are stored in `memguard.Enclave` objects, which encrypt the data at rest in memory using a session key. Data is decrypted into `LockedBuffer` instances only when needed for cryptographic operations:
 
 ```go
 kekBuf, err := session.kek.Open()  // Decrypt into mlock'd buffer
