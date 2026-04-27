@@ -796,6 +796,9 @@ export interface MPCProviderInfo {
   supports_keygen: boolean;
   supports_signing: boolean;
   supports_reshare: boolean;
+  supports_recovery_import_attestations?: boolean;
+  deterministic_transcript_validation?: boolean;
+  chain_compatibility?: string[];
 }
 export interface MPCParticipant {
   member_id: string;

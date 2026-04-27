@@ -84,6 +84,8 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
   const [approvalPub, setApprovalPub] = useState('');
   const [selectedKeyID, setSelectedKeyID] = useState('');
   const [message, setMessage] = useState('hello from IronHand MPC');
+  const [txDestination, setTxDestination] = useState('');
+  const [txValue, setTxValue] = useState('');
   const [session, setSession] = useState<MPCSigningSession | null>(null);
   const [stepUpOpen, setStepUpOpen] = useState(false);
   const [stepUpMethods, setStepUpMethods] = useState<string[]>([]);
@@ -96,6 +98,10 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
   const selectedSignerMember = activeMembers.find((m) => m.member_id === signerMemberID);
   const readiness = activeMembers.length === 0 ? 0 : Math.round((mpcMembers.length / activeMembers.length) * 100);
   const phaseProgress = phase === 'idle' ? 0 : phase === 'dkg' ? 30 : phase === 'session' ? 50 : phase === 'approvals' ? 75 : 100;
+  const failedDKG = dkgAttempts.filter((attempt) => attempt.status === 'failed');
+  const actionableDKG = dkgAttempts.filter((attempt) => !['committed', 'aborted'].includes(attempt.status));
+  const keysNeedingCare = keys.filter((key) => ['rotation_required', 'reshare_required', 'disabled'].includes(key.status));
+  const selectedKeyPolicyNotes = selectedKey?.policy?.max_value ? [`max value ${selectedKey.policy.max_value}`] : [];
 
   const loadMPCState = useCallback(async () => {
     setLoading(true);
@@ -178,7 +184,13 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
     setBusy(true);
     setPhase('session');
     try {
-      let next = await createMPCSigningSession(vaultId, selectedKey.key_id, { message });
+      const transaction_metadata: Record<string, unknown> = {};
+      if (txDestination.trim()) transaction_metadata.destination = txDestination.trim();
+      if (txValue.trim()) transaction_metadata.value = txValue.trim();
+      let next = await createMPCSigningSession(vaultId, selectedKey.key_id, {
+        message,
+        transaction_metadata,
+      });
       setSession(next);
       setPhase('approvals');
       for (const party of next.participants) {
@@ -297,6 +309,38 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
             </div>
           </div>
 
+          <section className="rounded-xl border border-border bg-muted/20 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold">MPC operations board</h3>
+                <p className="text-xs text-muted-foreground">Recovery cues for signer readiness, DKG state, key lifecycle, and policy failures.</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" onClick={() => void loadMPCState()} disabled={loading || busy}>Refresh state</Button>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-4">
+              <div className="rounded-lg border border-border bg-background/60 p-3 text-xs">
+                <div className="text-muted-foreground">Signer readiness</div>
+                <div className="mt-1 text-lg font-semibold">{readiness}%</div>
+                {unregisteredMembers.length > 0 ? <div className="mt-1 text-amber-700">{unregisteredMembers.length} member(s) need registration</div> : <div className="mt-1 text-emerald-700">All active members registered</div>}
+              </div>
+              <div className="rounded-lg border border-border bg-background/60 p-3 text-xs">
+                <div className="text-muted-foreground">DKG recovery</div>
+                <div className="mt-1 text-lg font-semibold">{failedDKG.length} failed</div>
+                <div className="mt-1 text-muted-foreground">{actionableDKG.length} abortable/in-flight</div>
+              </div>
+              <div className="rounded-lg border border-border bg-background/60 p-3 text-xs">
+                <div className="text-muted-foreground">Keys needing action</div>
+                <div className="mt-1 text-lg font-semibold">{keysNeedingCare.length}</div>
+                <div className="mt-1 text-muted-foreground">disabled, rotation, or reshare</div>
+              </div>
+              <div className="rounded-lg border border-border bg-background/60 p-3 text-xs">
+                <div className="text-muted-foreground">Selected policy</div>
+                <div className="mt-1 font-semibold">{selectedKeyPolicyNotes.length ? selectedKeyPolicyNotes.join(', ') : 'no value cap'}</div>
+                {session?.policy?.reasons?.length ? <div className="mt-1 text-red-700">{session.policy.reasons.join('; ')}</div> : <div className="mt-1 text-muted-foreground">No current policy rejection</div>}
+              </div>
+            </div>
+          </section>
+
           {busy ? <Progress value={phaseProgress} className="h-2" /> : null}
 
           {loading ? <p className="text-sm text-muted-foreground">Loading MPC state...</p> : (
@@ -325,7 +369,10 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                       <Badge variant="outline">keygen {provider.supports_keygen ? 'yes' : 'no'}</Badge>
                       <Badge variant="outline">signing {provider.supports_signing ? 'yes' : 'no'}</Badge>
                       <Badge variant="outline">reshare {provider.supports_reshare ? 'yes' : 'no'}</Badge>
+                      <Badge variant="outline">recovery attest {provider.supports_recovery_import_attestations ? 'yes' : 'no'}</Badge>
+                      <Badge variant="outline">transcript check {provider.deterministic_transcript_validation ? 'yes' : 'no'}</Badge>
                     </div>
+                    {provider.chain_compatibility?.length ? <p className="mt-3 text-xs text-muted-foreground">Compatibility: {provider.chain_compatibility.join(', ')}</p> : null}
                   </section>
                 ))}
               </TabsContent>
@@ -403,6 +450,9 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                         </div>
                       </div>
                       <div className="mt-1 text-muted-foreground">{k.provider?.status || 'unknown'} · {k.algorithm} · {shortID(k.public_key.encoded, 34)}</div>
+                      {k.policy?.max_value ? <div className="mt-1 text-muted-foreground">Policy cap: {k.policy.max_value} smallest units</div> : null}
+                      {k.status === 'reshare_required' ? <p className="mt-2 rounded-md border border-red-500/30 bg-red-500/5 p-2 text-red-700">Membership changed. Create a replacement key before relying on this signer set.</p> : null}
+                      {k.status === 'disabled' ? <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-amber-700">Disabled keys cannot create signing sessions. Re-enable only after checking signer state.</p> : null}
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'active'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'active'); }}>Enable</Button>
                         <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'disabled'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'disabled'); }}>Disable</Button>
@@ -451,6 +501,10 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                     {keys.map((k) => <option key={k.key_id} value={k.key_id}>{k.key_id} ({k.threshold} of {k.participants.length})</option>)}
                   </select>
                   <Textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={4} />
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <Input placeholder="Destination metadata (optional)" value={txDestination} onChange={(e) => setTxDestination(e.target.value)} />
+                    <Input placeholder="Value in smallest units (required by max_value policies)" value={txValue} onChange={(e) => setTxValue(e.target.value)} />
+                  </div>
                   <Button disabled={busy || !selectedKey || !message} onClick={handleSign}>
                     {busy && phase !== 'dkg' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />} Create and request approvals
                   </Button>
@@ -466,6 +520,8 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                         <Badge variant="outline">expires {new Date(session.expires_at).toLocaleTimeString()}</Badge>
                       </div>
                       <div className="mt-2 font-mono text-muted-foreground">{session.session_id}</div>
+                      {session.policy?.reasons?.length ? <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/5 p-2 text-red-700">{session.policy.reasons.join('; ')}</div> : null}
+                      {session.status === 'pending' ? <p className="mt-2 text-muted-foreground">Approve requests locally on each signer, then return here to complete the threshold signature.</p> : null}
                     </div>
                   ) : null}
                   {session?.signature ? (
