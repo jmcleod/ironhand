@@ -84,6 +84,20 @@ func TestDistributedKeyGenerationAndSignatureMath(t *testing.T) {
 	}
 }
 
+func TestExperimentalProviderIsNotProductionReady(t *testing.T) {
+	provider, err := GetProvider(AlgorithmExperimentalP256Schnorr)
+	if err != nil {
+		t.Fatalf("GetProvider() error = %v", err)
+	}
+	info := provider.Info()
+	if info.ProductionReady {
+		t.Fatalf("%s must not be marked production ready", info.Algorithm)
+	}
+	if info.Status != ProviderStatusExperimental {
+		t.Fatalf("%s status = %q, want %q", info.Algorithm, info.Status, ProviderStatusExperimental)
+	}
+}
+
 func TestNormalizeParticipantsRejectsDuplicates(t *testing.T) {
 	_, err := NormalizeParticipants([]int{1, 1}, 2, []int{1, 2, 3})
 	if err == nil {

@@ -801,6 +801,31 @@ components:
           type: string
         public_share_commitment:
           $ref: '#/components/schemas/MPCPoint'
+        attestation:
+          $ref: '#/components/schemas/MPCFragmentAttestation'
+
+    MPCFragmentAttestation:
+      type: object
+      properties:
+        vault_id:
+          type: string
+        dkg_session_id:
+          type: string
+        key_id:
+          type: string
+        party_id:
+          type: integer
+        public_share_commitment:
+          $ref: '#/components/schemas/MPCPoint'
+        commitments_hash:
+          type: string
+        approval_public_key:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        signature:
+          type: string
 
     MPCApproval:
       type: object
@@ -911,6 +936,14 @@ components:
           type: boolean
         supports_reshare:
           type: boolean
+        supports_recovery_import_attestations:
+          type: boolean
+        deterministic_transcript_validation:
+          type: boolean
+        chain_compatibility:
+          type: array
+          items:
+            type: string
 
     ListMPCProvidersResponse:
       type: object
@@ -1115,6 +1148,10 @@ components:
         algorithm:
           type: string
           enum: [experimental-p256-schnorr-v1]
+        import_mode:
+          type: string
+          enum: [orchestrated, recovery]
+          description: Omit for normal orchestrated DKG. Set to recovery only when importing precomputed commitments/fragments with signer attestations.
         threshold:
           type: integer
           minimum: 2
@@ -1129,7 +1166,7 @@ components:
             $ref: '#/components/schemas/MPCPublicCommitment'
         fragments:
           type: object
-          description: Optional encrypted fragments keyed by member ID. Manual imports are accepted only when each fragment is bound to the requested key/party and its public share commitment matches the submitted DKG commitments.
+          description: Optional encrypted fragments keyed by member ID. Manual imports require import_mode recovery and valid signer attestations.
           additionalProperties:
             $ref: '#/components/schemas/MPCEncryptedFragment'
         policy:

@@ -1498,6 +1498,19 @@ export interface components {
             nonce?: string;
             ciphertext?: string;
             public_share_commitment?: components["schemas"]["MPCPoint"];
+            attestation?: components["schemas"]["MPCFragmentAttestation"];
+        };
+        MPCFragmentAttestation: {
+            vault_id?: string;
+            dkg_session_id?: string;
+            key_id?: string;
+            party_id?: number;
+            public_share_commitment?: components["schemas"]["MPCPoint"];
+            commitments_hash?: string;
+            approval_public_key?: string;
+            /** Format: date-time */
+            created_at?: string;
+            signature?: string;
         };
         MPCApproval: {
             vault_id?: string;
@@ -1551,6 +1564,9 @@ export interface components {
             supports_keygen?: boolean;
             supports_signing?: boolean;
             supports_reshare?: boolean;
+            supports_recovery_import_attestations?: boolean;
+            deterministic_transcript_validation?: boolean;
+            chain_compatibility?: string[];
         };
         ListMPCProvidersResponse: {
             providers?: components["schemas"]["MPCProviderInfo"][];
@@ -1651,11 +1667,16 @@ export interface components {
             key_id?: string;
             /** @enum {string} */
             algorithm?: "experimental-p256-schnorr-v1";
+            /**
+             * @description Omit for normal orchestrated DKG. Set to recovery only when importing precomputed commitments/fragments with signer attestations.
+             * @enum {string}
+             */
+            import_mode?: "orchestrated" | "recovery";
             threshold: number;
             member_ids?: string[];
             /** @description Optional precomputed DKG commitments. If omitted with fragments, the coordinator orchestrates DKG through registered signers. */
             commitments?: components["schemas"]["MPCPublicCommitment"][];
-            /** @description Optional encrypted fragments keyed by member ID. Manual imports are accepted only when each fragment is bound to the requested key/party and its public share commitment matches the submitted DKG commitments. */
+            /** @description Optional encrypted fragments keyed by member ID. Manual imports require import_mode recovery and valid signer attestations. */
             fragments?: {
                 [key: string]: components["schemas"]["MPCEncryptedFragment"];
             };

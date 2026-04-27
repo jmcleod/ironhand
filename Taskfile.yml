@@ -76,6 +76,12 @@ tasks:
     cmds:
       - go test ./... -count=1 -race
 
+  test:mpc-race:
+    desc: Run MPC signer/coordinator/security tests with race detector
+    deps: [_web:dist]
+    cmds:
+      - go test -race ./internal/mpcsigner ./internal/mpcclient ./api -run 'Test(MPC|Signer|SignedRequest|UnsignedRequest|Nonce)' -count=1
+
   test:cover:
     desc: Run Go tests with coverage report
     deps: [_web:dist]
@@ -264,6 +270,7 @@ tasks:
       - task: web:check-types
       - task: vet
       - task: test
+      - task: test:mpc-race
       - task: build
       - echo "CI pipeline passed"
 
