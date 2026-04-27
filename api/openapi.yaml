@@ -1060,6 +1060,10 @@ components:
         updated_at:
           type: string
           format: date-time
+        replaces_key_id:
+          type: string
+        replaced_by_key_id:
+          type: string
         public_key:
           $ref: '#/components/schemas/MPCPublicKey'
         participants:
@@ -1166,6 +1170,27 @@ components:
         status:
           type: string
           enum: [active, disabled, archived, rotation_required, reshare_required, destroyed]
+
+    RotateMPCKeyRequest:
+      type: object
+      properties:
+        key_id:
+          type: string
+          description: Optional replacement key ID. Generated when omitted.
+        threshold:
+          type: integer
+          minimum: 2
+          description: Defaults to the replaced key threshold.
+        member_ids:
+          type: array
+          description: Optional replacement participants. Defaults to active original participants.
+          items:
+            type: string
+        policy:
+          $ref: '#/components/schemas/MPCPolicy'
+        archive_old:
+          type: boolean
+          description: Archive and link the replaced key. Defaults to true.
 
     MPCSigningSession:
       type: object
@@ -2808,6 +2833,46 @@ paths:
       responses:
         '200':
           description: MPC key status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MPCKey'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Experimental MPC disabled or step-up required
+
+  /vaults/{vaultID}/mpc/keys/{keyID}/rotate:
+    post:
+      summary: Create a replacement MPC key
+      operationId: rotateMPCKey
+      description: >
+        Runs a fresh DKG ceremony for a replacement key using active original
+        participants by default, links the new key to the old key, and archives
+        the old key unless archive_old is false.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: keyID
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateMPCKeyRequest'
+      responses:
+        '201':
+          description: Replacement MPC key created
           content:
             application/json:
               schema:

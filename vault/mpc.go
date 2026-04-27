@@ -101,29 +101,32 @@ type MPCParticipant struct {
 }
 
 type MPCKeyCreate struct {
-	KeyID       string                           `json:"key_id,omitempty"`
-	Algorithm   string                           `json:"algorithm,omitempty"`
-	Threshold   int                              `json:"threshold"`
-	MemberIDs   []string                         `json:"member_ids,omitempty"`
-	Commitments []mpc.PublicCommitment           `json:"commitments"`
-	Fragments   map[string]mpc.EncryptedFragment `json:"fragments"`
-	Policy      MPCPolicy                        `json:"policy,omitempty"`
+	KeyID         string                           `json:"key_id,omitempty"`
+	Algorithm     string                           `json:"algorithm,omitempty"`
+	Threshold     int                              `json:"threshold"`
+	MemberIDs     []string                         `json:"member_ids,omitempty"`
+	Commitments   []mpc.PublicCommitment           `json:"commitments"`
+	Fragments     map[string]mpc.EncryptedFragment `json:"fragments"`
+	Policy        MPCPolicy                        `json:"policy,omitempty"`
+	ReplacesKeyID string                           `json:"replaces_key_id,omitempty"`
 }
 
 type MPCKey struct {
-	KeyID        string                 `json:"key_id"`
-	VaultID      string                 `json:"vault_id"`
-	Algorithm    string                 `json:"algorithm"`
-	Curve        string                 `json:"curve"`
-	Provider     mpc.ProviderInfo       `json:"provider"`
-	Threshold    int                    `json:"threshold"`
-	Status       MPCKeyStatus           `json:"status"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
-	PublicKey    mpc.PublicKey          `json:"public_key"`
-	Participants []MPCParticipant       `json:"participants"`
-	Commitments  []mpc.PublicCommitment `json:"commitments"`
-	Policy       MPCPolicy              `json:"policy"`
+	KeyID           string                 `json:"key_id"`
+	VaultID         string                 `json:"vault_id"`
+	Algorithm       string                 `json:"algorithm"`
+	Curve           string                 `json:"curve"`
+	Provider        mpc.ProviderInfo       `json:"provider"`
+	Threshold       int                    `json:"threshold"`
+	Status          MPCKeyStatus           `json:"status"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+	ReplacesKeyID   string                 `json:"replaces_key_id,omitempty"`
+	ReplacedByKeyID string                 `json:"replaced_by_key_id,omitempty"`
+	PublicKey       mpc.PublicKey          `json:"public_key"`
+	Participants    []MPCParticipant       `json:"participants"`
+	Commitments     []mpc.PublicCommitment `json:"commitments"`
+	Policy          MPCPolicy              `json:"policy"`
 }
 
 type MPCKeyFragment struct {
@@ -244,6 +247,11 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 	if err := validateID(create.KeyID, "MPC key ID"); err != nil {
 		return nil, err
 	}
+	if create.ReplacesKeyID != "" {
+		if err := validateID(create.ReplacesKeyID, "replaced MPC key ID"); err != nil {
+			return nil, err
+		}
+	}
 	if create.Algorithm == "" {
 		create.Algorithm = MPCAlgorithmExperimentalP256Schnorr
 	}
@@ -304,19 +312,20 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 	}
 	now := time.Now().UTC()
 	key := &MPCKey{
-		KeyID:        create.KeyID,
-		VaultID:      s.vault.id,
-		Algorithm:    providerInfo.Algorithm,
-		Curve:        providerInfo.Curve,
-		Provider:     providerInfo,
-		Threshold:    create.Threshold,
-		Status:       MPCKeyStatusActive,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		PublicKey:    meta.Public(),
-		Participants: participants,
-		Commitments:  append([]mpc.PublicCommitment(nil), create.Commitments...),
-		Policy:       normalizeMPCPolicy(create.Policy),
+		KeyID:         create.KeyID,
+		VaultID:       s.vault.id,
+		Algorithm:     providerInfo.Algorithm,
+		Curve:         providerInfo.Curve,
+		Provider:      providerInfo,
+		Threshold:     create.Threshold,
+		Status:        MPCKeyStatusActive,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		ReplacesKeyID: create.ReplacesKeyID,
+		PublicKey:     meta.Public(),
+		Participants:  participants,
+		Commitments:   append([]mpc.PublicCommitment(nil), create.Commitments...),
+		Policy:        normalizeMPCPolicy(create.Policy),
 	}
 	keyEnv, err := sealMPCRecord(s.vault.id, recordTypeMPCKey, key.KeyID, recBuf.Bytes(), key)
 	if err != nil {
@@ -411,6 +420,21 @@ func (s *Session) SetMPCKeyStatus(ctx context.Context, keyID string, status MPCK
 	}
 	return s.updateMPCKey(ctx, keyID, func(key *MPCKey) error {
 		key.Status = status
+		key.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+func (s *Session) MarkMPCKeyReplaced(ctx context.Context, keyID, replacementKeyID string) (*MPCKey, error) {
+	if err := validateID(replacementKeyID, "replacement MPC key ID"); err != nil {
+		return nil, err
+	}
+	return s.updateMPCKey(ctx, keyID, func(key *MPCKey) error {
+		if key.Status == MPCKeyStatusDestroyed {
+			return validationErrorf("destroyed MPC key %q cannot be replaced", keyID)
+		}
+		key.Status = MPCKeyStatusArchived
+		key.ReplacedByKeyID = replacementKeyID
 		key.UpdatedAt = time.Now().UTC()
 		return nil
 	})

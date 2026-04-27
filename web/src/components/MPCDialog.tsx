@@ -22,6 +22,7 @@ import {
   listMPCKeys,
   listMPCProviders,
   registerMPCSigner,
+  rotateMPCKey,
   updateMPCKeyStatus,
   type MPCDKGAttempt,
   type MPCKey,
@@ -233,6 +234,23 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
     }
   };
 
+  const handleRotateKey = async (keyID: string) => {
+    const run = () => void handleRotateKey(keyID);
+    setBusy(true);
+    setPhase('dkg');
+    try {
+      const replacement = await rotateMPCKey(vaultId, keyID);
+      toast({ title: 'Replacement key created', description: `${shortID(replacement.key_id)} replaced ${shortID(keyID)}.` });
+      await loadMPCState();
+      setSelectedKeyID(replacement.key_id);
+    } catch (err) {
+      if (!runStepUp(run, err)) toast({ title: 'Rotation failed', description: (err as Error).message, variant: 'destructive' });
+    } finally {
+      setPhase('idle');
+      setBusy(false);
+    }
+  };
+
   const toggleMember = (memberID: string) => {
     setSelectedMemberIDs((prev) => prev.includes(memberID) ? prev.filter((id) => id !== memberID) : [...prev, memberID]);
   };
@@ -384,8 +402,15 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                         <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'active'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'active'); }}>Enable</Button>
                         <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'disabled'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'disabled'); }}>Disable</Button>
                         <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'rotation_required'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'rotation_required'); }}>Rotation needed</Button>
+                        <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'destroyed'} onClick={(e) => { e.stopPropagation(); void handleRotateKey(k.key_id); }}>Create replacement</Button>
                         <Button type="button" size="sm" variant="outline" disabled={busy || k.status === 'archived'} onClick={(e) => { e.stopPropagation(); void handleKeyStatus(k.key_id, 'archived'); }}>Archive</Button>
                       </div>
+                      {k.replaces_key_id || k.replaced_by_key_id ? (
+                        <div className="mt-2 text-muted-foreground">
+                          {k.replaces_key_id ? `replaces ${shortID(k.replaces_key_id)}` : ''}
+                          {k.replaced_by_key_id ? ` replaced by ${shortID(k.replaced_by_key_id)}` : ''}
+                        </div>
+                      ) : null}
                     </button>
                   ))}
                 </section>

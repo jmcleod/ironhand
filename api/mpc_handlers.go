@@ -206,6 +206,90 @@ func (a *API) UpdateMPCKeyStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, MPCKeyResponse(*key))
 }
 
+func (a *API) RotateMPCKey(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	keyID := chi.URLParam(r, "keyID")
+	creds := credentialsFromContext(r.Context())
+
+	if !a.requireStepUp(w, r) {
+		return
+	}
+	req, ok := decodeJSON[RotateMPCKeyRequest](w, r, maxSmallBodySize)
+	if !ok {
+		return
+	}
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	oldKey, err := session.GetMPCKey(r.Context(), keyID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	if oldKey.Status == vault.MPCKeyStatusDestroyed {
+		writeError(w, http.StatusConflict, "destroyed MPC keys cannot be rotated")
+		return
+	}
+	memberIDs := req.MemberIDs
+	if len(memberIDs) == 0 {
+		memberIDs, err = activeReplacementMembers(r.Context(), session, oldKey)
+		if err != nil {
+			mapError(w, err)
+			return
+		}
+	}
+	threshold := req.Threshold
+	if threshold == 0 {
+		threshold = oldKey.Threshold
+	}
+	policy := req.Policy
+	if policy.ApprovalMode == "" && len(policy.AllowedRoles) == 0 && len(policy.AllowedDestinations) == 0 && len(policy.DeniedDestinations) == 0 && policy.MaxValue == "" {
+		policy = oldKey.Policy
+	}
+	newKeyID := req.KeyID
+	if newKeyID == "" {
+		newKeyID = uuid.New()
+	}
+	createReq := CreateMPCKeyRequest{KeyID: newKeyID, Algorithm: oldKey.Algorithm, Threshold: threshold, MemberIDs: memberIDs, Policy: policy}
+	prepared, dkg, err := a.orchestrateMPCDKG(r.Context(), session, vaultID, createReq)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	key, err := session.CreateMPCKey(r.Context(), vault.MPCKeyCreate{
+		KeyID:         prepared.KeyID,
+		Algorithm:     prepared.Algorithm,
+		Threshold:     prepared.Threshold,
+		MemberIDs:     prepared.MemberIDs,
+		Commitments:   prepared.Commitments,
+		Fragments:     prepared.Fragments,
+		Policy:        prepared.Policy,
+		ReplacesKeyID: oldKey.KeyID,
+	})
+	if err != nil {
+		a.abortMPCDKG(r.Context(), dkg)
+		mapError(w, err)
+		return
+	}
+	a.commitMPCDKG(r.Context(), dkg)
+	if req.ArchiveOld == nil || *req.ArchiveOld {
+		if _, err := session.MarkMPCKeyReplaced(r.Context(), oldKey.KeyID, key.KeyID); err != nil {
+			mapError(w, err)
+			return
+		}
+	}
+	a.audit.logEvent(AuditMPCKeyRotated, r, creds.SecretKey().ID(),
+		slog.String("vault_id", vaultID),
+		slog.String("old_mpc_key_id", oldKey.KeyID),
+		slog.String("new_mpc_key_id", key.KeyID),
+		slog.Int("threshold", key.Threshold))
+	writeJSON(w, http.StatusCreated, MPCKeyResponse(*key))
+}
+
 func (a *API) ListMPCDKGAttempts(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	creds := credentialsFromContext(r.Context())
@@ -756,6 +840,29 @@ func signerMembersFromDKGAttempt(attempt *vault.MPCDKGAttempt) []mpcsigner.Membe
 		})
 	}
 	return out
+}
+
+func activeReplacementMembers(ctx context.Context, session *vault.Session, key *vault.MPCKey) ([]string, error) {
+	members, err := session.ListMembers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	active := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		if member.Status == vault.StatusActive && member.MPCSignerStatus == vault.MPCSignerStatusActive {
+			active[member.MemberID] = struct{}{}
+		}
+	}
+	memberIDs := make([]string, 0, len(key.Participants))
+	for _, participant := range key.Participants {
+		if _, ok := active[participant.MemberID]; ok {
+			memberIDs = append(memberIDs, participant.MemberID)
+		}
+	}
+	if len(memberIDs) < key.Threshold {
+		return nil, vault.ValidationError{Message: fmt.Sprintf("replacement key needs at least %d active original participants, found %d", key.Threshold, len(memberIDs))}
+	}
+	return memberIDs, nil
 }
 
 func copyMPCFragments(in map[string]mpc.EncryptedFragment) map[string]mpc.EncryptedFragment {

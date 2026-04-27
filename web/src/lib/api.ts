@@ -817,6 +817,8 @@ export interface MPCKey {
   status: string;
   created_at: string;
   updated_at?: string;
+  replaces_key_id?: string;
+  replaced_by_key_id?: string;
   public_key: MPCPublicKey;
   participants: MPCParticipant[];
   policy?: MPCPolicy;
@@ -929,6 +931,15 @@ export async function updateMPCKeyStatus(vaultID: string, keyID: string, status:
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status }),
+  });
+  return (await resp.json()) as MPCKey;
+}
+
+export async function rotateMPCKey(vaultID: string, keyID: string, req: { key_id?: string; threshold?: number; member_ids?: string[]; policy?: MPCPolicy; archive_old?: boolean } = {}): Promise<MPCKey> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys/${encodeURIComponent(keyID)}/rotate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
   });
   return (await resp.json()) as MPCKey;
 }

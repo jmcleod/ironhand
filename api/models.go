@@ -213,6 +213,14 @@ type UpdateMPCKeyStatusRequest struct {
 	Status vault.MPCKeyStatus `json:"status"`
 }
 
+type RotateMPCKeyRequest struct {
+	KeyID      string          `json:"key_id,omitempty"`
+	Threshold  int             `json:"threshold,omitempty"`
+	MemberIDs  []string        `json:"member_ids,omitempty"`
+	Policy     vault.MPCPolicy `json:"policy,omitempty"`
+	ArchiveOld *bool           `json:"archive_old,omitempty"`
+}
+
 type MPCKeyResponse = vault.MPCKey
 type MPCSigningSessionResponse = vault.MPCSigningSession
 type MPCDKGAttemptResponse = vault.MPCDKGAttempt

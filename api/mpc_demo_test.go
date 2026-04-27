@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	ihcrypto "github.com/jmcleod/ironhand/crypto"
 	"github.com/jmcleod/ironhand/internal/mpcsigner"
 	"github.com/jmcleod/ironhand/storage/memory"
@@ -153,6 +154,7 @@ type demoKeyEnv struct {
 	api     *API
 	session *vault.Session
 	vault   *vault.Vault
+	creds   *vault.Credentials
 	key     *vault.MPCKey
 	signers []*demoSigner
 }
@@ -230,6 +232,35 @@ func TestMPCKeyLifecycleBlocksAndRevocationMarksReshare(t *testing.T) {
 	require.Equal(t, vault.MPCKeyStatusReshareRequired, key.Status)
 }
 
+func TestMPCRotateHandlerCreatesReplacementKey(t *testing.T) {
+	env := newDemoKeyEnv(t, "rotate")
+	require.NoError(t, env.session.RevokeMember(context.Background(), "bob"))
+	require.NoError(t, env.api.saveAccountRecord(env.creds.SecretKey().String(), accountRecord{
+		SecretKeyID: env.creds.SecretKey().ID(),
+		CreatedAt:   time.Now().UTC(),
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/vaults/"+env.vault.ID()+"/mpc/keys/"+env.key.KeyID+"/rotate", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("vaultID", env.vault.ID())
+	routeCtx.URLParams.Add("keyID", env.key.KeyID)
+	ctx := context.WithValue(req.Context(), credentialsKey, env.creds)
+	ctx = context.WithValue(ctx, chi.RouteCtxKey, routeCtx)
+	rec := httptest.NewRecorder()
+
+	env.api.RotateMPCKey(rec, req.WithContext(ctx))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var replacement vault.MPCKey
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &replacement))
+	require.Equal(t, env.key.KeyID, replacement.ReplacesKeyID)
+	require.Len(t, replacement.Participants, 2)
+	oldKey, err := env.session.GetMPCKey(context.Background(), env.key.KeyID)
+	require.NoError(t, err)
+	require.Equal(t, vault.MPCKeyStatusArchived, oldKey.Status)
+	require.Equal(t, replacement.KeyID, oldKey.ReplacedByKeyID)
+}
+
 func newDemoKeyEnv(t *testing.T, name string) *demoKeyEnv {
 	t.Helper()
 	ctx := context.Background()
@@ -264,5 +295,5 @@ func newDemoKeyEnv(t *testing.T, name string) *demoKeyEnv {
 	key, err := session.CreateMPCKey(ctx, vault.MPCKeyCreate{KeyID: prepared.KeyID, Algorithm: prepared.Algorithm, Threshold: prepared.Threshold, MemberIDs: prepared.MemberIDs, Commitments: prepared.Commitments, Fragments: prepared.Fragments, Policy: prepared.Policy})
 	require.NoError(t, err)
 	api.commitMPCDKG(ctx, dkg)
-	return &demoKeyEnv{api: api, session: session, vault: v, key: key, signers: signers}
+	return &demoKeyEnv{api: api, session: session, vault: v, creds: creds, key: key, signers: signers}
 }

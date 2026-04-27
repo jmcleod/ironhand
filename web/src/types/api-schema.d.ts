@@ -842,6 +842,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vaults/{vaultID}/mpc/keys/{keyID}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a replacement MPC key
+         * @description Runs a fresh DKG ceremony for a replacement key using active original participants by default, links the new key to the old key, and archives the old key unless archive_old is false.
+         */
+        post: operations["rotateMPCKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/vaults/{vaultID}/mpc/keys/{keyID}/sessions": {
         parameters: {
             query?: never;
@@ -1587,6 +1607,8 @@ export interface components {
             created_at?: string;
             /** Format: date-time */
             updated_at?: string;
+            replaces_key_id?: string;
+            replaced_by_key_id?: string;
             public_key?: components["schemas"]["MPCPublicKey"];
             participants?: components["schemas"]["MPCParticipant"][];
             commitments?: components["schemas"]["MPCPublicCommitment"][];
@@ -1638,6 +1660,17 @@ export interface components {
         UpdateMPCKeyStatusRequest: {
             /** @enum {string} */
             status: "active" | "disabled" | "archived" | "rotation_required" | "reshare_required" | "destroyed";
+        };
+        RotateMPCKeyRequest: {
+            /** @description Optional replacement key ID. Generated when omitted. */
+            key_id?: string;
+            /** @description Defaults to the replaced key threshold. */
+            threshold?: number;
+            /** @description Optional replacement participants. Defaults to active original participants. */
+            member_ids?: string[];
+            policy?: components["schemas"]["MPCPolicy"];
+            /** @description Archive and link the replaced key. Defaults to true. */
+            archive_old?: boolean;
         };
         MPCSigningSession: {
             session_id?: string;
@@ -3784,6 +3817,50 @@ export interface operations {
         responses: {
             /** @description MPC key status updated */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MPCKey"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled or step-up required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rotateMPCKey: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF double-submit token. Must match the value of the `ironhand_csrf` cookie. Required on all mutating (POST/PUT/DELETE) requests that use cookie-based session authentication. GET/HEAD/OPTIONS requests and header-authenticated requests are exempt. */
+                "X-CSRF-Token": components["parameters"]["CSRFToken"];
+            };
+            path: {
+                vaultID: string;
+                keyID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RotateMPCKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Replacement MPC key created */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
