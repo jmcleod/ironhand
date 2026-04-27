@@ -78,6 +78,40 @@ type ApprovalRequest struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
+type ApprovalRequestStatus string
+
+const (
+	ApprovalRequestPending  ApprovalRequestStatus = "pending"
+	ApprovalRequestApproved ApprovalRequestStatus = "approved"
+	ApprovalRequestRejected ApprovalRequestStatus = "rejected"
+	ApprovalRequestExpired  ApprovalRequestStatus = "expired"
+)
+
+type ApprovalRequestRecord struct {
+	RequestID  string                `json:"request_id"`
+	PartyID    uint32                `json:"party_id"`
+	Status     ApprovalRequestStatus `json:"status"`
+	Request    ApprovalRequest       `json:"request"`
+	Approval   *mpc.Approval         `json:"approval,omitempty"`
+	Reason     string                `json:"reason,omitempty"`
+	CreatedAt  time.Time             `json:"created_at"`
+	UpdatedAt  time.Time             `json:"updated_at"`
+	ApprovedAt time.Time             `json:"approved_at,omitempty"`
+	RejectedAt time.Time             `json:"rejected_at,omitempty"`
+}
+
+type CreateApprovalRequestResponse struct {
+	Request ApprovalRequestRecord `json:"request"`
+}
+
+type ListApprovalRequestsResponse struct {
+	Requests []ApprovalRequestRecord `json:"requests"`
+}
+
+type RejectApprovalRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
 type NonceCommitRequest struct {
 	KeyID       string `json:"key_id"`
 	SessionID   string `json:"session_id"`

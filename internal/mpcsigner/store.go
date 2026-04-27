@@ -30,15 +30,16 @@ type sealedSignerFile struct {
 }
 
 type signerSnapshot struct {
-	Version           int                    `json:"version"`
-	MemberID          string                 `json:"member_id"`
-	PartyID           uint32                 `json:"party_id"`
-	Name              string                 `json:"name,omitempty"`
-	URL               string                 `json:"url,omitempty"`
-	ECDHPrivateKey    string                 `json:"ecdh_private_key"`
-	Ed25519PrivateKey string                 `json:"ed25519_private_key"`
-	Identity          mpc.SignerIdentity     `json:"identity"`
-	Keys              map[string]keySnapshot `json:"keys,omitempty"`
+	Version           int                     `json:"version"`
+	MemberID          string                  `json:"member_id"`
+	PartyID           uint32                  `json:"party_id"`
+	Name              string                  `json:"name,omitempty"`
+	URL               string                  `json:"url,omitempty"`
+	ECDHPrivateKey    string                  `json:"ecdh_private_key"`
+	Ed25519PrivateKey string                  `json:"ed25519_private_key"`
+	Identity          mpc.SignerIdentity      `json:"identity"`
+	Keys              map[string]keySnapshot  `json:"keys,omitempty"`
+	ApprovalRequests  []ApprovalRequestRecord `json:"approval_requests,omitempty"`
 }
 
 type keySnapshot struct {
@@ -210,27 +211,36 @@ func snapshotFromService(s *Service) signerSnapshot {
 		Ed25519PrivateKey: base64.StdEncoding.EncodeToString([]byte(s.edPriv)),
 		Identity:          s.identity,
 		Keys:              keys,
+		ApprovalRequests:  approvalRequestsFromService(s),
 	}
 }
 
-func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed25519.PrivateKey, mpc.SignerIdentity, map[string]*keyState, error) {
+func approvalRequestsFromService(s *Service) []ApprovalRequestRecord {
+	requests := make([]ApprovalRequestRecord, 0, len(s.approvals))
+	for _, request := range s.approvals {
+		requests = append(requests, *request)
+	}
+	return requests
+}
+
+func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed25519.PrivateKey, mpc.SignerIdentity, map[string]*keyState, map[string]*ApprovalRequestRecord, error) {
 	if snapshot.Version != signerStoreVersion {
-		return nil, nil, mpc.SignerIdentity{}, nil, fmt.Errorf("unsupported signer snapshot version %d", snapshot.Version)
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("unsupported signer snapshot version %d", snapshot.Version)
 	}
 	ecdhBytes, err := base64.StdEncoding.DecodeString(snapshot.ECDHPrivateKey)
 	if err != nil {
-		return nil, nil, mpc.SignerIdentity{}, nil, fmt.Errorf("decode signer ECDH private key: %w", err)
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("decode signer ECDH private key: %w", err)
 	}
 	ecdhPriv, err := ecdh.P256().NewPrivateKey(ecdhBytes)
 	if err != nil {
-		return nil, nil, mpc.SignerIdentity{}, nil, fmt.Errorf("parse signer ECDH private key: %w", err)
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("parse signer ECDH private key: %w", err)
 	}
 	edBytes, err := base64.StdEncoding.DecodeString(snapshot.Ed25519PrivateKey)
 	if err != nil {
-		return nil, nil, mpc.SignerIdentity{}, nil, fmt.Errorf("decode signer approval private key: %w", err)
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("decode signer approval private key: %w", err)
 	}
 	if len(edBytes) != ed25519.PrivateKeySize {
-		return nil, nil, mpc.SignerIdentity{}, nil, fmt.Errorf("invalid signer approval private key size")
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("invalid signer approval private key size")
 	}
 	keys := make(map[string]*keyState, len(snapshot.Keys))
 	for keyID, state := range snapshot.Keys {
@@ -238,7 +248,7 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 		for rawPartyID, share := range state.Inbox {
 			partyID, err := strconv.Atoi(rawPartyID)
 			if err != nil {
-				return nil, nil, mpc.SignerIdentity{}, nil, fmt.Errorf("invalid saved DKG party ID %q: %w", rawPartyID, err)
+				return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("invalid saved DKG party ID %q: %w", rawPartyID, err)
 			}
 			inbox[partyID] = share
 		}
@@ -246,7 +256,7 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 		for rawPartyID, share := range state.OutgoingShares {
 			partyID, err := strconv.Atoi(rawPartyID)
 			if err != nil {
-				return nil, nil, mpc.SignerIdentity{}, nil, fmt.Errorf("invalid saved outgoing DKG party ID %q: %w", rawPartyID, err)
+				return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("invalid saved outgoing DKG party ID %q: %w", rawPartyID, err)
 			}
 			outgoing[partyID] = share
 		}
@@ -268,5 +278,10 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 			nonces:         make(map[string]*nonceState),
 		}
 	}
-	return ecdhPriv, ed25519.PrivateKey(edBytes), snapshot.Identity, keys, nil
+	approvals := make(map[string]*ApprovalRequestRecord, len(snapshot.ApprovalRequests))
+	for _, request := range snapshot.ApprovalRequests {
+		copy := request
+		approvals[request.RequestID] = &copy
+	}
+	return ecdhPriv, ed25519.PrivateKey(edBytes), snapshot.Identity, keys, approvals, nil
 }

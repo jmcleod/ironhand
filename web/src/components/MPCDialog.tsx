@@ -46,7 +46,7 @@ function shortID(value?: string, len = 14) {
 }
 
 function signerCommand(member: MemberInfo) {
-  return `ironhand signer --member-id ${member.member_id} --party-id ${member.mpc_party_id || '<party-id>'} --state-file ./signer-${member.mpc_party_id || 'N'}.sealed --mpc-shared-key "$IRONHAND_MPC_SHARED_KEY"`;
+  return `ironhand signer --member-id ${member.member_id} --party-id ${member.mpc_party_id || '<party-id>'} --state-file ./signer-${member.mpc_party_id || 'N'}.sealed --mpc-shared-key "$IRONHAND_MPC_SHARED_KEY" --operator-token "$IRONHAND_MPC_SIGNER_OPERATOR_TOKEN"`;
 }
 
 export default function MPCDialog({ open, onOpenChange, vaultId, members, onChanged }: MPCDialogProps) {
@@ -155,12 +155,26 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
         next = await approveMPCSigningSession(vaultId, next.session_id, party);
         setSession(next);
       }
-      setPhase('complete');
-      next = await completeMPCSigningSession(vaultId, next.session_id);
-      setSession(next);
-      toast({ title: 'MPC signature complete', description: `${next.participants.length} signer approvals were combined.` });
+      toast({ title: 'Approval requests sent', description: 'Approve each request on its signer, then complete the session.' });
     } catch (err) {
       if (!runStepUp(run, err)) toast({ title: 'Signing failed', description: (err as Error).message, variant: 'destructive' });
+    } finally {
+      setPhase('idle');
+      setBusy(false);
+    }
+  };
+
+  const handleComplete = async () => {
+    if (!session) return;
+    const run = () => void handleComplete();
+    setBusy(true);
+    setPhase('complete');
+    try {
+      const next = await completeMPCSigningSession(vaultId, session.session_id);
+      setSession(next);
+      toast({ title: 'MPC signature complete', description: `${next.approvals?.length ?? 0} signer approvals were combined.` });
+    } catch (err) {
+      if (!runStepUp(run, err)) toast({ title: 'Completion failed', description: (err as Error).message, variant: 'destructive' });
     } finally {
       setPhase('idle');
       setBusy(false);
@@ -301,7 +315,10 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                   </select>
                   <Textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={4} />
                   <Button disabled={busy || !selectedKey || !message} onClick={handleSign}>
-                    {busy && phase !== 'dkg' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />} Create, approve, sign
+                    {busy && phase !== 'dkg' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />} Create and request approvals
+                  </Button>
+                  <Button variant="outline" disabled={busy || !session || session.status !== 'pending'} onClick={handleComplete}>
+                    {busy && phase === 'complete' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />} Complete approved session
                   </Button>
                   {session ? (
                     <div className="rounded-lg border border-border bg-background/60 p-3 text-xs">

@@ -1459,7 +1459,7 @@ export interface components {
         };
         AddMPCApprovalRequest: {
             approval?: components["schemas"]["MPCApproval"];
-            /** @description Party ID to request approval from when approval is omitted. */
+            /** @description Party ID to create a signer-local approval request for when approval is omitted. The signer operator must approve the request before completion can harvest the signed approval. */
             party_id?: number;
         };
         CompleteMPCSigningSessionRequest: {

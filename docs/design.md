@@ -309,7 +309,7 @@ Envelopes are created with `SealRecord(recordKey, plaintext, aad)` and opened wi
 
 Experimental MPC DKG is orchestrated as a transaction-shaped signer ceremony. The API assigns each ceremony a `dkg_session_id`, prevalidates the active signer count against the requested threshold, starts and finalizes signers through authenticated internal calls, aborts touched signers on failure, and commits signer state only after the vault key record and encrypted fragments have been stored. Signer calls are HMAC-signed with timestamp, nonce, canonical scheme/host/path/query, and body hash; replayed nonces are rejected. Unsigned calls are accepted only for explicit loopback-local development.
 
-MPC signing approvals are session-scoped capabilities. A signer approval covers the vault ID, key ID, session ID, threshold, full participant set, message hash, and expiry; completion then accepts any valid threshold-sized approval subset before the session expires. Signing session TTL defaults to 15 minutes and is capped at 30 minutes.
+MPC signing approvals are session-scoped capabilities. A signer approval covers the vault ID, key ID, session ID, threshold, full participant set, message hash, and expiry; completion then accepts any valid threshold-sized approval subset before the session expires. Signing session TTL defaults to 15 minutes and is capped at 30 minutes. Coordinators create signer-local approval requests; the signer only emits an approval signature after a local operator approves the request with the signer operator token.
 
 ### Sentinel Errors
 

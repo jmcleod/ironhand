@@ -142,6 +142,17 @@ IronHand can run vault-scoped MPC flows where each active vault member maps to a
 - Use `--mpc-client-cert`, `--mpc-client-key`, `--mpc-signer-ca`, `--tls-cert`, `--tls-key`, and `--client-ca` when signers require mTLS.
 - Coordinator-run DKG uses a per-attempt `dkg_session_id`; failed ceremonies are aborted on touched signers and committed only after the vault stores the key.
 - Signing approvals are bound to the vault, key, session, threshold, participant set, message hash, and expiry. Completion requires a valid threshold-sized approval subset before the session expiry; session TTL defaults to 15 minutes and is capped at 30 minutes.
+- Signers no longer auto-approve coordinator requests. The coordinator creates signer-local approval requests and an operator must approve them with `--operator-token` / `IRONHAND_MPC_SIGNER_OPERATOR_TOKEN` before signing can complete.
+
+Signer operators can inspect and approve pending requests directly on the signer:
+
+```sh
+curl -H "X-Ironhand-Signer-Operator-Token: $IRONHAND_MPC_SIGNER_OPERATOR_TOKEN" \
+  http://127.0.0.1:8081/signer/approval-requests
+
+curl -X POST -H "X-Ironhand-Signer-Operator-Token: $IRONHAND_MPC_SIGNER_OPERATOR_TOKEN" \
+  http://127.0.0.1:8081/signer/approval-requests/<request_id>/approve
+```
 
 The available algorithm is `experimental-p256-schnorr-v1`. It is suitable for protocol development and UX testing, not production funds. A production deployment should replace this boundary with a vetted threshold signature implementation such as FROST over the target production curve.
 

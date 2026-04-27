@@ -16,7 +16,7 @@ import (
 func TestSignerApprovalRequiresKnownBoundKey(t *testing.T) {
 	service := newTestSignerService(t)
 
-	resp := postSignerJSON(t, service, "/signer/approve", ApprovalRequest{
+	resp := postSignerJSON(t, service, "/signer/approval-requests", ApprovalRequest{
 		VaultID:      "vault-1",
 		KeyID:        "missing",
 		SessionID:    "session-1",
@@ -42,11 +42,18 @@ func TestSignerApprovalBindsSessionContext(t *testing.T) {
 		MessageHash:  "hash",
 		ExpiresAt:    time.Now().Add(time.Minute).UTC(),
 	}
-	resp := postSignerJSON(t, service, "/signer/approve", req)
-	require.Equal(t, http.StatusOK, resp.Code)
+	resp := postSignerJSON(t, service, "/signer/approval-requests", req)
+	require.Equal(t, http.StatusAccepted, resp.Code)
+	var created CreateApprovalRequestResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+	assert.Equal(t, ApprovalRequestPending, created.Request.Status)
 
-	var approval mpc.Approval
-	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &approval))
+	resp = postSignerJSON(t, service, "/signer/approval-requests/"+created.Request.RequestID+"/approve", map[string]string{})
+	require.Equal(t, http.StatusOK, resp.Code)
+	var approved CreateApprovalRequestResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &approved))
+	require.NotNil(t, approved.Request.Approval)
+	approval := *approved.Request.Approval
 	assert.Equal(t, req.VaultID, approval.VaultID)
 	assert.Equal(t, req.KeyID, approval.KeyID)
 	assert.Equal(t, req.SessionID, approval.SessionID)

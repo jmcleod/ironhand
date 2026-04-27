@@ -3,12 +3,14 @@ package mpcsigner
 import (
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -29,9 +31,11 @@ type Service struct {
 	ecdhPriv *ecdh.PrivateKey
 	edPriv   ed25519.PrivateKey
 	identity mpc.SignerIdentity
+	operator []byte
 
-	mu   sync.Mutex
-	keys map[string]*keyState
+	mu        sync.Mutex
+	keys      map[string]*keyState
+	approvals map[string]*ApprovalRequestRecord
 }
 
 type keyState struct {
@@ -64,10 +68,11 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 		logger = slog.Default()
 	}
 	var (
-		ecdhPriv *ecdh.PrivateKey
-		edPriv   ed25519.PrivateKey
-		identity mpc.SignerIdentity
-		keys     = make(map[string]*keyState)
+		ecdhPriv  *ecdh.PrivateKey
+		edPriv    ed25519.PrivateKey
+		identity  mpc.SignerIdentity
+		keys      = make(map[string]*keyState)
+		approvals = make(map[string]*ApprovalRequestRecord)
 	)
 	if store != nil {
 		snapshot, ok, err := store.Load()
@@ -78,7 +83,7 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 			if snapshot.MemberID != memberID || snapshot.PartyID != partyID {
 				return nil, fmt.Errorf("signer state belongs to member %s party %d", snapshot.MemberID, snapshot.PartyID)
 			}
-			ecdhPriv, edPriv, identity, keys, err = serviceStateFromSnapshot(snapshot)
+			ecdhPriv, edPriv, identity, keys, approvals, err = serviceStateFromSnapshot(snapshot)
 			if err != nil {
 				return nil, err
 			}
@@ -98,17 +103,18 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 		}
 	}
 	service := &Service{
-		memberID: memberID,
-		partyID:  partyID,
-		logger:   logger,
-		client:   mpcclient.New(sharedKey, nil),
-		shared:   append([]byte(nil), sharedKey...),
-		replay:   mpcclient.NewReplayCache(2 * time.Minute),
-		store:    store,
-		ecdhPriv: ecdhPriv,
-		edPriv:   edPriv,
-		identity: identity,
-		keys:     keys,
+		memberID:  memberID,
+		partyID:   partyID,
+		logger:    logger,
+		client:    mpcclient.New(sharedKey, nil),
+		shared:    append([]byte(nil), sharedKey...),
+		replay:    mpcclient.NewReplayCache(2 * time.Minute),
+		store:     store,
+		ecdhPriv:  ecdhPriv,
+		edPriv:    edPriv,
+		identity:  identity,
+		keys:      keys,
+		approvals: approvals,
 	}
 	if store != nil {
 		service.mu.Lock()
@@ -119,6 +125,12 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 		}
 	}
 	return service, nil
+}
+
+func (s *Service) SetOperatorToken(token []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.operator = append([]byte(nil), token...)
 }
 
 func (s *Service) Identity() mpc.SignerIdentity {
@@ -135,6 +147,11 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /signer/dkg/abort", s.handleAbortDKG)
 	mux.HandleFunc("POST /signer/dkg/commit", s.handleCommitDKG)
 	mux.HandleFunc("POST /signer/approve", s.handleApprove)
+	mux.HandleFunc("POST /signer/approval-requests", s.handleCreateApprovalRequest)
+	mux.HandleFunc("GET /signer/approval-requests", s.handleListApprovalRequests)
+	mux.HandleFunc("GET /signer/approval-requests/{requestID}", s.handleGetApprovalRequest)
+	mux.HandleFunc("POST /signer/approval-requests/{requestID}/approve", s.handleApproveApprovalRequest)
+	mux.HandleFunc("POST /signer/approval-requests/{requestID}/reject", s.handleRejectApprovalRequest)
 	mux.HandleFunc("POST /signer/sign/commit", s.handleNonceCommit)
 	mux.HandleFunc("POST /signer/sign/share", s.handleSignShare)
 	return s.withAuth(s.withLogging(mux))
@@ -478,6 +495,15 @@ func (s *Service) handleApprove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	writeError(w, http.StatusGone, "direct signer approval is disabled; create an approval request and approve it locally")
+}
+
+func (s *Service) handleCreateApprovalRequest(w http.ResponseWriter, r *http.Request) {
+	var req ApprovalRequest
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.VaultID == "" || req.KeyID == "" || req.SessionID == "" || req.MessageHash == "" {
 		writeError(w, http.StatusBadRequest, "vault_id, key_id, session_id, and message_hash are required")
 		return
@@ -494,28 +520,111 @@ func (s *Service) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	state, ok := s.keys[req.KeyID]
 	if !ok || state.publicKey.X == "" || state.dkgStatus == "aborted" {
-		s.mu.Unlock()
 		writeError(w, http.StatusNotFound, "key metadata not found")
 		return
 	}
 	if state.vaultID != "" && state.vaultID != req.VaultID {
-		s.mu.Unlock()
 		writeError(w, http.StatusUnauthorized, "approval vault does not match signer key state")
 		return
 	}
 	if state.threshold != req.Threshold {
-		s.mu.Unlock()
 		writeError(w, http.StatusBadRequest, "approval threshold does not match signer key state")
 		return
 	}
 	if err := validateApprovalParticipants(req.Participants, state.members, s.partyID); err != nil {
-		s.mu.Unlock()
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	requestID := approvalRequestID(req.SessionID, s.partyID)
+	if existing, ok := s.approvals[requestID]; ok {
+		if !sameApprovalRequest(existing.Request, req) {
+			writeError(w, http.StatusConflict, "approval request ID is already bound to a different session context")
+			return
+		}
+		refreshApprovalRequestStatus(existing, time.Now().UTC())
+		writeJSON(w, http.StatusAccepted, CreateApprovalRequestResponse{Request: *existing})
+		return
+	}
+	now := time.Now().UTC()
+	record := &ApprovalRequestRecord{
+		RequestID: requestID,
+		PartyID:   s.partyID,
+		Status:    ApprovalRequestPending,
+		Request:   req,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.approvals[requestID] = record
+	if err := s.saveLocked(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, CreateApprovalRequestResponse{Request: *record})
+}
+
+func (s *Service) handleListApprovalRequests(w http.ResponseWriter, r *http.Request) {
+	if !s.verifyOperator(w, r) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	requests := make([]ApprovalRequestRecord, 0, len(s.approvals))
+	for _, request := range s.approvals {
+		refreshApprovalRequestStatus(request, now)
+		requests = append(requests, *request)
+	}
+	writeJSON(w, http.StatusOK, ListApprovalRequestsResponse{Requests: requests})
+}
+
+func (s *Service) handleGetApprovalRequest(w http.ResponseWriter, r *http.Request) {
+	requestID := r.PathValue("requestID")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	request, ok := s.approvals[requestID]
+	if !ok {
+		writeError(w, http.StatusNotFound, "approval request not found")
+		return
+	}
+	refreshApprovalRequestStatus(request, time.Now().UTC())
+	writeJSON(w, http.StatusOK, CreateApprovalRequestResponse{Request: *request})
+}
+
+func (s *Service) handleApproveApprovalRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.verifyOperator(w, r) {
+		return
+	}
+	requestID := r.PathValue("requestID")
+	s.mu.Lock()
+	request, ok := s.approvals[requestID]
+	if !ok {
+		s.mu.Unlock()
+		writeError(w, http.StatusNotFound, "approval request not found")
+		return
+	}
+	refreshApprovalRequestStatus(request, time.Now().UTC())
+	if request.Status == ApprovalRequestExpired {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "approval request is expired")
+		return
+	}
+	if request.Status == ApprovalRequestRejected {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "approval request was rejected")
+		return
+	}
+	if request.Status == ApprovalRequestApproved {
+		response := *request
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, CreateApprovalRequestResponse{Request: response})
+		return
+	}
+	req := request.Request
 	s.mu.Unlock()
+
 	approval, err := mpc.SignApproval(s.edPriv, mpc.Approval{
 		VaultID:      req.VaultID,
 		SessionID:    req.SessionID,
@@ -530,7 +639,55 @@ func (s *Service) handleApprove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, approval)
+	s.mu.Lock()
+	request, ok = s.approvals[requestID]
+	if !ok {
+		s.mu.Unlock()
+		writeError(w, http.StatusNotFound, "approval request not found")
+		return
+	}
+	now := time.Now().UTC()
+	request.Status = ApprovalRequestApproved
+	request.Approval = &approval
+	request.UpdatedAt = now
+	request.ApprovedAt = now
+	if err := s.saveLocked(); err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
+		return
+	}
+	response := *request
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, CreateApprovalRequestResponse{Request: response})
+}
+
+func (s *Service) handleRejectApprovalRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.verifyOperator(w, r) {
+		return
+	}
+	var req RejectApprovalRequest
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	requestID := r.PathValue("requestID")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	request, ok := s.approvals[requestID]
+	if !ok {
+		writeError(w, http.StatusNotFound, "approval request not found")
+		return
+	}
+	now := time.Now().UTC()
+	request.Status = ApprovalRequestRejected
+	request.Reason = req.Reason
+	request.UpdatedAt = now
+	request.RejectedAt = now
+	if err := s.saveLocked(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, CreateApprovalRequestResponse{Request: *request})
 }
 
 func (s *Service) handleNonceCommit(w http.ResponseWriter, r *http.Request) {
@@ -731,6 +888,10 @@ func (s *Service) saveLocked() error {
 
 func (s *Service) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.isOperatorRoute(r) && s.checkOperatorRequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		_, ok, err := mpcclient.VerifyRequestWithReplay(r, s.shared, 2*time.Minute, s.replay)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -742,6 +903,16 @@ func (s *Service) withAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Service) isOperatorRoute(r *http.Request) bool {
+	if r.Method == http.MethodGet && r.URL.Path == "/signer/approval-requests" {
+		return true
+	}
+	if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/signer/approval-requests/") {
+		return false
+	}
+	return strings.HasSuffix(r.URL.Path, "/approve") || strings.HasSuffix(r.URL.Path, "/reject")
 }
 
 func (s *Service) withLogging(next http.Handler) http.Handler {
@@ -830,6 +1001,63 @@ func validateSigningParticipants(signing, approved []int, threshold int, selfID 
 		return fmt.Errorf("signing participants do not include this signer party %d", selfID)
 	}
 	return nil
+}
+
+func approvalRequestID(sessionID string, partyID uint32) string {
+	return fmt.Sprintf("%s-%d", sessionID, partyID)
+}
+
+func refreshApprovalRequestStatus(request *ApprovalRequestRecord, now time.Time) {
+	if request.Status == ApprovalRequestPending && now.After(request.Request.ExpiresAt) {
+		request.Status = ApprovalRequestExpired
+		request.UpdatedAt = now
+	}
+}
+
+func sameApprovalRequest(left, right ApprovalRequest) bool {
+	if left.VaultID != right.VaultID || left.SessionID != right.SessionID || left.KeyID != right.KeyID {
+		return false
+	}
+	if left.Threshold != right.Threshold || left.MessageHash != right.MessageHash || !left.ExpiresAt.Equal(right.ExpiresAt) {
+		return false
+	}
+	if len(left.Participants) != len(right.Participants) {
+		return false
+	}
+	for i := range left.Participants {
+		if left.Participants[i] != right.Participants[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) verifyOperator(w http.ResponseWriter, r *http.Request) bool {
+	if s.checkOperatorRequest(r) {
+		return true
+	}
+	writeError(w, http.StatusUnauthorized, "invalid operator token")
+	return false
+}
+
+func (s *Service) checkOperatorRequest(r *http.Request) bool {
+	s.mu.Lock()
+	token := append([]byte(nil), s.operator...)
+	s.mu.Unlock()
+	if len(token) == 0 {
+		return isLoopbackRemote(r.RemoteAddr)
+	}
+	got := []byte(r.Header.Get("X-Ironhand-Signer-Operator-Token"))
+	return subtle.ConstantTimeCompare(got, token) == 1
+}
+
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func zeroBytes(bytes []byte) {

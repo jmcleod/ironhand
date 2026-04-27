@@ -32,6 +32,7 @@ var (
 	signerStatePass        string
 	signerDevMemory        bool
 	signerAllowInsecureDev bool
+	signerOperatorToken    string
 )
 
 var signerCmd = &cobra.Command{
@@ -78,10 +79,18 @@ var signerCmd = &cobra.Command{
 		if signerDevMemory {
 			fmt.Println("WARNING: signer state is in-memory only; identity and MPC key metadata will be lost on restart")
 		}
+		operatorToken := signerOperatorToken
+		if operatorToken == "" {
+			operatorToken = os.Getenv("IRONHAND_MPC_SIGNER_OPERATOR_TOKEN")
+		}
+		if operatorToken == "" && !signerAllowInsecureDev {
+			return fmt.Errorf("MPC signer requires --operator-token or IRONHAND_MPC_SIGNER_OPERATOR_TOKEN for local approval actions")
+		}
 		service, err := mpcsigner.NewWithStore(signerMemberID, signerPartyID, signerName, signerURL, []byte(shared), store, slog.Default())
 		if err != nil {
 			return err
 		}
+		service.SetOperatorToken([]byte(operatorToken))
 		identity := service.Identity()
 		fmt.Printf("Signer identity: member=%s party=%d url=%s\n", signerMemberID, signerPartyID, identity.URL)
 		fmt.Printf("  encryption_public_key=%s\n", identity.EncryptionPublicKey)
@@ -162,4 +171,5 @@ func init() {
 	signerCmd.Flags().StringVar(&signerStatePass, "state-passphrase", "", "Passphrase for sealing signer state (or IRONHAND_MPC_SIGNER_STATE_KEY)")
 	signerCmd.Flags().BoolVar(&signerDevMemory, "dev-in-memory", false, "Run signer with volatile in-memory state for tests only")
 	signerCmd.Flags().BoolVar(&signerAllowInsecureDev, "allow-insecure-mpc-local-dev", false, "Allow unsigned MPC signer calls from loopback clients only")
+	signerCmd.Flags().StringVar(&signerOperatorToken, "operator-token", "", "Local operator token for approving/rejecting signer approval requests (or IRONHAND_MPC_SIGNER_OPERATOR_TOKEN)")
 }

@@ -217,12 +217,18 @@ func (a *API) AddMPCApproval(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "party_id is required when approval is omitted")
 			return
 		}
-		approval, err := a.approveMPCSessionWithSigner(r.Context(), session, sessionID, partyID)
+		signingSession, err := a.requestMPCSessionApprovalWithSigner(r.Context(), session, sessionID, partyID)
 		if err != nil {
 			mapError(w, err)
 			return
 		}
-		req.Approval = *approval
+		a.audit.logEvent(AuditMPCSigningApprovalRequested, r, creds.SecretKey().ID(),
+			slog.String("vault_id", vaultID),
+			slog.String("mpc_key_id", signingSession.KeyID),
+			slog.String("mpc_session_id", signingSession.SessionID),
+			slog.Int("party_id", int(partyID)))
+		writeJSON(w, http.StatusAccepted, MPCSigningSessionResponse(*signingSession))
+		return
 	}
 	signingSession, err := session.AddMPCApproval(r.Context(), sessionID, req.Approval)
 	if err != nil {
@@ -386,7 +392,7 @@ func (a *API) commitMPCDKG(ctx context.Context, dkg *mpcDKGOrchestration) {
 	}
 }
 
-func (a *API) approveMPCSessionWithSigner(ctx context.Context, session *vault.Session, sessionID string, partyID uint32) (*mpc.Approval, error) {
+func (a *API) requestMPCSessionApprovalWithSigner(ctx context.Context, session *vault.Session, sessionID string, partyID uint32) (*vault.MPCSigningSession, error) {
 	signingSession, err := session.GetMPCSigningSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -420,11 +426,14 @@ func (a *API) approveMPCSessionWithSigner(ctx context.Context, session *vault.Se
 		MessageHash:  signingSession.MessageHash,
 		ExpiresAt:    signingSession.ExpiresAt,
 	}
-	var approval mpc.Approval
-	if err := a.mpcClient.PostJSON(participant.SignerURL+"/signer/approve", payload, &approval); err != nil {
+	var resp mpcsigner.CreateApprovalRequestResponse
+	if err := a.mpcClient.PostJSON(participant.SignerURL+"/signer/approval-requests", payload, &resp); err != nil {
 		return nil, err
 	}
-	return &approval, nil
+	if resp.Request.Approval != nil && resp.Request.Approval.Signature != "" {
+		return session.AddMPCApproval(ctx, sessionID, *resp.Request.Approval)
+	}
+	return signingSession, nil
 }
 
 func (a *API) completeMPCSessionWithSigners(ctx context.Context, session *vault.Session, sessionID string) (*vault.MPCSigningSession, error) {
@@ -433,6 +442,10 @@ func (a *API) completeMPCSessionWithSigners(ctx context.Context, session *vault.
 		return nil, err
 	}
 	key, err := session.GetMPCKey(ctx, signingSession.KeyID)
+	if err != nil {
+		return nil, err
+	}
+	signingSession, err = a.collectMPCApprovalsFromSigners(ctx, session, signingSession, key)
 	if err != nil {
 		return nil, err
 	}
@@ -493,6 +506,33 @@ func (a *API) completeMPCSessionWithSigners(ctx context.Context, session *vault.
 	}
 	signature := &mpc.Signature{Curve: mpc.CurveName, R: aggregateR, Z: z, Challenge: challenge, Commitments: commitments, Shares: shares}
 	return session.CompleteMPCSigningSession(ctx, sessionID, commitments, signature)
+}
+
+func (a *API) collectMPCApprovalsFromSigners(ctx context.Context, session *vault.Session, signingSession *vault.MPCSigningSession, key *vault.MPCKey) (*vault.MPCSigningSession, error) {
+	current := signingSession
+	for _, partyID := range current.Participants {
+		if _, ok := findMPCApproval(current.Approvals, partyID); ok {
+			continue
+		}
+		participant, ok := findMPCParticipant(key.Participants, partyID)
+		if !ok {
+			continue
+		}
+		requestID := fmt.Sprintf("%s-%d", current.SessionID, partyID)
+		var resp mpcsigner.CreateApprovalRequestResponse
+		if err := a.mpcClient.GetJSON(participant.SignerURL+"/signer/approval-requests/"+requestID, &resp); err != nil {
+			continue
+		}
+		if resp.Request.Status != mpcsigner.ApprovalRequestApproved || resp.Request.Approval == nil || resp.Request.Approval.Signature == "" {
+			continue
+		}
+		updated, err := session.AddMPCApproval(ctx, current.SessionID, *resp.Request.Approval)
+		if err != nil {
+			return nil, err
+		}
+		current = updated
+	}
+	return current, nil
 }
 
 func findMPCParticipant(participants []vault.MPCParticipant, partyID uint32) (vault.MPCParticipant, bool) {
