@@ -161,6 +161,8 @@ curl -X POST -H "X-CSRF-Token: <token>" http://127.0.0.1:8080/api/v1/vaults/<vau
 
 The available algorithm is `experimental-p256-schnorr-v1`. It is suitable for protocol development and UX testing, not production funds. A production deployment should replace this boundary with a vetted threshold signature implementation such as FROST over the target production curve.
 
+Available MPC providers are exposed at `GET /api/v1/vaults/<vault_id>/mpc/providers`; the current provider reports `production_ready: false` and `supports_reshare: false` to make the experimental boundary explicit.
+
 ### Storage
 
 All records are stored as AES-256-GCM encrypted envelopes with AAD that binds the ciphertext to its vault, record type, record ID, epoch, and version. This prevents record swapping and cross-vault replay attacks.

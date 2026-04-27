@@ -15,7 +15,7 @@ import (
 	"github.com/jmcleod/ironhand/storage"
 )
 
-const MPCAlgorithmExperimentalP256Schnorr = "experimental-p256-schnorr-v1"
+const MPCAlgorithmExperimentalP256Schnorr = mpc.AlgorithmExperimentalP256Schnorr
 
 const (
 	DefaultMPCSigningSessionTTL = 15 * time.Minute
@@ -115,6 +115,7 @@ type MPCKey struct {
 	VaultID      string                 `json:"vault_id"`
 	Algorithm    string                 `json:"algorithm"`
 	Curve        string                 `json:"curve"`
+	Provider     mpc.ProviderInfo       `json:"provider"`
 	Threshold    int                    `json:"threshold"`
 	Status       MPCKeyStatus           `json:"status"`
 	CreatedAt    time.Time              `json:"created_at"`
@@ -245,9 +246,11 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 	if create.Algorithm == "" {
 		create.Algorithm = MPCAlgorithmExperimentalP256Schnorr
 	}
-	if create.Algorithm != MPCAlgorithmExperimentalP256Schnorr {
-		return nil, validationErrorf("unsupported MPC algorithm %q", create.Algorithm)
+	provider, err := mpc.GetProvider(create.Algorithm)
+	if err != nil {
+		return nil, validationErrorf("%v", err)
 	}
+	providerInfo := provider.Info()
 
 	recBuf, err := s.recordKey.Open()
 	if err != nil {
@@ -294,15 +297,16 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 			PublicShareCommitment: fragment.PublicShareCommitment,
 		})
 	}
-	meta, err := mpc.NewKeyMeta(create.KeyID, create.Threshold, parties, create.Commitments)
+	meta, err := provider.NewKeyMeta(create.KeyID, create.Threshold, parties, create.Commitments)
 	if err != nil {
 		return nil, err
 	}
 	key := &MPCKey{
 		KeyID:        create.KeyID,
 		VaultID:      s.vault.id,
-		Algorithm:    create.Algorithm,
-		Curve:        mpc.CurveName,
+		Algorithm:    providerInfo.Algorithm,
+		Curve:        providerInfo.Curve,
+		Provider:     providerInfo,
 		Threshold:    create.Threshold,
 		Status:       MPCKeyStatusActive,
 		CreatedAt:    time.Now().UTC(),
@@ -413,6 +417,9 @@ func (s *Session) SaveMPCDKGAttempt(ctx context.Context, attempt MPCDKGAttempt) 
 	}
 	if attempt.Algorithm == "" {
 		attempt.Algorithm = MPCAlgorithmExperimentalP256Schnorr
+	}
+	if _, err := mpc.GetProvider(attempt.Algorithm); err != nil {
+		return nil, validationErrorf("%v", err)
 	}
 	if attempt.Status == "" {
 		attempt.Status = MPCDKGStatusStarted
@@ -713,11 +720,15 @@ func (s *Session) CompleteMPCSigningSession(ctx context.Context, sessionID strin
 		if err != nil {
 			return err
 		}
+		provider, err := mpc.GetProvider(key.Algorithm)
+		if err != nil {
+			return err
+		}
 		approvalCount := countValidSessionApprovals(session, key)
 		if approvalCount < key.Threshold {
 			return fmt.Errorf("MPC signing session %q needs %d approvals, has %d", sessionID, key.Threshold, approvalCount)
 		}
-		if signature == nil || !mpc.Verify(session.Message, key.PublicKeyPoint(), signature) {
+		if signature == nil || !provider.Verify(session.Message, key.PublicKeyPoint(), signature) {
 			session.Status = MPCSigningSessionFailed
 			return fmt.Errorf("MPC signature verification failed")
 		}

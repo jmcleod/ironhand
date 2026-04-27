@@ -886,6 +886,36 @@ components:
           items:
             type: string
 
+    MPCProviderInfo:
+      type: object
+      properties:
+        algorithm:
+          type: string
+          enum: [experimental-p256-schnorr-v1]
+        curve:
+          type: string
+        status:
+          type: string
+          enum: [experimental, production]
+        domain:
+          type: string
+        production_ready:
+          type: boolean
+        supports_keygen:
+          type: boolean
+        supports_signing:
+          type: boolean
+        supports_reshare:
+          type: boolean
+
+    ListMPCProvidersResponse:
+      type: object
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/MPCProviderInfo'
+
     MPCSignature:
       type: object
       properties:
@@ -1017,6 +1047,8 @@ components:
           enum: [experimental-p256-schnorr-v1]
         curve:
           type: string
+        provider:
+          $ref: '#/components/schemas/MPCProviderInfo'
         threshold:
           type: integer
         status:
@@ -2547,6 +2579,30 @@ paths:
           description: Unauthorized
         '403':
           description: Experimental MPC disabled or step-up required
+
+  /vaults/{vaultID}/mpc/providers:
+    get:
+      summary: List available MPC providers
+      operationId: listMPCProviders
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MPC provider list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMPCProvidersResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Experimental MPC disabled
 
   /vaults/{vaultID}/mpc/keys:
     get:

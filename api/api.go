@@ -383,6 +383,7 @@ func (a *API) Router() chi.Router {
 		// signing sessions are attached to vault membership.
 		r.Route("/mpc", func(r chi.Router) {
 			r.Use(a.requireExperimentalMPC)
+			r.Get("/providers", a.ListMPCProviders)
 			r.Post("/signers/{memberID}", a.RegisterMPCSigner)
 			r.Get("/keys", a.ListMPCKeys)
 			r.Post("/keys", a.CreateMPCKey)

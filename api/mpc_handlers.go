@@ -26,6 +26,12 @@ func (a *API) requireExperimentalMPC(next http.Handler) http.Handler {
 	})
 }
 
+func (a *API) ListMPCProviders(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, struct {
+		Providers []mpc.ProviderInfo `json:"providers"`
+	}{Providers: mpc.SupportedProviders()})
+}
+
 func (a *API) RegisterMPCSigner(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	memberID := chi.URLParam(r, "memberID")
@@ -429,12 +435,17 @@ func (a *API) orchestrateMPCDKG(ctx context.Context, session *vault.Session, vau
 	if len(selected) < req.Threshold {
 		return req, nil, vault.ValidationError{Message: fmt.Sprintf("need at least %d active MPC signers, found %d", req.Threshold, len(selected))}
 	}
+	provider, err := mpc.GetProvider(req.Algorithm)
+	if err != nil {
+		return req, nil, vault.ValidationError{Message: err.Error()}
+	}
+	req.Algorithm = provider.Info().Algorithm
 	dkg := &mpcDKGOrchestration{SessionID: uuid.New(), KeyID: req.KeyID, Members: selected}
 	attempt := vault.MPCDKGAttempt{
 		DKGSessionID: dkg.SessionID,
 		VaultID:      vaultID,
 		KeyID:        req.KeyID,
-		Algorithm:    req.Algorithm,
+		Algorithm:    provider.Info().Algorithm,
 		Threshold:    req.Threshold,
 		Status:       vault.MPCDKGStatusStarted,
 		Members:      dkgAttemptMembers(selected),
@@ -600,11 +611,15 @@ func (a *API) completeMPCSessionWithSigners(ctx context.Context, session *vault.
 		}
 		commitments = append(commitments, commitment)
 	}
-	aggregateR, err := mpc.AggregateCommitments(commitments)
+	provider, err := mpc.GetProvider(key.Algorithm)
 	if err != nil {
 		return nil, err
 	}
-	challenge, err := mpc.ChallengeHex(key.PublicKeyPoint(), aggregateR, signingSession.Message)
+	aggregateR, err := provider.AggregateCommitments(commitments)
+	if err != nil {
+		return nil, err
+	}
+	challenge, err := provider.ChallengeHex(key.PublicKeyPoint(), aggregateR, signingSession.Message)
 	if err != nil {
 		return nil, err
 	}
@@ -627,11 +642,11 @@ func (a *API) completeMPCSessionWithSigners(ctx context.Context, session *vault.
 		}
 		shares = append(shares, share)
 	}
-	z, err := mpc.CombineSignatureShares(shares)
+	z, err := provider.CombineSignatureShares(shares)
 	if err != nil {
 		return nil, err
 	}
-	signature := &mpc.Signature{Curve: mpc.CurveName, R: aggregateR, Z: z, Challenge: challenge, Commitments: commitments, Shares: shares}
+	signature := &mpc.Signature{Curve: provider.Info().Curve, R: aggregateR, Z: z, Challenge: challenge, Commitments: commitments, Shares: shares}
 	return session.CompleteMPCSigningSession(ctx, sessionID, commitments, signature)
 }
 

@@ -722,6 +722,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vaults/{vaultID}/mpc/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List available MPC providers */
+        get: operations["listMPCProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/vaults/{vaultID}/mpc/keys": {
         parameters: {
             query?: never;
@@ -1467,6 +1484,21 @@ export interface components {
             allowed?: boolean;
             reasons?: string[];
         };
+        MPCProviderInfo: {
+            /** @enum {string} */
+            algorithm?: "experimental-p256-schnorr-v1";
+            curve?: string;
+            /** @enum {string} */
+            status?: "experimental" | "production";
+            domain?: string;
+            production_ready?: boolean;
+            supports_keygen?: boolean;
+            supports_signing?: boolean;
+            supports_reshare?: boolean;
+        };
+        ListMPCProvidersResponse: {
+            providers?: components["schemas"]["MPCProviderInfo"][];
+        };
         MPCSignature: {
             curve?: string;
             r?: components["schemas"]["MPCPoint"];
@@ -1530,6 +1562,7 @@ export interface components {
             /** @enum {string} */
             algorithm?: "experimental-p256-schnorr-v1";
             curve?: string;
+            provider?: components["schemas"]["MPCProviderInfo"];
             threshold?: number;
             /** @enum {string} */
             status?: "active" | "disabled" | "archived" | "rotation_required" | "reshare_required" | "destroyed";
@@ -3434,6 +3467,42 @@ export interface operations {
                 content?: never;
             };
             /** @description Experimental MPC disabled or step-up required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listMPCProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vaultID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MPC provider list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListMPCProvidersResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled */
             403: {
                 headers: {
                     [name: string]: unknown;
