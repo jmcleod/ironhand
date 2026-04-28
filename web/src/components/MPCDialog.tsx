@@ -25,6 +25,7 @@ import {
   registerMPCSigner,
   rotateMPCKey,
   updateMPCKeyStatus,
+  type CreateMPCKeyInput,
   type MPCDKGAttempt,
   type MPCKey,
   type MPCMetrics,
@@ -78,6 +79,11 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
   const [phase, setPhase] = useState<WorkflowPhase>('idle');
   const [threshold, setThreshold] = useState(2);
   const [selectedMemberIDs, setSelectedMemberIDs] = useState<string[]>([]);
+  const [recoveryKeyID, setRecoveryKeyID] = useState('');
+  const [recoveryDKGSessionID, setRecoveryDKGSessionID] = useState('');
+  const [recoveryThreshold, setRecoveryThreshold] = useState(2);
+  const [recoveryMemberIDs, setRecoveryMemberIDs] = useState('');
+  const [recoveryArtifacts, setRecoveryArtifacts] = useState('{\n  "commitments": [],\n  "fragments": {}\n}');
   const [signerMemberID, setSignerMemberID] = useState('');
   const [signerURL, setSignerURL] = useState('');
   const [encPub, setEncPub] = useState('');
@@ -174,6 +180,43 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
       if (!runStepUp(run, err)) toast({ title: 'Key creation failed', description: (err as Error).message, variant: 'destructive' });
     } finally {
       setPhase('idle');
+      setBusy(false);
+    }
+  };
+
+  const handleRecoveryImport = async () => {
+    const run = () => void handleRecoveryImport();
+    setBusy(true);
+    try {
+      const parsed = JSON.parse(recoveryArtifacts) as {
+        commitments?: unknown[];
+        fragments?: Record<string, unknown>;
+        policy?: Record<string, unknown>;
+      };
+      if (!Array.isArray(parsed.commitments) || !parsed.fragments || typeof parsed.fragments !== 'object') {
+        throw new Error('Recovery JSON must include commitments[] and fragments{}.');
+      }
+      const member_ids = recoveryMemberIDs.split(',').map((id) => id.trim()).filter(Boolean);
+      const recoveryRequest: CreateMPCKeyInput = {
+        key_id: recoveryKeyID.trim() || undefined,
+        import_mode: 'recovery',
+        dkg_session_id: recoveryDKGSessionID.trim(),
+        threshold: recoveryThreshold,
+        member_ids,
+        commitments: parsed.commitments as CreateMPCKeyInput['commitments'],
+        fragments: parsed.fragments as CreateMPCKeyInput['fragments'],
+        policy: parsed.policy as CreateMPCKeyInput['policy'],
+      };
+      const key = await createMPCKey(vaultId, {
+        ...recoveryRequest,
+      });
+      setKeys((prev) => [key, ...prev]);
+      setSelectedKeyID(key.key_id);
+      await loadMPCState();
+      toast({ title: 'Recovery key imported', description: `${key.threshold} of ${key.participants.length} recovery key is active.` });
+    } catch (err) {
+      if (!runStepUp(run, err)) toast({ title: 'Recovery import failed', description: (err as Error).message, variant: 'destructive' });
+    } finally {
       setBusy(false);
     }
   };
@@ -345,11 +388,12 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
 
           {loading ? <p className="text-sm text-muted-foreground">Loading MPC state...</p> : (
             <Tabs defaultValue="signers" className="mt-2">
-              <TabsList className="grid w-full grid-cols-5">
+              <TabsList className="grid w-full grid-cols-6">
                 <TabsTrigger value="providers"><ShieldCheck className="mr-2 h-4 w-4" /> Providers</TabsTrigger>
                 <TabsTrigger value="signers"><RadioTower className="mr-2 h-4 w-4" /> Signers</TabsTrigger>
                 <TabsTrigger value="keys"><UsersRound className="mr-2 h-4 w-4" /> Keys</TabsTrigger>
                 <TabsTrigger value="dkg"><Loader2 className="mr-2 h-4 w-4" /> DKG</TabsTrigger>
+                <TabsTrigger value="recovery"><AlertTriangle className="mr-2 h-4 w-4" /> Recovery</TabsTrigger>
                 <TabsTrigger value="sessions"><Play className="mr-2 h-4 w-4" /> Sessions</TabsTrigger>
               </TabsList>
 
@@ -492,6 +536,47 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                     </div>
                   </section>
                 ))}
+              </TabsContent>
+
+              <TabsContent value="recovery" className="space-y-4">
+                <Alert className="border-amber-500/40 bg-amber-500/5">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+                  <AlertTitle>Recovery import is intentionally strict</AlertTitle>
+                  <AlertDescription>
+                    Only import artifacts from a trusted recovery ceremony. Every fragment must include a signer attestation bound to the vault, key, DKG session, public commitments, and encrypted fragment envelope.
+                  </AlertDescription>
+                </Alert>
+                <section className="space-y-3 rounded-xl border border-border bg-muted/20 p-4">
+                  <h3 className="text-sm font-semibold">Import recovery artifacts</h3>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div>
+                      <Label>Key ID</Label>
+                      <Input placeholder="optional, generated if empty" value={recoveryKeyID} onChange={(e) => setRecoveryKeyID(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>DKG session ID</Label>
+                      <Input placeholder="required attested ceremony ID" value={recoveryDKGSessionID} onChange={(e) => setRecoveryDKGSessionID(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Threshold</Label>
+                      <Input type="number" min={2} value={recoveryThreshold} onChange={(e) => setRecoveryThreshold(Number(e.target.value))} />
+                    </div>
+                  </div>
+                  <div>
+                    <Label>Member IDs</Label>
+                    <Input placeholder="comma-separated member IDs; leave empty to use eligible signers" value={recoveryMemberIDs} onChange={(e) => setRecoveryMemberIDs(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Recovery JSON</Label>
+                    <Textarea value={recoveryArtifacts} onChange={(e) => setRecoveryArtifacts(e.target.value)} rows={10} className="font-mono text-xs" />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Expected shape: {"{ \"commitments\": [...], \"fragments\": { \"member-id\": { ...attested fragment... } }, \"policy\": {...} }"}
+                    </p>
+                  </div>
+                  <Button disabled={busy || !recoveryDKGSessionID || recoveryThreshold < 2} onClick={handleRecoveryImport}>
+                    Import recovery key
+                  </Button>
+                </section>
               </TabsContent>
 
               <TabsContent value="sessions" className="space-y-4">

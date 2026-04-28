@@ -35,7 +35,7 @@ Coordinator-run DKG stores a vault DKG attempt, starts/finalizes selected signer
 
 Replacement-key rotation follows the same rule and only archives the old key after all selected signers commit the replacement. This prevents a vault from moving to a replacement key that signer processes cannot actually use.
 
-Manual key imports are deliberately narrow. Supplied fragments must be keyed by member ID, bound to the requested key ID and party ID, use the supported encrypted-fragment envelope, and expose a public share commitment that matches the submitted DKG commitments. The vault still cannot decrypt signer fragments; production-grade import should add signer attestations or a vetted provider import proof.
+Manual key imports are deliberately narrow. Supplied fragments must be keyed by member ID, bound to the requested key ID and party ID, use the supported encrypted-fragment envelope, and expose a public share commitment that matches the submitted DKG commitments. The vault still cannot decrypt signer fragments, so it requires signer attestations and envelope-hash binding for recovery imports. A future production provider should add provider-specific import proofs or disable manual import entirely.
 
 ## Policy And Completion Validation
 
@@ -63,3 +63,21 @@ Signer state files contain sealed signer identity, DKG/key state, and local appr
 3. If DKG fails, inspect `last_error` on the DKG attempt and abort stale attempts.
 4. For signing, request approvals from selected parties, approve locally on each signer, then complete the session.
 5. After member revocation, rotate affected keys using replacement-key rotation; keys marked `reshare_required` should not be treated as clean production keys.
+
+## Recovery Import Procedure
+
+Recovery import is available from the WebUI MPC Recovery tab and `POST /api/v1/vaults/<vault_id>/mpc/keys` with `import_mode: "recovery"`.
+
+The request must include:
+
+- `dkg_session_id` from the ceremony that produced the artifacts.
+- `threshold` and the intended member set.
+- `commitments` from every selected DKG participant.
+- `fragments` keyed by member ID.
+- Per-fragment signer attestations covering vault ID, key ID, party ID, DKG session ID, commitments hash, public share commitment, approval public key, and encrypted fragment envelope hash.
+
+The vault rejects recovery artifacts if the public share commitment does not match the DKG commitments, if the attested envelope hash does not match the encrypted fragment payload, or if the signer attestation does not verify against the registered member approval key.
+
+## Threat Model
+
+The MPC integration threat model and invariant-to-test map are maintained in `docs/security/mpc-threat-model.md`.

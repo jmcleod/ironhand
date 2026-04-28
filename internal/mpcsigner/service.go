@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ type Service struct {
 	edPriv   ed25519.PrivateKey
 	identity mpc.SignerIdentity
 	operator []byte
+	started  time.Time
 
 	mu        sync.Mutex
 	keys      map[string]*keyState
@@ -113,6 +115,7 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 		ecdhPriv:  ecdhPriv,
 		edPriv:    edPriv,
 		identity:  identity,
+		started:   time.Now().UTC(),
 		keys:      keys,
 		approvals: approvals,
 	}
@@ -142,6 +145,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("GET /signer/identity", s.handleIdentity)
 	mux.HandleFunc("GET /signer/health", s.handleHealth)
 	mux.HandleFunc("GET /signer/ready", s.handleReady)
+	mux.HandleFunc("GET /signer/status", s.handleStatus)
 	mux.HandleFunc("POST /signer/dkg/start", s.handleStartDKG)
 	mux.HandleFunc("POST /signer/dkg/share", s.handleReceiveShare)
 	mux.HandleFunc("POST /signer/dkg/finalize", s.handleFinalizeDKG)
@@ -179,6 +183,10 @@ func (s *Service) handleReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.healthSnapshot(status))
+}
+
+func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.healthSnapshot("ok"))
 }
 
 func (s *Service) handleStartDKG(w http.ResponseWriter, r *http.Request) {
@@ -898,16 +906,18 @@ func (s *Service) ensureStateLocked(keyID string, threshold int, members []Membe
 	return state
 }
 
-func (s *Service) healthSnapshot(status string) map[string]any {
+func (s *Service) healthSnapshot(status string) StatusResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dkg := make(map[string]int)
+	pendingSigningSessions := 0
 	for _, state := range s.keys {
 		keyStatus := state.dkgStatus
 		if keyStatus == "" {
 			keyStatus = "unknown"
 		}
 		dkg[keyStatus]++
+		pendingSigningSessions += len(state.nonces)
 	}
 	approvals := make(map[ApprovalRequestStatus]int)
 	now := time.Now().UTC()
@@ -915,15 +925,28 @@ func (s *Service) healthSnapshot(status string) map[string]any {
 		refreshApprovalRequestStatus(request, now)
 		approvals[request.Status]++
 	}
-	return map[string]any{
-		"status":                  status,
-		"member_id":               s.memberID,
-		"party_id":                s.partyID,
-		"url":                     s.identity.URL,
-		"durable_state":           s.store != nil,
-		"keys":                    len(s.keys),
-		"dkg_statuses":            dkg,
-		"approval_request_counts": approvals,
+	storeStatus := "volatile"
+	if s.store != nil {
+		storeStatus = "sealed_file"
+	}
+	return StatusResponse{
+		Status:                 status,
+		MemberID:               s.memberID,
+		PartyID:                s.partyID,
+		URL:                    s.identity.URL,
+		DurableState:           s.store != nil,
+		StoreStatus:            storeStatus,
+		Keys:                   len(s.keys),
+		PendingSigningSessions: pendingSigningSessions,
+		DKGStatuses:            dkg,
+		ApprovalRequestCounts:  approvals,
+		StartedAt:              s.started,
+		UptimeSeconds:          int64(now.Sub(s.started).Seconds()),
+		Runtime: RuntimeInfo{
+			GoVersion: runtime.Version(),
+			GOOS:      runtime.GOOS,
+			GOARCH:    runtime.GOARCH,
+		},
 	}
 }
 

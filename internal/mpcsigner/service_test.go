@@ -130,13 +130,21 @@ func TestSignerHealthAndReadyExposeOperationalState(t *testing.T) {
 	rec := httptest.NewRecorder()
 	service.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	var health map[string]any
+	var health StatusResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &health))
-	assert.Equal(t, "ok", health["status"])
-	assert.Equal(t, "member-1", health["member_id"])
-	assert.Equal(t, float64(1), health["keys"])
+	assert.Equal(t, "ok", health.Status)
+	assert.Equal(t, "member-1", health.MemberID)
+	assert.Equal(t, 1, health.Keys)
+	assert.Equal(t, "volatile", health.StoreStatus)
+	assert.NotEmpty(t, health.Runtime.GoVersion)
 
 	req = httptest.NewRequest(http.MethodGet, "/signer/ready", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	service.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	req = httptest.NewRequest(http.MethodGet, "/signer/status", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	rec = httptest.NewRecorder()
 	service.Handler().ServeHTTP(rec, req)

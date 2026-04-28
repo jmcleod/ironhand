@@ -787,6 +787,29 @@ export async function finishStepUpPasskey(credential: unknown): Promise<StepUpRe
 
 export interface MPCPoint { x: string; y: string }
 export interface MPCPublicKey { curve: string; encoded: string; x: string; y: string; threshold: number; parties: number }
+export interface MPCPublicCommitment { partyId: number; coefficients: MPCPoint[] }
+export interface MPCFragmentAttestation {
+  vault_id: string;
+  dkg_session_id: string;
+  key_id: string;
+  party_id: number;
+  public_share_commitment: MPCPoint;
+  commitments_hash: string;
+  fragment_envelope_hash: string;
+  approval_public_key: string;
+  created_at: string;
+  signature: string;
+}
+export interface MPCEncryptedFragment {
+  key_id: string;
+  party_id: number;
+  algorithm: string;
+  ephemeral_public_key: string;
+  nonce: string;
+  ciphertext: string;
+  public_share_commitment: MPCPoint;
+  attestation?: MPCFragmentAttestation;
+}
 export interface MPCProviderInfo {
   algorithm: string;
   curve: string;
@@ -959,7 +982,19 @@ export async function rotateMPCKey(vaultID: string, keyID: string, req: { key_id
   return (await resp.json()) as MPCKey;
 }
 
-export async function createMPCKey(vaultID: string, req: { threshold: number; member_ids?: string[]; policy?: MPCPolicy }): Promise<MPCKey> {
+export interface CreateMPCKeyInput {
+  key_id?: string;
+  algorithm?: string;
+  import_mode?: 'orchestrated' | 'recovery';
+  dkg_session_id?: string;
+  threshold: number;
+  member_ids?: string[];
+  commitments?: MPCPublicCommitment[];
+  fragments?: Record<string, MPCEncryptedFragment>;
+  policy?: MPCPolicy;
+}
+
+export async function createMPCKey(vaultID: string, req: CreateMPCKeyInput): Promise<MPCKey> {
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/keys`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

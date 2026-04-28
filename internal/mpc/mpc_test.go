@@ -3,6 +3,7 @@ package mpc
 import (
 	"math/big"
 	"testing"
+	"time"
 )
 
 func TestDistributedKeyGenerationAndSignatureMath(t *testing.T) {
@@ -102,5 +103,103 @@ func TestNormalizeParticipantsRejectsDuplicates(t *testing.T) {
 	_, err := NormalizeParticipants([]int{1, 1}, 2, []int{1, 2, 3})
 	if err == nil {
 		t.Fatal("NormalizeParticipants() error = nil, want duplicate error")
+	}
+}
+
+func TestFragmentEnvelopeHashAndAttestationBindCiphertext(t *testing.T) {
+	_, approvalPriv, identity, err := GenerateSignerIdentity(1, "party-1", "https://signer-1.test")
+	if err != nil {
+		t.Fatalf("GenerateSignerIdentity() error = %v", err)
+	}
+	fragment, err := EncryptFragment("key-1", 1, identity.EncryptionPublicKey, []byte("share"), Point{X: "x", Y: "y"})
+	if err != nil {
+		t.Fatalf("EncryptFragment() error = %v", err)
+	}
+	hash, err := FragmentEnvelopeHash(fragment)
+	if err != nil {
+		t.Fatalf("FragmentEnvelopeHash() error = %v", err)
+	}
+	attestation, err := SignFragmentAttestation(approvalPriv, FragmentAttestation{
+		VaultID:               "vault-1",
+		DKGSessionID:          "dkg-1",
+		KeyID:                 fragment.KeyID,
+		PartyID:               fragment.PartyID,
+		PublicShareCommitment: fragment.PublicShareCommitment,
+		CommitmentsHash:       "commitments",
+		FragmentEnvelopeHash:  hash,
+		ApprovalPublicKey:     identity.ApprovalPublicKey,
+		CreatedAt:             time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("SignFragmentAttestation() error = %v", err)
+	}
+	if !VerifyFragmentAttestation(identity.ApprovalPublicKey, attestation) {
+		t.Fatal("VerifyFragmentAttestation() returned false for valid attestation")
+	}
+	tampered := fragment
+	tampered.Ciphertext = "different-ciphertext"
+	tamperedHash, err := FragmentEnvelopeHash(tampered)
+	if err != nil {
+		t.Fatalf("FragmentEnvelopeHash(tampered) error = %v", err)
+	}
+	if tamperedHash == hash {
+		t.Fatal("FragmentEnvelopeHash() did not change when ciphertext changed")
+	}
+	attestation.FragmentEnvelopeHash = tamperedHash
+	if VerifyFragmentAttestation(identity.ApprovalPublicKey, attestation) {
+		t.Fatal("VerifyFragmentAttestation() accepted a tampered envelope hash")
+	}
+}
+
+func TestProviderValidateKeyFragmentsRejectsDuplicateAndUnexpectedParties(t *testing.T) {
+	provider, err := GetProvider(AlgorithmExperimentalP256Schnorr)
+	if err != nil {
+		t.Fatalf("GetProvider() error = %v", err)
+	}
+	parties := []PartyInfo{{ID: 1}, {ID: 2}}
+	commitments := []PublicCommitment{
+		{PartyID: 1, Coefficients: []Point{ScalarBasePoint(big.NewInt(2)), ScalarBasePoint(big.NewInt(3))}},
+		{PartyID: 2, Coefficients: []Point{ScalarBasePoint(big.NewInt(5)), ScalarBasePoint(big.NewInt(7))}},
+	}
+	makeFragment := func(partyID int) EncryptedFragment {
+		share, err := PublicShareCommitment(commitments, partyID)
+		if err != nil {
+			t.Fatalf("PublicShareCommitment(%d) error = %v", partyID, err)
+		}
+		return EncryptedFragment{
+			KeyID:                 "key-1",
+			PartyID:               partyID,
+			Algorithm:             FragmentEnvelope,
+			Nonce:                 "nonce",
+			Ciphertext:            "ciphertext",
+			PublicShareCommitment: share,
+		}
+	}
+	_, _, identity, err := GenerateSignerIdentity(1, "party-1", "")
+	if err != nil {
+		t.Fatalf("GenerateSignerIdentity() error = %v", err)
+	}
+	valid1, err := EncryptFragment("key-1", 1, identity.EncryptionPublicKey, []byte("share-1"), makeFragment(1).PublicShareCommitment)
+	if err != nil {
+		t.Fatalf("EncryptFragment() error = %v", err)
+	}
+	_, _, identity2, err := GenerateSignerIdentity(2, "party-2", "")
+	if err != nil {
+		t.Fatalf("GenerateSignerIdentity() error = %v", err)
+	}
+	valid2, err := EncryptFragment("key-1", 2, identity2.EncryptionPublicKey, []byte("share-2"), makeFragment(2).PublicShareCommitment)
+	if err != nil {
+		t.Fatalf("EncryptFragment() error = %v", err)
+	}
+	if err := provider.ValidateKeyFragments("key-1", parties, commitments, []EncryptedFragment{valid1, valid2}); err != nil {
+		t.Fatalf("ValidateKeyFragments(valid) error = %v", err)
+	}
+	if err := provider.ValidateKeyFragments("key-1", parties, commitments, []EncryptedFragment{valid1, valid1}); err == nil {
+		t.Fatal("ValidateKeyFragments() accepted duplicate party fragments")
+	}
+	unexpected := valid2
+	unexpected.PartyID = 3
+	if err := provider.ValidateKeyFragments("key-1", parties, commitments, []EncryptedFragment{valid1, unexpected}); err == nil {
+		t.Fatal("ValidateKeyFragments() accepted an unexpected party")
 	}
 }

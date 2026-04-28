@@ -6,6 +6,28 @@ import (
 	"github.com/jmcleod/ironhand/internal/mpc"
 )
 
+type StatusResponse struct {
+	Status                 string                        `json:"status"`
+	MemberID               string                        `json:"member_id"`
+	PartyID                uint32                        `json:"party_id"`
+	URL                    string                        `json:"url,omitempty"`
+	DurableState           bool                          `json:"durable_state"`
+	StoreStatus            string                        `json:"store_status"`
+	Keys                   int                           `json:"keys"`
+	PendingSigningSessions int                           `json:"pending_signing_sessions"`
+	DKGStatuses            map[string]int                `json:"dkg_statuses"`
+	ApprovalRequestCounts  map[ApprovalRequestStatus]int `json:"approval_request_counts"`
+	StartedAt              time.Time                     `json:"started_at"`
+	UptimeSeconds          int64                         `json:"uptime_seconds"`
+	Runtime                RuntimeInfo                   `json:"runtime"`
+}
+
+type RuntimeInfo struct {
+	GoVersion string `json:"go_version"`
+	GOOS      string `json:"goos"`
+	GOARCH    string `json:"goarch"`
+}
+
 type Member struct {
 	MemberID            string `json:"member_id"`
 	PartyID             uint32 `json:"party_id"`
