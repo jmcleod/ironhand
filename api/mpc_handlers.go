@@ -129,6 +129,7 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 		}
 		req = prepared
 		dkg = orchestration
+		req.DKGSessionID = orchestration.SessionID
 	} else {
 		if req.ImportMode != string(vault.MPCKeyImportModeRecovery) {
 			writeError(w, http.StatusBadRequest, "manual MPC key artifacts require import_mode \"recovery\"")
@@ -138,16 +139,21 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "recovery MPC key import requires commitments and fragments")
 			return
 		}
+		if req.DKGSessionID == "" {
+			writeError(w, http.StatusBadRequest, "recovery MPC key import requires dkg_session_id")
+			return
+		}
 	}
 	key, err := session.CreateMPCKey(r.Context(), vault.MPCKeyCreate{
-		KeyID:       req.KeyID,
-		Algorithm:   req.Algorithm,
-		ImportMode:  vault.MPCKeyImportMode(req.ImportMode),
-		Threshold:   req.Threshold,
-		MemberIDs:   req.MemberIDs,
-		Commitments: req.Commitments,
-		Fragments:   req.Fragments,
-		Policy:      req.Policy,
+		KeyID:        req.KeyID,
+		Algorithm:    req.Algorithm,
+		ImportMode:   vault.MPCKeyImportMode(req.ImportMode),
+		DKGSessionID: req.DKGSessionID,
+		Threshold:    req.Threshold,
+		MemberIDs:    req.MemberIDs,
+		Commitments:  req.Commitments,
+		Fragments:    req.Fragments,
+		Policy:       req.Policy,
 	})
 	if err != nil {
 		if dkg != nil {
@@ -327,6 +333,7 @@ func (a *API) RotateMPCKey(w http.ResponseWriter, r *http.Request) {
 		KeyID:         prepared.KeyID,
 		Algorithm:     prepared.Algorithm,
 		ImportMode:    vault.MPCKeyImportModeOrchestrated,
+		DKGSessionID:  dkg.SessionID,
 		Threshold:     prepared.Threshold,
 		MemberIDs:     prepared.MemberIDs,
 		Commitments:   prepared.Commitments,

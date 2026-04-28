@@ -43,6 +43,7 @@ type FragmentAttestation struct {
 	PartyID               int       `json:"party_id"`
 	PublicShareCommitment Point     `json:"public_share_commitment"`
 	CommitmentsHash       string    `json:"commitments_hash"`
+	FragmentEnvelopeHash  string    `json:"fragment_envelope_hash"`
 	ApprovalPublicKey     string    `json:"approval_public_key"`
 	CreatedAt             time.Time `json:"created_at"`
 	Signature             string    `json:"signature"`
@@ -192,6 +193,32 @@ func CommitmentsHash(commitments []PublicCommitment) (string, error) {
 	return base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
+func FragmentEnvelopeHash(fragment EncryptedFragment) (string, error) {
+	payload := struct {
+		KeyID                 string `json:"key_id"`
+		PartyID               int    `json:"party_id"`
+		Algorithm             string `json:"algorithm"`
+		EphemeralPublicKey    string `json:"ephemeral_public_key"`
+		Nonce                 string `json:"nonce"`
+		Ciphertext            string `json:"ciphertext"`
+		PublicShareCommitment Point  `json:"public_share_commitment"`
+	}{
+		KeyID:                 fragment.KeyID,
+		PartyID:               fragment.PartyID,
+		Algorithm:             fragment.Algorithm,
+		EphemeralPublicKey:    fragment.EphemeralPublicKey,
+		Nonce:                 fragment.Nonce,
+		Ciphertext:            fragment.Ciphertext,
+		PublicShareCommitment: fragment.PublicShareCommitment,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return base64.StdEncoding.EncodeToString(sum[:]), nil
+}
+
 func SignFragmentAttestation(privateKey ed25519.PrivateKey, attestation FragmentAttestation) (FragmentAttestation, error) {
 	if len(privateKey) != ed25519.PrivateKeySize {
 		return FragmentAttestation{}, errors.New("invalid ed25519 private key")
@@ -224,6 +251,7 @@ func FragmentAttestationPayload(attestation FragmentAttestation) string {
 		attestation.PublicShareCommitment.X,
 		attestation.PublicShareCommitment.Y,
 		attestation.CommitmentsHash,
+		attestation.FragmentEnvelopeHash,
 		attestation.ApprovalPublicKey,
 		attestation.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}, "\n")

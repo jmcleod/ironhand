@@ -73,13 +73,14 @@ func TestMPCDemoHarness(t *testing.T) {
 		require.Equal(t, dkg.SessionID, fragment.Attestation.DKGSessionID)
 	}
 	key, err := session.CreateMPCKey(ctx, vault.MPCKeyCreate{
-		KeyID:       prepared.KeyID,
-		Algorithm:   prepared.Algorithm,
-		Threshold:   prepared.Threshold,
-		MemberIDs:   prepared.MemberIDs,
-		Commitments: prepared.Commitments,
-		Fragments:   prepared.Fragments,
-		Policy:      prepared.Policy,
+		KeyID:        prepared.KeyID,
+		Algorithm:    prepared.Algorithm,
+		DKGSessionID: dkg.SessionID,
+		Threshold:    prepared.Threshold,
+		MemberIDs:    prepared.MemberIDs,
+		Commitments:  prepared.Commitments,
+		Fragments:    prepared.Fragments,
+		Policy:       prepared.Policy,
 	})
 	require.NoError(t, err)
 	require.NoError(t, api.commitMPCDKG(ctx, dkg))
@@ -453,7 +454,7 @@ func newDemoKeyEnv(t *testing.T, name string) *demoKeyEnv {
 	}
 	prepared, dkg, err := api.orchestrateMPCDKG(ctx, session, v.ID(), CreateMPCKeyRequest{KeyID: "demo-" + name + "-key", Threshold: 2})
 	require.NoError(t, err)
-	key, err := session.CreateMPCKey(ctx, vault.MPCKeyCreate{KeyID: prepared.KeyID, Algorithm: prepared.Algorithm, Threshold: prepared.Threshold, MemberIDs: prepared.MemberIDs, Commitments: prepared.Commitments, Fragments: prepared.Fragments, Policy: prepared.Policy})
+	key, err := session.CreateMPCKey(ctx, vault.MPCKeyCreate{KeyID: prepared.KeyID, Algorithm: prepared.Algorithm, DKGSessionID: dkg.SessionID, Threshold: prepared.Threshold, MemberIDs: prepared.MemberIDs, Commitments: prepared.Commitments, Fragments: prepared.Fragments, Policy: prepared.Policy})
 	require.NoError(t, err)
 	require.NoError(t, api.commitMPCDKG(ctx, dkg))
 	return &demoKeyEnv{api: api, session: session, vault: v, creds: creds, key: key, signers: signers}

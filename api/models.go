@@ -177,14 +177,15 @@ type RegisterMPCSignerRequest struct {
 
 // CreateMPCKeyRequest stores the result of a vault-scoped MPC DKG ceremony.
 type CreateMPCKeyRequest struct {
-	KeyID       string                           `json:"key_id,omitempty"`
-	Algorithm   string                           `json:"algorithm,omitempty"`
-	ImportMode  string                           `json:"import_mode,omitempty"`
-	Threshold   int                              `json:"threshold"`
-	MemberIDs   []string                         `json:"member_ids,omitempty"`
-	Commitments []mpc.PublicCommitment           `json:"commitments"`
-	Fragments   map[string]mpc.EncryptedFragment `json:"fragments"`
-	Policy      vault.MPCPolicy                  `json:"policy,omitempty"`
+	KeyID        string                           `json:"key_id,omitempty"`
+	Algorithm    string                           `json:"algorithm,omitempty"`
+	ImportMode   string                           `json:"import_mode,omitempty"`
+	DKGSessionID string                           `json:"dkg_session_id,omitempty"`
+	Threshold    int                              `json:"threshold"`
+	MemberIDs    []string                         `json:"member_ids,omitempty"`
+	Commitments  []mpc.PublicCommitment           `json:"commitments"`
+	Fragments    map[string]mpc.EncryptedFragment `json:"fragments"`
+	Policy       vault.MPCPolicy                  `json:"policy,omitempty"`
 }
 
 // CreateMPCSigningSessionRequest starts a new signing session for an MPC key.

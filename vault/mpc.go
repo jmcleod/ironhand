@@ -112,6 +112,7 @@ type MPCKeyCreate struct {
 	KeyID         string                           `json:"key_id,omitempty"`
 	Algorithm     string                           `json:"algorithm,omitempty"`
 	ImportMode    MPCKeyImportMode                 `json:"import_mode,omitempty"`
+	DKGSessionID  string                           `json:"dkg_session_id,omitempty"`
 	Threshold     int                              `json:"threshold"`
 	MemberIDs     []string                         `json:"member_ids,omitempty"`
 	Commitments   []mpc.PublicCommitment           `json:"commitments"`
@@ -276,6 +277,12 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 	if create.ImportMode != MPCKeyImportModeOrchestrated && create.ImportMode != MPCKeyImportModeRecovery {
 		return nil, validationErrorf("unsupported MPC key import_mode %q", create.ImportMode)
 	}
+	if create.DKGSessionID == "" {
+		return nil, validationErrorf("MPC key creation requires dkg_session_id")
+	}
+	if err := validateID(create.DKGSessionID, "MPC DKG session ID"); err != nil {
+		return nil, err
+	}
 	provider, err := mpc.GetProvider(create.Algorithm)
 	if err != nil {
 		return nil, validationErrorf("%v", err)
@@ -332,10 +339,8 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 	if err := provider.ValidateKeyFragments(create.KeyID, parties, create.Commitments, keyFragments); err != nil {
 		return nil, validationErrorf("%v", err)
 	}
-	if create.ImportMode == MPCKeyImportModeRecovery {
-		if err := validateMPCRecoveryFragmentAttestations(s.vault.id, create.KeyID, selected, create.Commitments, create.Fragments); err != nil {
-			return nil, err
-		}
+	if err := validateMPCFragmentAttestations(s.vault.id, create.KeyID, create.DKGSessionID, selected, create.Commitments, create.Fragments); err != nil {
+		return nil, err
 	}
 	meta, err := provider.NewKeyMeta(create.KeyID, create.Threshold, parties, create.Commitments)
 	if err != nil {
@@ -1294,7 +1299,7 @@ func validateMPCCommitments(members []Member, commitments []mpc.PublicCommitment
 	return nil
 }
 
-func validateMPCRecoveryFragmentAttestations(vaultID, keyID string, members []Member, commitments []mpc.PublicCommitment, fragments map[string]mpc.EncryptedFragment) error {
+func validateMPCFragmentAttestations(vaultID, keyID, dkgSessionID string, members []Member, commitments []mpc.PublicCommitment, fragments map[string]mpc.EncryptedFragment) error {
 	commitmentsHash, err := mpc.CommitmentsHash(commitments)
 	if err != nil {
 		return err
@@ -1302,26 +1307,30 @@ func validateMPCRecoveryFragmentAttestations(vaultID, keyID string, members []Me
 	for _, member := range members {
 		fragment := fragments[member.MemberID]
 		if fragment.Attestation == nil {
-			return validationErrorf("recovery import fragment for member %q is missing signer attestation", member.MemberID)
+			return validationErrorf("MPC fragment for member %q is missing signer attestation", member.MemberID)
 		}
 		attestation := *fragment.Attestation
-		if attestation.VaultID != vaultID || attestation.KeyID != keyID || attestation.PartyID != int(member.MPCPartyID) {
-			return validationErrorf("recovery import attestation for member %q is not bound to this vault key or party", member.MemberID)
+		if attestation.VaultID != vaultID || attestation.KeyID != keyID || attestation.PartyID != int(member.MPCPartyID) || attestation.DKGSessionID != dkgSessionID {
+			return validationErrorf("MPC fragment attestation for member %q is not bound to this vault DKG key or party", member.MemberID)
 		}
-		if attestation.DKGSessionID == "" {
-			return validationErrorf("recovery import attestation for member %q is missing dkg_session_id", member.MemberID)
+		fragmentEnvelopeHash, err := mpc.FragmentEnvelopeHash(fragment)
+		if err != nil {
+			return err
 		}
 		if attestation.CommitmentsHash != commitmentsHash {
-			return validationErrorf("recovery import attestation for member %q does not match DKG commitments", member.MemberID)
+			return validationErrorf("MPC fragment attestation for member %q does not match DKG commitments", member.MemberID)
+		}
+		if attestation.FragmentEnvelopeHash != fragmentEnvelopeHash {
+			return validationErrorf("MPC fragment attestation for member %q does not match encrypted fragment envelope", member.MemberID)
 		}
 		if attestation.PublicShareCommitment != fragment.PublicShareCommitment {
-			return validationErrorf("recovery import attestation for member %q does not match fragment public share commitment", member.MemberID)
+			return validationErrorf("MPC fragment attestation for member %q does not match fragment public share commitment", member.MemberID)
 		}
 		if attestation.ApprovalPublicKey != member.MPCApprovalPublicKey {
-			return validationErrorf("recovery import attestation for member %q does not match registered approval key", member.MemberID)
+			return validationErrorf("MPC fragment attestation for member %q does not match registered approval key", member.MemberID)
 		}
 		if !mpc.VerifyFragmentAttestation(member.MPCApprovalPublicKey, attestation) {
-			return validationErrorf("recovery import attestation for member %q has an invalid signature", member.MemberID)
+			return validationErrorf("MPC fragment attestation for member %q has an invalid signature", member.MemberID)
 		}
 	}
 	return nil

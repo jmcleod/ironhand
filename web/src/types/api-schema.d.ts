@@ -1507,6 +1507,7 @@ export interface components {
             party_id?: number;
             public_share_commitment?: components["schemas"]["MPCPoint"];
             commitments_hash?: string;
+            fragment_envelope_hash?: string;
             approval_public_key?: string;
             /** Format: date-time */
             created_at?: string;
@@ -1672,6 +1673,8 @@ export interface components {
              * @enum {string}
              */
             import_mode?: "orchestrated" | "recovery";
+            /** @description DKG ceremony identifier bound into every signer fragment attestation. Required for recovery imports and supplied automatically by coordinator-run DKG. */
+            dkg_session_id?: string;
             threshold: number;
             member_ids?: string[];
             /** @description Optional precomputed DKG commitments. If omitted with fragments, the coordinator orchestrates DKG through registered signers. */

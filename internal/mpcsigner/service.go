@@ -419,6 +419,11 @@ func (s *Service) handleFinalizeDKG(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	fragmentEnvelopeHash, err := mpc.FragmentEnvelopeHash(fragment)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	attestation, err := mpc.SignFragmentAttestation(s.edPriv, mpc.FragmentAttestation{
 		VaultID:               req.VaultID,
 		DKGSessionID:          req.DKGSessionID,
@@ -426,6 +431,7 @@ func (s *Service) handleFinalizeDKG(w http.ResponseWriter, r *http.Request) {
 		PartyID:               int(s.partyID),
 		PublicShareCommitment: publicShare,
 		CommitmentsHash:       commitmentsHash,
+		FragmentEnvelopeHash:  fragmentEnvelopeHash,
 		ApprovalPublicKey:     s.identity.ApprovalPublicKey,
 		CreatedAt:             time.Now().UTC(),
 	})

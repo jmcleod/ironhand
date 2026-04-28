@@ -60,6 +60,7 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 
 	localShares := make(map[int]*big.Int)
 	fragments := make(map[string]mpc.EncryptedFragment, len(signers))
+	const dkgSessionID = "vault-mpc-test-dkg"
 	for _, receiver := range signers {
 		localShare := big.NewInt(0)
 		for _, dealer := range signers {
@@ -72,15 +73,17 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 		require.NoError(t, err)
 		fragment, err := mpc.EncryptFragment("mpc-key-1", receiver.partyID, receiver.identity.EncryptionPublicKey, []byte(mpc.EncodeScalar(localShare)), publicShare)
 		require.NoError(t, err)
+		fragment = signTestFragmentAttestation(t, fragment, commitments, receiver.approval, receiver.identity.ApprovalPublicKey, dkgSessionID)
 		fragments[receiver.memberID] = fragment
 	}
 
 	key, err := session.CreateMPCKey(ctx, MPCKeyCreate{
-		KeyID:       "mpc-key-1",
-		Threshold:   2,
-		MemberIDs:   []string{creds.MemberID(), "bob", "carol"},
-		Commitments: commitments,
-		Fragments:   fragments,
+		KeyID:        "mpc-key-1",
+		DKGSessionID: dkgSessionID,
+		Threshold:    2,
+		MemberIDs:    []string{creds.MemberID(), "bob", "carol"},
+		Commitments:  commitments,
+		Fragments:    fragments,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, MPCAlgorithmExperimentalP256Schnorr, key.Algorithm)
@@ -95,21 +98,47 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	badFragment.PublicShareCommitment = mpc.Point{X: "bad", Y: "bad"}
 	badFragments["bob"] = badFragment
 	_, err = session.CreateMPCKey(ctx, MPCKeyCreate{
-		KeyID:       "mpc-key-1",
-		Threshold:   2,
-		MemberIDs:   []string{creds.MemberID(), "bob", "carol"},
-		Commitments: commitments,
-		Fragments:   badFragments,
+		KeyID:        "mpc-key-1",
+		DKGSessionID: dkgSessionID,
+		Threshold:    2,
+		MemberIDs:    []string{creds.MemberID(), "bob", "carol"},
+		Commitments:  commitments,
+		Fragments:    badFragments,
 	})
 	require.ErrorContains(t, err, "public share commitment")
 
+	corruptFragments := make(map[string]mpc.EncryptedFragment, len(fragments))
+	for memberID, fragment := range fragments {
+		corruptFragments[memberID] = fragment
+	}
+	corruptFragment := corruptFragments["bob"]
+	corruptFragment.Ciphertext = "corrupted"
+	corruptFragments["bob"] = corruptFragment
 	_, err = session.CreateMPCKey(ctx, MPCKeyCreate{
-		KeyID:       "mpc-key-1",
-		ImportMode:  MPCKeyImportModeRecovery,
-		Threshold:   2,
-		MemberIDs:   []string{creds.MemberID(), "bob", "carol"},
-		Commitments: commitments,
-		Fragments:   fragments,
+		KeyID:        "mpc-key-1",
+		DKGSessionID: dkgSessionID,
+		Threshold:    2,
+		MemberIDs:    []string{creds.MemberID(), "bob", "carol"},
+		Commitments:  commitments,
+		Fragments:    corruptFragments,
+	})
+	require.ErrorContains(t, err, "encrypted fragment envelope")
+
+	missingAttestationFragments := make(map[string]mpc.EncryptedFragment, len(fragments))
+	for memberID, fragment := range fragments {
+		missingAttestationFragments[memberID] = fragment
+	}
+	missingAttestationFragment := missingAttestationFragments["bob"]
+	missingAttestationFragment.Attestation = nil
+	missingAttestationFragments["bob"] = missingAttestationFragment
+	_, err = session.CreateMPCKey(ctx, MPCKeyCreate{
+		KeyID:        "mpc-key-1",
+		ImportMode:   MPCKeyImportModeRecovery,
+		DKGSessionID: dkgSessionID,
+		Threshold:    2,
+		MemberIDs:    []string{creds.MemberID(), "bob", "carol"},
+		Commitments:  commitments,
+		Fragments:    missingAttestationFragments,
 	})
 	require.ErrorContains(t, err, "missing signer attestation")
 
@@ -311,6 +340,28 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	updatedKey, err = session.GetMPCKey(ctx, key.KeyID)
 	require.NoError(t, err)
 	assert.Equal(t, MPCKeyStatusReshareRequired, updatedKey.Status)
+}
+
+func signTestFragmentAttestation(t *testing.T, fragment mpc.EncryptedFragment, commitments []mpc.PublicCommitment, approvalPriv []byte, approvalPublicKey, dkgSessionID string) mpc.EncryptedFragment {
+	t.Helper()
+	commitmentsHash, err := mpc.CommitmentsHash(commitments)
+	require.NoError(t, err)
+	fragmentEnvelopeHash, err := mpc.FragmentEnvelopeHash(fragment)
+	require.NoError(t, err)
+	attestation, err := mpc.SignFragmentAttestation(approvalPriv, mpc.FragmentAttestation{
+		VaultID:               "default",
+		DKGSessionID:          dkgSessionID,
+		KeyID:                 fragment.KeyID,
+		PartyID:               fragment.PartyID,
+		PublicShareCommitment: fragment.PublicShareCommitment,
+		CommitmentsHash:       commitmentsHash,
+		FragmentEnvelopeHash:  fragmentEnvelopeHash,
+		ApprovalPublicKey:     approvalPublicKey,
+		CreatedAt:             time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	fragment.Attestation = &attestation
+	return fragment
 }
 
 func TestEvaluateMPCPolicyMaxValue(t *testing.T) {
