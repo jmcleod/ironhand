@@ -417,6 +417,14 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                       <Badge variant="outline">transcript check {provider.deterministic_transcript_validation ? 'yes' : 'no'}</Badge>
                     </div>
                     {provider.chain_compatibility?.length ? <p className="mt-3 text-xs text-muted-foreground">Compatibility: {provider.chain_compatibility.join(', ')}</p> : null}
+                    {!provider.production_ready && provider.production_blockers?.length ? (
+                      <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-800">
+                        <p className="font-medium">Production blockers</p>
+                        <ul className="mt-2 space-y-1">
+                          {provider.production_blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+                        </ul>
+                      </div>
+                    ) : null}
                   </section>
                 ))}
               </TabsContent>

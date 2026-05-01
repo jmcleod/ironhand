@@ -831,6 +831,7 @@ export interface MPCProviderInfo {
   status: string;
   domain?: string;
   production_ready: boolean;
+  production_blockers?: string[];
   supports_keygen: boolean;
   supports_signing: boolean;
   supports_reshare: boolean;

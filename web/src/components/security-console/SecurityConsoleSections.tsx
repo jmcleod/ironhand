@@ -776,6 +776,8 @@ export function MPCSection({
   ));
   const pendingSessions = visibleSessions.filter((session) => session.status === 'pending').length || metrics?.signing_sessions_by_status?.pending || 0;
   const activeKeys = keys.filter((key) => key.status === 'active');
+  const actionRequiredKeys = keys.filter((key) => ['rotation_required', 'reshare_required', 'disabled'].includes(key.status));
+  const nonProductionKeys = keys.filter((key) => key.provider && !key.provider.production_ready);
 
   return (
     <div className="space-y-3">
@@ -785,7 +787,8 @@ export function MPCSection({
         <div className="mt-5 space-y-4">
           <MetricBlock label="Active Keys" value={loading ? '...' : activeKeys.length} tone={activeKeys.length > 0 ? 'success' : 'warning'} />
           <MetricBlock label="Pending Sessions" value={pendingSessions} tone={pendingSessions > 0 ? 'warning' : 'muted'} />
-          <MetricBlock label="Threshold" value={activeKeys[0] ? `${activeKeys[0].threshold}-of-${activeKeys[0].participants.length}` : signers.length >= 2 ? 'Configured signers' : 'Not ready'} tone={activeKeys.length > 0 ? 'success' : signers.length >= 2 ? 'warning' : 'warning'} />
+          <MetricBlock label="Key Actions" value={actionRequiredKeys.length} tone={actionRequiredKeys.length > 0 ? 'warning' : 'muted'} />
+          <MetricBlock label="Provider Gate" value={nonProductionKeys.length > 0 ? 'Experimental' : activeKeys.length > 0 ? 'Production' : 'No key'} tone={nonProductionKeys.length > 0 ? 'warning' : activeKeys.length > 0 ? 'success' : 'muted'} />
           <Button onClick={onOpenMPC}>
             <Network className="h-4 w-4" />
             Open MPC Controls
@@ -812,6 +815,11 @@ export function MPCSection({
                 </div>
                 <StatusPill tone={key.status === 'active' ? 'success' : key.status === 'disabled' ? 'warning' : 'muted'}>{key.status}</StatusPill>
               </div>
+              {key.provider && !key.provider.production_ready ? (
+                <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800">
+                  {key.provider.production_blockers?.[0] ?? 'Provider is not production ready'}
+                </div>
+              ) : null}
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {key.participants.map((participant) => (
                   <StatusPill key={`${key.key_id}-${participant.party_id}`} tone={participant.signer_status === 'offline' ? 'danger' : 'muted'}>
