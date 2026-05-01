@@ -126,6 +126,24 @@ export default function SecurityOverview({
   const mpcSigners = activeMembers.filter((member) => member.mpc_party_id || member.mpc_signer_status);
   const health = useMemo(() => secretHealth(vault), [vault]);
   const alerts = useMemo(() => riskAlerts(vault, auditEntries, auditStatus?.verified ?? auditEntries.length === 0), [vault, auditEntries, auditStatus]);
+  const activity = useMemo(() => {
+    if (!vault) return [];
+    if (auditEntries.length > 0) {
+      return auditEntries.slice(0, 6).map((entry) => ({
+        id: entry.id,
+        title: actionLabel(entry.action),
+        detail: entry.item_id || vault.name,
+        actor: memberDisplayName(entry.member_id),
+        time: new Date(entry.created_at).toLocaleTimeString(),
+        tone: entry.action === 'private_key_accessed' ? 'danger' : entry.action === 'vault_exported' ? 'warning' : 'success',
+      }));
+    }
+    return [
+      { id: 'live-posture', title: 'Posture evaluated', detail: `${health.score}/100 secret health`, actor: 'Ironhand', time: 'live', tone: health.score >= 85 ? 'success' : 'warning' },
+      { id: 'live-members', title: 'Member graph synced', detail: `${activeMembers.length} active members`, actor: 'Ironhand', time: 'live', tone: 'success' },
+      { id: 'live-audit', title: 'Audit chain checked', detail: auditVerified ? 'Verified' : 'Awaiting events', actor: 'Ironhand', time: 'live', tone: auditVerified ? 'success' : 'muted' },
+    ];
+  }, [activeMembers.length, auditEntries, auditVerified, health.score, vault]);
   if (!vault) {
     return (
       <ConsolePanel className="flex min-h-[560px] flex-col items-center justify-center p-8 text-center">
@@ -351,6 +369,22 @@ export default function SecurityOverview({
           </div>
         </ConsolePanel>
       </div>
+
+      <ConsolePanel className="p-5">
+        <ConsolePanelHeader title="Live Security Activity" action={<StatusPill tone="success">Live</StatusPill>} />
+        <div className="mt-4 grid gap-2 xl:grid-cols-3">
+          {activity.map((event) => (
+            <div key={event.id} className="rounded-lg border border-border bg-muted/25 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="truncate text-sm font-semibold">{event.title}</p>
+                <StatusPill tone={event.tone as 'success' | 'warning' | 'danger' | 'muted'}>{event.time}</StatusPill>
+              </div>
+              <p className="mt-1 truncate text-xs text-muted-foreground">{event.detail}</p>
+              <p className="mt-2 text-xs text-muted-foreground">{event.actor}</p>
+            </div>
+          ))}
+        </div>
+      </ConsolePanel>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[0.85fr_1.95fr]">
         <ConsolePanel className="p-5">
