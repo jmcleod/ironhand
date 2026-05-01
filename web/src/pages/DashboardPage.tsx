@@ -15,8 +15,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import VaultCard from '@/components/VaultCard';
-import VaultDetail from '@/components/VaultDetail';
 import ItemCard from '@/components/ItemCard';
+import AddItemDialog from '@/components/AddItemDialog';
 import CreateVaultDialog from '@/components/CreateVaultDialog';
 import PasswordGeneratorDialog from '@/components/PasswordGeneratorDialog';
 import TwoFactorDialog from '@/components/TwoFactorDialog';
@@ -37,6 +37,7 @@ import {
   MembersSection,
   MPCSection,
   SettingsSection,
+  VaultSecretsSection,
 } from '@/components/security-console/SecurityConsoleSections';
 import { ConsolePanel } from '@/components/security-console/ConsolePrimitives';
 import { searchItemsLocal, groupResultsByVault } from '@/lib/search';
@@ -56,6 +57,7 @@ export default function DashboardPage() {
   const [activeVaultId, setActiveVaultId] = useState<string | null>(null);
   const [openVaultId, setOpenVaultId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showAddItem, setShowAddItem] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
   const [showTwoFactor, setShowTwoFactor] = useState(false);
   const [showPasskey, setShowPasskey] = useState(false);
@@ -108,7 +110,20 @@ export default function DashboardPage() {
 
   const renderVaults = () => {
     if (openVault) {
-      return <VaultDetail vault={openVault} onBack={() => setOpenVaultId(null)} />;
+      return (
+        <VaultSecretsSection
+          vault={openVault}
+          onBack={() => setOpenVaultId(null)}
+          onAddItem={() => setShowAddItem(true)}
+          onShare={() => setShowShare(true)}
+          onAudit={() => setShowAudit(true)}
+          onMPC={() => setShowMPC(true)}
+          onImport={() => setShowImport(true)}
+          onExport={() => setShowExport(true)}
+          onInitCA={() => setShowInitCA(true)}
+          onIssueCert={() => setShowIssueCert(true)}
+        />
+      );
     }
 
     if (account.vaults.length === 0) {
@@ -323,6 +338,7 @@ export default function DashboardPage() {
       {activeVault && (
         <>
           <ShareDialog open={showShare} onOpenChange={setShowShare} vaultId={activeVault.id} members={activeVault.members} />
+          <AddItemDialog open={showAddItem} onOpenChange={setShowAddItem} vaultId={activeVault.id} />
           <AuditLogDialog open={showAudit} onOpenChange={setShowAudit} vaultId={activeVault.id} />
           <ExportVaultDialog open={showExport} onOpenChange={setShowExport} vaultId={activeVault.id} vaultName={activeVault.name} />
           <ImportVaultDialog open={showImport} onOpenChange={setShowImport} vaultId={activeVault.id} />

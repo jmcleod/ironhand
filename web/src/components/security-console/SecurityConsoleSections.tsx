@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type React from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
   Check,
   Download,
   Fingerprint,
@@ -9,6 +10,8 @@ import {
   KeyRound,
   Lock,
   Network,
+  Plus,
+  Search,
   Shield,
   ShieldCheck,
   Upload,
@@ -17,6 +20,8 @@ import {
   Wand2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import ItemCard from '@/components/ItemCard';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
 import {
   ConsolePanel,
@@ -28,7 +33,16 @@ import {
   StatusPill,
 } from '@/components/security-console/ConsolePrimitives';
 import { getCACert, getCAInfo, getCRL, listAuditLogs } from '@/lib/api';
-import { AuditEntry, CAInfo, itemName, itemType, itemUpdatedAt, Vault } from '@/types/vault';
+import { AuditEntry, CAInfo, ItemType, itemName, itemType, itemUpdatedAt, Vault } from '@/types/vault';
+
+const TYPE_FILTERS: { value: ItemType | 'all'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'login', label: 'Login' },
+  { value: 'note', label: 'Note' },
+  { value: 'card', label: 'Card' },
+  { value: 'certificate', label: 'Cert' },
+  { value: 'custom', label: 'Custom' },
+];
 
 function memberDisplayName(memberID: string) {
   return memberID.replace(/[_-]/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
@@ -75,6 +89,113 @@ function downloadText(filename: string, content: string, type = 'application/x-p
   anchor.click();
   document.body.removeChild(anchor);
   URL.revokeObjectURL(url);
+}
+
+export function VaultSecretsSection({
+  vault,
+  onBack,
+  onAddItem,
+  onShare,
+  onAudit,
+  onMPC,
+  onImport,
+  onExport,
+  onInitCA,
+  onIssueCert,
+}: {
+  vault: Vault;
+  onBack: () => void;
+  onAddItem: () => void;
+  onShare: () => void;
+  onAudit: () => void;
+  onMPC: () => void;
+  onImport: () => void;
+  onExport: () => void;
+  onInitCA: () => void;
+  onIssueCert: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all');
+
+  const filtered = vault.items.filter((item) => {
+    const matchesType = typeFilter === 'all' || itemType(item) === typeFilter;
+    const haystack = `${itemName(item)} ${Object.values(item.fields).join(' ')}`.toLowerCase();
+    return matchesType && haystack.includes(query.trim().toLowerCase());
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <Button variant="ghost" size="icon" onClick={onBack} title="Back to vaults">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="min-w-0">
+            <p className="console-kicker mb-1">Vault</p>
+            <h1 className="truncate text-2xl font-semibold">{vault.name}</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{vault.description || 'No description'}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={onAddItem}><Plus className="h-4 w-4" />Add Item</Button>
+          <Button variant="outline" onClick={onShare}><UserRoundPlus className="h-4 w-4" />Share</Button>
+          <Button variant="outline" onClick={onAudit}><ShieldCheck className="h-4 w-4" />Audit</Button>
+          <Button variant="outline" onClick={onMPC}><Network className="h-4 w-4" />MPC</Button>
+          <Button variant="outline" onClick={onExport}><Download className="h-4 w-4" />Export</Button>
+          <Button variant="outline" onClick={onImport}><Upload className="h-4 w-4" />Import</Button>
+          <Button variant="outline" onClick={vault.isCA ? onIssueCert : onInitCA}><FileKey2 className="h-4 w-4" />{vault.isCA ? 'Issue Cert' : 'Init CA'}</Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <ConsolePanel className="p-4"><MetricBlock label="Items" value={vault.items.length} /></ConsolePanel>
+        <ConsolePanel className="p-4"><MetricBlock label="Members" value={vault.members.filter((member) => member.status !== 'revoked').length} /></ConsolePanel>
+        <ConsolePanel className="p-4"><MetricBlock label="Epoch" value={vault.epoch} tone="success" /></ConsolePanel>
+        <ConsolePanel className="p-4"><MetricBlock label="CA" value={vault.isCA ? 'Active' : 'Off'} tone={vault.isCA ? 'success' : 'muted'} /></ConsolePanel>
+      </div>
+
+      <ConsolePanel className="p-5">
+        <div className="mb-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter secrets in this vault..."
+              className="border-border bg-muted pl-9"
+            />
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {TYPE_FILTERS.map((filter) => (
+              <Button
+                key={filter.value}
+                size="sm"
+                variant={typeFilter === filter.value ? 'default' : 'ghost'}
+                className="h-8 px-3 text-xs"
+                onClick={() => setTypeFilter(filter.value)}
+              >
+                {filter.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        {filtered.length === 0 ? (
+          <div className="flex min-h-56 flex-col items-center justify-center rounded-lg border border-border bg-muted/20 p-8 text-center">
+            <KeyRound className="mb-3 h-10 w-10 text-muted-foreground" />
+            <h2 className="mb-1 text-lg font-semibold">No matching secrets</h2>
+            <p className="text-sm text-muted-foreground">Adjust the filter or add a new item to this vault.</p>
+          </div>
+        ) : (
+          <div className="grid gap-3 xl:grid-cols-2">
+            {filtered.map((item) => (
+              <ItemCard key={item.id} item={item} vaultId={vault.id} />
+            ))}
+          </div>
+        )}
+      </ConsolePanel>
+    </div>
+  );
 }
 
 export function MembersSection({
