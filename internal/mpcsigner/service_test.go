@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jmcleod/ironhand/internal/mpc"
+	"github.com/jmcleod/ironhand/internal/mpcclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -91,6 +92,47 @@ func TestSignerRejectsExpiredAndConflictingApprovalRequests(t *testing.T) {
 	req.MessageHash = "hash-2"
 	conflict := postSignerJSON(t, service, "/signer/approval-requests", req)
 	require.Equal(t, http.StatusConflict, conflict.Code)
+}
+
+func TestSignerOperatorRoutesDoNotAcceptCoordinatorHMAC(t *testing.T) {
+	shared := []byte("coordinator-shared-key")
+	service, err := New("member-1", 1, "member-1", "http://signer-1.test", shared, nil)
+	require.NoError(t, err)
+	service.SetOperatorToken([]byte("operator-token"))
+	installTestSignerKey(service, "vault-1", "key-1")
+
+	req := ApprovalRequest{
+		VaultID:      "vault-1",
+		KeyID:        "key-1",
+		SessionID:    "session-1",
+		Threshold:    2,
+		Participants: []int{1, 2},
+		MessageHash:  "hash-1",
+		ExpiresAt:    time.Now().Add(time.Minute).UTC(),
+	}
+	create := postSignedSignerJSON(t, service, http.MethodPost, "/signer/approval-requests", req, shared)
+	require.Equal(t, http.StatusAccepted, create.Code)
+	var created CreateApprovalRequestResponse
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{method: http.MethodGet, path: "/signer/approval-requests"},
+		{method: http.MethodGet, path: "/signer/approval-requests/" + created.Request.RequestID},
+		{method: http.MethodPost, path: "/signer/approval-requests/" + created.Request.RequestID + "/approve", body: map[string]string{}},
+		{method: http.MethodPost, path: "/signer/approval-requests/" + created.Request.RequestID + "/reject", body: RejectApprovalRequest{Reason: "unexpected"}},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			resp := postSignedSignerJSON(t, service, tc.method, tc.path, tc.body, shared)
+			require.Equal(t, http.StatusUnauthorized, resp.Code, resp.Body.String())
+		})
+	}
+
+	operator := postOperatorSignerJSON(t, service, http.MethodPost, "/signer/approval-requests/"+created.Request.RequestID+"/approve", map[string]string{}, "operator-token")
+	require.Equal(t, http.StatusOK, operator.Code, operator.Body.String())
 }
 
 func TestNonceCommitIsIdempotentAndTranscriptBound(t *testing.T) {
@@ -179,6 +221,44 @@ func postSignerJSON(t *testing.T, service *Service, path string, payload any) *h
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+	service.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func postSignedSignerJSON(t *testing.T, service *Service, method, path string, payload any, shared []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var body []byte
+	var err error
+	if payload != nil {
+		body, err = json.Marshal(payload)
+		require.NoError(t, err)
+	}
+	req := httptest.NewRequest(method, "http://signer-1.test"+path, bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.2:12345"
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	mpcclient.SignRequest(req, shared, body, time.Now())
+	rec := httptest.NewRecorder()
+	service.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func postOperatorSignerJSON(t *testing.T, service *Service, method, path string, payload any, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body []byte
+	var err error
+	if payload != nil {
+		body, err = json.Marshal(payload)
+		require.NoError(t, err)
+	}
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.2:12345"
+	req.Header.Set("X-Ironhand-Signer-Operator-Token", token)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	rec := httptest.NewRecorder()
 	service.Handler().ServeHTTP(rec, req)
 	return rec

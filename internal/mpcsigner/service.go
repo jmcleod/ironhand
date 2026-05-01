@@ -986,8 +986,12 @@ func (s *Service) saveLocked() error {
 
 func (s *Service) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.isOperatorRoute(r) && s.checkOperatorRequest(r) {
-			next.ServeHTTP(w, r)
+		if s.isOperatorRoute(r) {
+			if s.checkOperatorRequest(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeError(w, http.StatusUnauthorized, "invalid operator token")
 			return
 		}
 		_, ok, err := mpcclient.VerifyRequestWithReplay(r, s.shared, 2*time.Minute, s.replay)
@@ -1005,6 +1009,9 @@ func (s *Service) withAuth(next http.Handler) http.Handler {
 
 func (s *Service) isOperatorRoute(r *http.Request) bool {
 	if r.Method == http.MethodGet && r.URL.Path == "/signer/approval-requests" {
+		return true
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/signer/approval-requests/") {
 		return true
 	}
 	if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/signer/approval-requests/") {

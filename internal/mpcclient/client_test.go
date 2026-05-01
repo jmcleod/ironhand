@@ -64,6 +64,35 @@ func TestSignedRequestBindsBodyAndHost(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestSignedRequestBindsMethodPathAndQuery(t *testing.T) {
+	shared := []byte("shared-secret")
+	body := []byte(`{"ok":true}`)
+	req := httptest.NewRequest(http.MethodPost, "https://signer-1.internal/sign?session=one", bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.2:12345"
+	SignRequest(req, shared, body, time.Now())
+
+	req.Method = http.MethodGet
+	_, ok, err := VerifyRequest(req, shared, 2*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	req = httptest.NewRequest(http.MethodPost, "https://signer-1.internal/sign?session=one", bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.2:12345"
+	SignRequest(req, shared, body, time.Now())
+	req.URL.Path = "/sign/share"
+	_, ok, err = VerifyRequest(req, shared, 2*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	req = httptest.NewRequest(http.MethodPost, "https://signer-1.internal/sign?session=one", bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.2:12345"
+	SignRequest(req, shared, body, time.Now())
+	req.URL.RawQuery = "session=two"
+	_, ok, err = VerifyRequest(req, shared, 2*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
 func TestSignedRequestRejectsStaleTimestamp(t *testing.T) {
 	shared := []byte("shared-secret")
 	body := []byte(`{"ok":true}`)
