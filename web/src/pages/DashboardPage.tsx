@@ -327,6 +327,9 @@ export default function DashboardPage() {
           setOpenVaultId(vaultId);
         }}
         onCreateVault={() => setShowCreate(true)}
+        onAddItem={() => activeVault && setShowAddItem(true)}
+        onGenerator={() => setShowGenerator(true)}
+        onTwoFactor={() => setShowTwoFactor(true)}
         onLock={() => { void lock(); }}
         onInvite={() => activeVault && setShowShare(true)}
         onIssueCert={() => activeVault && setShowIssueCert(true)}

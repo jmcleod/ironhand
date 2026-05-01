@@ -60,6 +60,9 @@ interface SecurityConsoleLayoutProps {
   onVaultChange: (vaultId: string) => void;
   onOpenVault: (vaultId: string) => void;
   onCreateVault: () => void;
+  onAddItem: () => void;
+  onGenerator: () => void;
+  onTwoFactor: () => void;
   onLock: () => void;
   onInvite: () => void;
   onIssueCert: () => void;
@@ -82,6 +85,9 @@ export default function SecurityConsoleLayout({
   onVaultChange,
   onOpenVault,
   onCreateVault,
+  onAddItem,
+  onGenerator,
+  onTwoFactor,
   onLock,
   onInvite,
   onIssueCert,
@@ -306,6 +312,9 @@ export default function SecurityConsoleLayout({
         onVaultChange={onVaultChange}
         onOpenVault={onOpenVault}
         onCreateVault={onCreateVault}
+        onAddItem={onAddItem}
+        onGenerator={onGenerator}
+        onTwoFactor={onTwoFactor}
         onInvite={onInvite}
         onIssueCert={onIssueCert}
         onMPC={onMPC}

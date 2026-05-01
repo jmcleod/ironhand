@@ -46,6 +46,9 @@ interface ConsoleCommandPaletteProps {
   onVaultChange: (vaultId: string) => void;
   onOpenVault: (vaultId: string) => void;
   onCreateVault: () => void;
+  onAddItem: () => void;
+  onGenerator: () => void;
+  onTwoFactor: () => void;
   onInvite: () => void;
   onIssueCert: () => void;
   onMPC: () => void;
@@ -64,6 +67,9 @@ export default function ConsoleCommandPalette({
   onVaultChange,
   onOpenVault,
   onCreateVault,
+  onAddItem,
+  onGenerator,
+  onTwoFactor,
   onInvite,
   onIssueCert,
   onMPC,
@@ -110,9 +116,21 @@ export default function ConsoleCommandPalette({
             <Plus className="mr-2 h-4 w-4" />
             New Vault
           </CommandItem>
+          <CommandItem disabled={!activeVault} onSelect={() => run(onAddItem)}>
+            <KeyRound className="mr-2 h-4 w-4" />
+            Add Secret
+          </CommandItem>
           <CommandItem disabled={!activeVault} onSelect={() => run(onInvite)}>
             <UserRoundPlus className="mr-2 h-4 w-4" />
             Invite Member
+          </CommandItem>
+          <CommandItem onSelect={() => run(onGenerator)}>
+            <KeyRound className="mr-2 h-4 w-4" />
+            Generate Password
+          </CommandItem>
+          <CommandItem onSelect={() => run(onTwoFactor)}>
+            <ShieldCheck className="mr-2 h-4 w-4" />
+            Manage Two-Factor
           </CommandItem>
           <CommandItem disabled={!activeVault} onSelect={() => run(onIssueCert)}>
             <FileKey2 className="mr-2 h-4 w-4" />
@@ -162,21 +180,22 @@ export default function ConsoleCommandPalette({
           </>
         )}
 
-        {activeVault && activeVault.items.length > 0 && (
+        {vaults.some((vault) => vault.items.length > 0) && (
           <>
             <CommandSeparator />
-            <CommandGroup heading={`Secrets in ${activeVault.name}`}>
-              {activeVault.items.slice(0, 12).map((item) => (
+            <CommandGroup heading="Secrets">
+              {vaults.flatMap((vault) => vault.items.map((item) => ({ vault, item }))).slice(0, 18).map(({ vault, item }) => (
                 <CommandItem
-                  key={item.id}
-                  value={`${itemName(item)} ${activeVault.name}`}
+                  key={`${vault.id}-${item.id}`}
+                  value={`${itemName(item)} ${vault.name}`}
                   onSelect={() => run(() => {
-                    onVaultChange(activeVault.id);
-                    onOpenVault(activeVault.id);
+                    onVaultChange(vault.id);
+                    onOpenVault(vault.id);
                   })}
                 >
                   <Search className="mr-2 h-4 w-4" />
                   {itemName(item)}
+                  <span className="ml-2 text-xs text-muted-foreground">{vault.name}</span>
                 </CommandItem>
               ))}
             </CommandGroup>
