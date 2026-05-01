@@ -723,6 +723,26 @@ func (a *API) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ListAuditLogsResponse{Entries: resp, PaginationMeta: pgMeta})
 }
 
+// GetAuditStatus handles GET /vaults/{vaultID}/audit/status.
+func (a *API) GetAuditStatus(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	status, err := a.auditChainStatus(session, vaultID)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 // ExportAuditLog handles GET /vaults/{vaultID}/audit/export.
 // Admin-only. Returns the full audit chain with a tamper-evident HMAC-SHA256
 // signature over the serialized entries, computed with the vault's record key.

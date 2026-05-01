@@ -263,6 +263,17 @@ type ListAuditLogsResponse struct {
 	PaginationMeta
 }
 
+// AuditStatusResponse is returned from GET /vaults/{vaultID}/audit/status.
+type AuditStatusResponse struct {
+	VaultID        string `json:"vault_id"`
+	Verified       bool   `json:"verified"`
+	EntryCount     int    `json:"entry_count"`
+	TipHash        string `json:"tip_hash,omitempty"`
+	LatestEntryAt  string `json:"latest_entry_at,omitempty"`
+	FailureReason  string `json:"failure_reason,omitempty"`
+	RetentionFloor bool   `json:"retention_floor"`
+}
+
 // ExportAuditEntryResponse extends AuditEntryResponse with the chain hash.
 type ExportAuditEntryResponse struct {
 	ID        string `json:"id"`

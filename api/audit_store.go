@@ -243,6 +243,59 @@ func (a *API) listAuditEntries(session *vault.Session, vaultID, itemID string) (
 	return entries, nil
 }
 
+func (a *API) auditChainStatus(session *vault.Session, vaultID string) (AuditStatusResponse, error) {
+	entries, err := a.listAuditEntries(session, vaultID, "")
+	if err != nil {
+		return AuditStatusResponse{}, err
+	}
+
+	status := AuditStatusResponse{
+		VaultID:    vaultID,
+		Verified:   true,
+		EntryCount: len(entries),
+	}
+	if len(entries) == 0 {
+		return status, nil
+	}
+
+	chronological := make([]auditEntry, len(entries))
+	for i := range entries {
+		chronological[i] = entries[len(entries)-1-i]
+	}
+	status.LatestEntryAt = chronological[len(chronological)-1].CreatedAt
+	status.RetentionFloor = chronological[0].PrevHash == auditGenesisHash && len(chronological) > 0
+
+	prevHash := auditGenesisHash
+	for _, entry := range chronological {
+		if entry.PrevHash != prevHash {
+			status.Verified = false
+			status.FailureReason = "audit chain link mismatch"
+			return status, nil
+		}
+		prevHash = auditChainHash(entry.ID, entry.PrevHash, entry.CreatedAt)
+	}
+	status.TipHash = prevHash
+
+	tipEnv, err := a.repo.Get(vaultID, auditTipType, auditTipRecordID)
+	if err != nil || tipEnv == nil {
+		status.Verified = false
+		status.FailureReason = "audit chain tip missing"
+		return status, nil
+	}
+	tipData, err := session.OpenAuditRecord(tipEnv, auditAAD(vaultID, auditTipRecordID))
+	if err != nil {
+		status.Verified = false
+		status.FailureReason = "audit chain tip unreadable"
+		return status, nil
+	}
+	if string(tipData) != prevHash {
+		status.Verified = false
+		status.FailureReason = "audit chain tip mismatch"
+		return status, nil
+	}
+	return status, nil
+}
+
 // enforceAuditRetentionLocked applies configured retention policy and rewrites
 // the retained audit chain from a fresh genesis anchor.
 //

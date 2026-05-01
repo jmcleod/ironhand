@@ -34,9 +34,11 @@ import {
 } from '@/components/security-console/ConsolePrimitives';
 import {
   cancelInvite,
+  AuditStatus,
   getCACert,
   getCAInfo,
   getCRL,
+  getAuditStatus,
   getMPCMetrics,
   InviteSummary,
   listAuditLogs,
@@ -599,24 +601,43 @@ export function MPCSection({
 
 export function AuditSection({ vault }: { vault: Vault | null }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [status, setStatus] = useState<AuditStatus | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!vault) {
       setEntries([]);
+      setStatus(null);
       return;
     }
     setLoading(true);
-    listAuditLogs(vault.id, undefined, { limit: 50, offset: 0 })
-      .then((result) => setEntries(result.data))
-      .catch(() => setEntries([]))
+    Promise.all([
+      listAuditLogs(vault.id, undefined, { limit: 50, offset: 0 }).catch(() => ({ data: [] as AuditEntry[] })),
+      getAuditStatus(vault.id).catch(() => null),
+    ])
+      .then(([result, nextStatus]) => {
+        setEntries(result.data);
+        setStatus(nextStatus);
+      })
       .finally(() => setLoading(false));
   }, [vault]);
 
   if (!vault) return <EmptyConsole title="Audit" body="Create a vault before reviewing audit history." />;
   return (
+    <div className="space-y-3">
+    <div className="grid gap-3 md:grid-cols-3">
+      <ConsolePanel className="p-5">
+        <MetricBlock label="Hash Chain" value={status?.verified ? 'Verified' : status?.entry_count ? 'Failed' : 'Empty'} tone={status?.verified ? 'success' : status?.entry_count ? 'danger' : 'muted'} />
+      </ConsolePanel>
+      <ConsolePanel className="p-5">
+        <MetricBlock label="Entries" value={status?.entry_count ?? entries.length} />
+      </ConsolePanel>
+      <ConsolePanel className="p-5">
+        <MetricBlock label="Latest Entry" value={status?.latest_entry_at ? new Date(status.latest_entry_at).toLocaleDateString() : '-'} />
+      </ConsolePanel>
+    </div>
     <ConsolePanel className="p-5">
-      <ConsolePanelHeader title="Audit Log" action={<StatusPill tone={entries.length ? 'success' : 'muted'}>{entries.length} loaded</StatusPill>} />
+      <ConsolePanelHeader title="Audit Log" action={<StatusPill tone={status?.verified ? 'success' : entries.length ? 'danger' : 'muted'}>{status?.verified ? 'Verified' : entries.length ? 'Review' : 'Empty'}</StatusPill>} />
       <ConsoleTable className="mt-4">
         <thead>
           <tr>
@@ -642,6 +663,7 @@ export function AuditSection({ vault }: { vault: Vault | null }) {
         </tbody>
       </ConsoleTable>
     </ConsolePanel>
+    </div>
   );
 }
 

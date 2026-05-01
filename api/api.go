@@ -378,6 +378,7 @@ func (a *API) Router() chi.Router {
 		r.Get("/items/{itemID}/history/{version}", a.GetHistoryVersion)
 		r.Get("/items/{itemID}/private-key", a.GetItemPrivateKey)
 		r.Get("/audit", a.ListAuditLogs)
+		r.Get("/audit/status", a.GetAuditStatus)
 		r.Get("/audit/export", a.ExportAuditLog)
 		r.Get("/members", a.ListMembers)
 		r.Post("/members", a.AddMember)

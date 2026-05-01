@@ -24,7 +24,7 @@ import {
   MetricBlock,
   StatusPill,
 } from '@/components/security-console/ConsolePrimitives';
-import { listAuditLogs } from '@/lib/api';
+import { AuditStatus, getAuditStatus, listAuditLogs } from '@/lib/api';
 import { AuditEntry, itemName, itemType, itemUpdatedAt, Vault } from '@/types/vault';
 import { cn } from '@/lib/utils';
 
@@ -103,17 +103,24 @@ export default function SecurityOverview({
   onLock,
 }: SecurityOverviewProps) {
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
+  const [auditStatus, setAuditStatus] = useState<AuditStatus | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
 
   useEffect(() => {
     if (!vault) {
       setAuditEntries([]);
+      setAuditStatus(null);
       return;
     }
     setAuditLoading(true);
-    listAuditLogs(vault.id, undefined, { limit: 5, offset: 0 })
-      .then((result) => setAuditEntries(result.data))
-      .catch(() => setAuditEntries([]))
+    Promise.all([
+      listAuditLogs(vault.id, undefined, { limit: 5, offset: 0 }).catch(() => ({ data: [] as AuditEntry[] })),
+      getAuditStatus(vault.id).catch(() => null),
+    ])
+      .then(([result, status]) => {
+        setAuditEntries(result.data);
+        setAuditStatus(status);
+      })
       .finally(() => setAuditLoading(false));
   }, [vault]);
 
@@ -151,7 +158,7 @@ export default function SecurityOverview({
   }
 
   const postureStrong = twoFactorEnabled && passkeyCount > 0 && revokedMembers.length === 0;
-  const auditVerified = auditEntries.length > 0;
+  const auditVerified = auditStatus?.verified ?? false;
 
   return (
     <div className="space-y-3">
@@ -171,7 +178,7 @@ export default function SecurityOverview({
               {[
                 ['Encryption', 'Strong', true],
                 ['Rollback Protection', 'Enabled', true],
-                ['Audit Chain', auditVerified ? 'Activity Logged' : 'Awaiting Events', auditVerified],
+                ['Audit Chain', auditVerified ? 'Verified' : auditStatus?.failure_reason ?? 'Awaiting Events', auditVerified],
                 ['Secrets Hygiene', staleItems.length > 0 ? 'Needs Review' : 'Good', staleItems.length === 0],
               ].map(([label, value, good]) => (
                 <div key={String(label)} className="flex items-center justify-between rounded-full border border-border bg-muted/30 px-4 py-2">
@@ -390,7 +397,17 @@ export default function SecurityOverview({
         </ConsolePanel>
 
         <ConsolePanel className="p-5">
-          <ConsolePanelHeader title="Recent Sensitive Accesses" action={<Button variant="ghost" size="sm" onClick={onAudit}>View Full Audit Log</Button>} />
+          <ConsolePanelHeader
+            title="Recent Sensitive Accesses"
+            action={(
+              <div className="flex items-center gap-2">
+                <StatusPill tone={auditStatus?.verified ? 'success' : auditStatus?.entry_count ? 'danger' : 'muted'}>
+                  {auditStatus?.verified ? 'Hash Chain Verified' : auditStatus?.entry_count ? 'Hash Chain Failed' : 'No Chain Yet'}
+                </StatusPill>
+                <Button variant="ghost" size="sm" onClick={onAudit}>View Full Audit Log</Button>
+              </div>
+            )}
+          />
           <ConsoleTable className="mt-4">
             <thead>
               <tr>
@@ -463,4 +480,3 @@ export default function SecurityOverview({
     </div>
   );
 }
-

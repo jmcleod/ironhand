@@ -406,6 +406,25 @@ components:
               items:
                 $ref: '#/components/schemas/AuditEntryResponse'
 
+    AuditStatusResponse:
+      type: object
+      properties:
+        vault_id:
+          type: string
+        verified:
+          type: boolean
+        entry_count:
+          type: integer
+        tip_hash:
+          type: string
+        latest_entry_at:
+          type: string
+          format: date-time
+        failure_reason:
+          type: string
+        retention_floor:
+          type: boolean
+
     ErrorResponse:
       type: object
       properties:
@@ -2375,6 +2394,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListAuditLogsResponse'
+        '401':
+          description: Unauthorized
+
+  /vaults/{vaultID}/audit/status:
+    get:
+      summary: Verify vault audit hash-chain status
+      operationId: getAuditStatus
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit chain verification status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditStatusResponse'
         '401':
           description: Unauthorized
 

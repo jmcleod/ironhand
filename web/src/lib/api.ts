@@ -370,6 +370,21 @@ export async function listAuditLogs(
   };
 }
 
+export interface AuditStatus {
+  vault_id: string;
+  verified: boolean;
+  entry_count: number;
+  tip_hash?: string;
+  latest_entry_at?: string;
+  failure_reason?: string;
+  retention_floor: boolean;
+}
+
+export async function getAuditStatus(vaultID: string): Promise<AuditStatus> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/audit/status`);
+  return (await resp.json()) as AuditStatus;
+}
+
 export async function exportVault(vaultID: string, passphrase: string): Promise<Blob> {
   const csrfHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
   const csrf = getCsrfToken();
