@@ -30,6 +30,7 @@ import ImportVaultDialog from '@/components/ImportVaultDialog';
 import IssueCertDialog from '@/components/IssueCertDialog';
 import MPCDialog from '@/components/MPCDialog';
 import SecurityConsoleLayout, { ConsoleView } from '@/components/security-console/SecurityConsoleLayout';
+import SecurityOverview from '@/components/security-console/SecurityOverview';
 import { ConsolePanel, ConsolePanelHeader, StatusPill } from '@/components/security-console/ConsolePrimitives';
 import { searchItemsLocal, groupResultsByVault } from '@/lib/search';
 import { ItemType } from '@/types/vault';
@@ -252,7 +253,22 @@ export default function DashboardPage() {
     </ConsolePanel>
   );
 
-  const content = activeView === 'vaults' ? renderVaults() : renderPlaceholder(activeView);
+  const content = activeView === 'overview' ? (
+    <SecurityOverview
+      vault={activeVault}
+      twoFactorEnabled={account.twoFactorEnabled}
+      passkeyCount={account.webauthnCredentialCount ?? 0}
+      recoveryCodesUnused={account.recoveryCodesUnused}
+      onRotate={() => setActiveView('settings')}
+      onInvite={() => activeVault && setShowShare(true)}
+      onRevoke={() => activeVault && setShowShare(true)}
+      onIssueCert={() => activeVault && setShowIssueCert(true)}
+      onViewCA={() => setActiveView('ca')}
+      onMPC={() => activeVault && setShowMPC(true)}
+      onAudit={() => activeVault && setShowAudit(true)}
+      onLock={() => { void lock(); }}
+    />
+  ) : activeView === 'vaults' ? renderVaults() : renderPlaceholder(activeView);
 
   return (
     <>
@@ -311,4 +327,3 @@ export default function DashboardPage() {
     </>
   );
 }
-

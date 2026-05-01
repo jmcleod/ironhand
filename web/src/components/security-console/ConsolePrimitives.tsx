@@ -118,12 +118,10 @@ export function ConsoleTable({
 export function ConsoleTh({
   children,
   className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
+  ...props
+}: React.ThHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <th className={cn('px-4 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground', className)}>
+    <th className={cn('px-4 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground', className)} {...props}>
       {children}
     </th>
   );
@@ -132,10 +130,7 @@ export function ConsoleTh({
 export function ConsoleTd({
   children,
   className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return <td className={cn('border-t border-border/70 px-4 py-3', className)}>{children}</td>;
+  ...props
+}: React.TdHTMLAttributes<HTMLTableCellElement>) {
+  return <td className={cn('border-t border-border/70 px-4 py-3', className)} {...props}>{children}</td>;
 }
-
