@@ -53,6 +53,7 @@ import {
   MPCSigningSession,
 } from '@/lib/api';
 import { AuditEntry, CAInfo, ItemType, itemName, itemType, itemUpdatedAt, Vault } from '@/types/vault';
+import { secretHealth } from '@/lib/security-insights';
 
 const TYPE_FILTERS: { value: ItemType | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -137,6 +138,7 @@ export function VaultSecretsSection({
 }) {
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all');
+  const health = secretHealth(vault);
 
   const filtered = vault.items.filter((item) => {
     const matchesType = typeFilter === 'all' || itemType(item) === typeFilter;
@@ -175,8 +177,25 @@ export function VaultSecretsSection({
         <ConsolePanel className="p-4"><MetricBlock label="Items" value={vault.items.length} /></ConsolePanel>
         <ConsolePanel className="p-4"><MetricBlock label="Members" value={vault.members.filter((member) => member.status !== 'revoked').length} /></ConsolePanel>
         <ConsolePanel className="p-4"><MetricBlock label="Epoch" value={vault.epoch} tone="success" /></ConsolePanel>
-        <ConsolePanel className="p-4"><MetricBlock label="CA" value={vault.isCA ? 'Active' : 'Off'} tone={vault.isCA ? 'success' : 'muted'} /></ConsolePanel>
+        <ConsolePanel className="p-4"><MetricBlock label="Health" value={health.score} detail={`${health.criticalCount + health.highCount} urgent`} tone={health.score >= 85 ? 'success' : health.score >= 70 ? 'warning' : 'danger'} /></ConsolePanel>
       </div>
+
+      {health.issues.length > 0 && (
+        <ConsolePanel className="p-5">
+          <ConsolePanelHeader title="Secret Health Actions" action={<StatusPill tone={health.score >= 70 ? 'warning' : 'danger'}>{health.score}/100</StatusPill>} />
+          <div className="mt-4 grid gap-2 md:grid-cols-2">
+            {health.issues.slice(0, 4).map((issue) => (
+              <div key={`${issue.itemId}-${issue.issue}`} className="rounded-lg border border-border bg-muted/25 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="truncate text-sm font-semibold">{issue.itemName}</p>
+                  <StatusPill tone={issue.severity === 'critical' || issue.severity === 'high' ? 'danger' : 'warning'}>{issue.severity}</StatusPill>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">{issue.issue}</p>
+              </div>
+            ))}
+          </div>
+        </ConsolePanel>
+      )}
 
       <ConsolePanel className="p-5">
         <div className="mb-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">

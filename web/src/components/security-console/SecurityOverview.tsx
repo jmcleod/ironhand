@@ -25,8 +25,9 @@ import {
   StatusPill,
 } from '@/components/security-console/ConsolePrimitives';
 import { AuditStatus, getAuditStatus, listAuditLogs } from '@/lib/api';
-import { AuditEntry, itemName, itemType, itemUpdatedAt, Vault } from '@/types/vault';
+import { AuditEntry, itemName, itemType, Vault } from '@/types/vault';
 import { cn } from '@/lib/utils';
+import { secretHealth } from '@/lib/security-insights';
 
 interface SecurityOverviewProps {
   vault: Vault | null;
@@ -72,16 +73,6 @@ function actionLabel(action: AuditEntry['action']) {
     case 'private_key_accessed':
       return 'Private Key Read';
   }
-}
-
-function formatAge(iso: string) {
-  if (!iso) return 'unknown';
-  const updated = new Date(iso).getTime();
-  if (!Number.isFinite(updated)) return 'unknown';
-  const days = Math.max(0, Math.round((Date.now() - updated) / 86400000));
-  if (days === 0) return 'today';
-  if (days === 1) return '1d';
-  return `${days}d`;
 }
 
 function memberDisplayName(memberID: string) {
@@ -133,18 +124,7 @@ export default function SecurityOverview({
     [vault],
   );
   const mpcSigners = activeMembers.filter((member) => member.mpc_party_id || member.mpc_signer_status);
-  const staleItems = useMemo(() => {
-    if (!vault) return [];
-    return vault.items
-      .filter((item) => {
-        const updated = itemUpdatedAt(item);
-        if (!updated) return itemType(item) === 'login';
-        const days = Math.round((Date.now() - new Date(updated).getTime()) / 86400000);
-        return itemType(item) === 'login' && days >= 30;
-      })
-      .slice(0, 3);
-  }, [vault]);
-
+  const health = useMemo(() => secretHealth(vault), [vault]);
   if (!vault) {
     return (
       <ConsolePanel className="flex min-h-[560px] flex-col items-center justify-center p-8 text-center">
@@ -157,7 +137,7 @@ export default function SecurityOverview({
     );
   }
 
-  const postureStrong = twoFactorEnabled && passkeyCount > 0 && revokedMembers.length === 0;
+  const postureStrong = twoFactorEnabled && passkeyCount > 0 && revokedMembers.length === 0 && health.score >= 85;
   const auditVerified = auditStatus?.verified ?? false;
 
   return (
@@ -179,7 +159,7 @@ export default function SecurityOverview({
                 ['Encryption', 'Strong', true],
                 ['Rollback Protection', 'Enabled', true],
                 ['Audit Chain', auditVerified ? 'Verified' : auditStatus?.failure_reason ?? 'Awaiting Events', auditVerified],
-                ['Secrets Hygiene', staleItems.length > 0 ? 'Needs Review' : 'Good', staleItems.length === 0],
+                ['Secrets Hygiene', health.score >= 85 ? 'Strong' : health.score >= 70 ? 'Review' : 'At Risk', health.score >= 85],
               ].map(([label, value, good]) => (
                 <div key={String(label)} className="flex items-center justify-between rounded-full border border-border bg-muted/30 px-4 py-2">
                   <span className="flex items-center gap-2 text-sm">
@@ -207,6 +187,7 @@ export default function SecurityOverview({
 
             <div className="divide-y divide-border/70 border-l border-border/70 pl-6">
               <MetricBlock label="Encryption Epoch" value={vault.epoch} detail={`Vault ${vault.name}`} tone="success" className="pb-4" />
+              <MetricBlock label="Secret Health" value={health.score} detail={`${health.issues.length} issue${health.issues.length === 1 ? '' : 's'} tracked`} tone={health.score >= 85 ? 'success' : health.score >= 70 ? 'warning' : 'danger'} className="py-4" />
               <MetricBlock label="Active Members" value={activeMembers.length} detail={`${vault.members.length} total`} className="py-4" />
               <MetricBlock label="Revoked Members" value={revokedMembers.length} tone={revokedMembers.length > 0 ? 'danger' : 'success'} className="pt-4" />
             </div>
@@ -374,22 +355,22 @@ export default function SecurityOverview({
         <ConsolePanel className="p-5">
           <ConsolePanelHeader
             title="Weak Secret Alerts"
-            action={staleItems.length > 0 ? <StatusPill tone="danger">{staleItems.length}</StatusPill> : <StatusPill tone="success">0</StatusPill>}
+            action={health.issues.length > 0 ? <StatusPill tone="danger">{health.issues.length}</StatusPill> : <StatusPill tone="success">0</StatusPill>}
           />
           <div className="mt-4 space-y-2">
-            {staleItems.length === 0 ? (
+            {health.issues.length === 0 ? (
               <div className="rounded-lg border border-border bg-muted/25 p-5 text-sm text-muted-foreground">
                 No stale login secrets found in the loaded vault summary.
               </div>
             ) : (
-              staleItems.map((item) => (
-                <div key={item.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-border/70 py-3 last:border-b-0">
+              health.issues.slice(0, 3).map((issue) => (
+                <div key={`${issue.itemId}-${issue.issue}`} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-border/70 py-3 last:border-b-0">
                   <div className="flex min-w-0 items-center gap-2">
                     <KeyRound className="h-4 w-4 text-amber-400" />
-                    <span className="truncate text-sm font-medium">{itemName(item)}</span>
+                    <span className="truncate text-sm font-medium">{issue.itemName}</span>
+                    <span className="truncate text-xs text-muted-foreground">{issue.issue}</span>
                   </div>
-                  <span className="text-xs text-muted-foreground">{formatAge(itemUpdatedAt(item))}</span>
-                  <StatusPill tone="warning">Review</StatusPill>
+                  <StatusPill tone={issue.severity === 'critical' || issue.severity === 'high' ? 'danger' : 'warning'}>{issue.severity}</StatusPill>
                 </div>
               ))
             )}
