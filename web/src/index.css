@@ -6,54 +6,59 @@
 
 @layer base {
   :root {
-    /* Dark mode (default) - Navy & Steel aesthetic */
-    --background: 217 24% 9%;
-    --foreground: 210 14% 88%;
+    /* Dark mode (default) - graphite security console aesthetic */
+    --background: 150 18% 4%;
+    --foreground: 150 12% 88%;
 
-    --card: 217 22% 13%;
-    --card-foreground: 210 14% 88%;
+    --card: 160 16% 7%;
+    --card-foreground: 150 12% 88%;
 
-    --popover: 217 22% 15%;
-    --popover-foreground: 210 14% 88%;
+    --popover: 160 16% 8%;
+    --popover-foreground: 150 12% 88%;
 
-    --primary: 211 42% 54%;
-    --primary-foreground: 217 24% 9%;
+    --primary: 132 71% 58%;
+    --primary-foreground: 150 18% 4%;
 
-    --secondary: 217 16% 20%;
-    --secondary-foreground: 210 14% 78%;
+    --secondary: 160 12% 13%;
+    --secondary-foreground: 150 12% 78%;
 
-    --muted: 217 14% 18%;
-    --muted-foreground: 210 10% 48%;
+    --muted: 160 10% 12%;
+    --muted-foreground: 150 7% 55%;
 
-    --accent: 211 55% 35%;
-    --accent-foreground: 211 42% 75%;
+    --accent: 133 45% 18%;
+    --accent-foreground: 132 71% 72%;
 
     --destructive: 0 72% 51%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 217 16% 22%;
-    --input: 217 16% 22%;
-    --ring: 211 42% 54%;
+    --border: 160 11% 17%;
+    --input: 160 11% 17%;
+    --ring: 132 71% 58%;
 
-    --radius: 0.75rem;
+    --radius: 0.5rem;
 
-    --sidebar-background: 217 22% 11%;
-    --sidebar-foreground: 210 14% 78%;
-    --sidebar-primary: 211 42% 54%;
-    --sidebar-primary-foreground: 217 24% 9%;
-    --sidebar-accent: 217 14% 18%;
-    --sidebar-accent-foreground: 210 14% 78%;
-    --sidebar-border: 217 16% 22%;
-    --sidebar-ring: 211 42% 54%;
+    --sidebar-background: 160 18% 6%;
+    --sidebar-foreground: 150 12% 78%;
+    --sidebar-primary: 132 71% 58%;
+    --sidebar-primary-foreground: 150 18% 4%;
+    --sidebar-accent: 160 10% 12%;
+    --sidebar-accent-foreground: 150 12% 78%;
+    --sidebar-border: 160 11% 17%;
+    --sidebar-ring: 132 71% 58%;
 
     /* Custom tokens */
-    --glow-primary: 211 42% 54%;
-    --surface-elevated: 217 20% 16%;
-    --surface-overlay: 217 22% 18%;
+    --glow-primary: 132 71% 58%;
+    --surface-elevated: 160 13% 10%;
+    --surface-overlay: 160 12% 13%;
     --success: 152 60% 45%;
     --success-foreground: 152 60% 90%;
     --warning: 38 92% 50%;
     --warning-foreground: 38 92% 90%;
+    --console-panel: 160 16% 7%;
+    --console-panel-strong: 160 18% 9%;
+    --console-line: 132 18% 22%;
+    --console-dim: 150 7% 44%;
+    --console-critical: 0 80% 60%;
   }
 
   .light {
@@ -101,6 +106,11 @@
     --success-foreground: 152 60% 20%;
     --warning: 38 92% 50%;
     --warning-foreground: 38 92% 20%;
+    --console-panel: 210 40% 94%;
+    --console-panel-strong: 210 40% 90%;
+    --console-line: 150 22% 72%;
+    --console-dim: 210 10% 42%;
+    --console-critical: 0 72% 51%;
   }
 }
 
@@ -114,6 +124,13 @@
     font-family: 'Inter', sans-serif;
   }
 
+  button,
+  input,
+  textarea,
+  select {
+    letter-spacing: 0;
+  }
+
   .font-mono {
     font-family: 'JetBrains Mono', monospace;
   }
@@ -121,8 +138,8 @@
 
 @layer utilities {
   .glow-primary {
-    box-shadow: 0 0 20px -5px hsl(var(--glow-primary) / 0.3),
-                0 0 40px -10px hsl(var(--glow-primary) / 0.15);
+    box-shadow: 0 0 20px -5px hsl(var(--glow-primary) / 0.22),
+                0 0 40px -10px hsl(var(--glow-primary) / 0.10);
   }
 
   .glow-primary-sm {
@@ -138,8 +155,8 @@
 
   .bg-grid-pattern {
     background-image: 
-      linear-gradient(hsl(var(--border) / 0.3) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--border) / 0.3) 1px, transparent 1px);
+      linear-gradient(hsl(var(--border) / 0.25) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.25) 1px, transparent 1px);
     background-size: 40px 40px;
   }
 
@@ -149,5 +166,40 @@
   .vault-card-hover:hover {
     box-shadow: 0 0 30px -8px hsl(var(--glow-primary) / 0.2);
     border-color: hsl(var(--primary) / 0.3);
+  }
+
+  .console-shell {
+    background:
+      radial-gradient(circle at 50% 0%, hsl(var(--primary) / 0.08), transparent 32rem),
+      linear-gradient(180deg, hsl(150 18% 3%), hsl(var(--background)));
+  }
+
+  .console-panel {
+    background:
+      linear-gradient(180deg, hsl(var(--console-panel-strong) / 0.92), hsl(var(--console-panel) / 0.92));
+    border: 1px solid hsl(var(--border));
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.04),
+      0 14px 40px hsl(150 24% 2% / 0.35);
+  }
+
+  .console-panel-subtle {
+    background: hsl(var(--muted) / 0.42);
+    border: 1px solid hsl(var(--border) / 0.78);
+  }
+
+  .console-kicker {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.67rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .console-grid {
+    background-image:
+      linear-gradient(hsl(var(--primary) / 0.15) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--primary) / 0.15) 1px, transparent 1px);
+    background-size: 28px 28px;
   }
 }
