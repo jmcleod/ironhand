@@ -574,6 +574,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vaults/{vaultID}/audit/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Verify vault audit hash-chain status */
+        get: operations["getAuditStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/vaults/{vaultID}/audit/export": {
         parameters: {
             query?: never;
@@ -896,6 +913,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vaults/{vaultID}/mpc/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List vault MPC signing sessions */
+        get: operations["listMPCSigningSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/vaults/{vaultID}/mpc/sessions/{sessionID}/approvals": {
         parameters: {
             query?: never;
@@ -1201,6 +1235,8 @@ export interface components {
             member_id?: string;
             /** Format: date-time */
             created_at?: string;
+            remote_addr?: string;
+            user_agent?: string;
             /** @description SHA-256 hash linking this entry to its predecessor in the tamper-evident chain. */
             prev_hash?: string;
         };
@@ -1301,9 +1337,21 @@ export interface components {
             member_id?: string;
             /** Format: date-time */
             created_at?: string;
+            remote_addr?: string;
+            user_agent?: string;
         };
         ListAuditLogsResponse: components["schemas"]["PaginationMeta"] & {
             entries?: components["schemas"]["AuditEntryResponse"][];
+        };
+        AuditStatusResponse: {
+            vault_id?: string;
+            verified?: boolean;
+            entry_count?: number;
+            tip_hash?: string;
+            /** Format: date-time */
+            latest_entry_at?: string;
+            failure_reason?: string;
+            retention_floor?: boolean;
         };
         ErrorResponse: {
             error?: string;
@@ -1663,6 +1711,9 @@ export interface components {
         };
         ListMPCKeysResponse: {
             keys?: components["schemas"]["MPCKey"][];
+        };
+        ListMPCSigningSessionsResponse: {
+            sessions?: components["schemas"]["MPCSigningSession"][];
         };
         CreateMPCKeyRequest: {
             key_id?: string;
@@ -3174,6 +3225,35 @@ export interface operations {
             };
         };
     };
+    getAuditStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vaultID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Audit chain verification status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditStatusResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     exportAuditLog: {
         parameters: {
             query?: never;
@@ -4011,6 +4091,42 @@ export interface operations {
                 content?: never;
             };
             /** @description Experimental MPC disabled or step-up required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listMPCSigningSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vaultID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MPC signing session list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListMPCSigningSessionsResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Experimental MPC disabled */
             403: {
                 headers: {
                     [name: string]: unknown;

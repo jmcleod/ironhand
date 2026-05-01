@@ -191,6 +191,10 @@ components:
         created_at:
           type: string
           format: date-time
+        remote_addr:
+          type: string
+        user_agent:
+          type: string
         prev_hash:
           type: string
           description: SHA-256 hash linking this entry to its predecessor in the tamper-evident chain.
@@ -395,6 +399,10 @@ components:
         created_at:
           type: string
           format: date-time
+        remote_addr:
+          type: string
+        user_agent:
+          type: string
 
     ListAuditLogsResponse:
       allOf:
@@ -405,6 +413,25 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/AuditEntryResponse'
+
+    AuditStatusResponse:
+      type: object
+      properties:
+        vault_id:
+          type: string
+        verified:
+          type: boolean
+        entry_count:
+          type: integer
+        tip_hash:
+          type: string
+        latest_entry_at:
+          type: string
+          format: date-time
+        failure_reason:
+          type: string
+        retention_floor:
+          type: boolean
 
     ErrorResponse:
       type: object
@@ -1139,6 +1166,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MPCKey'
+
+    ListMPCSigningSessionsResponse:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/MPCSigningSession'
 
     CreateMPCKeyRequest:
       type: object
@@ -2370,6 +2405,28 @@ paths:
         '401':
           description: Unauthorized
 
+  /vaults/{vaultID}/audit/status:
+    get:
+      summary: Verify vault audit hash-chain status
+      operationId: getAuditStatus
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit chain verification status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditStatusResponse'
+        '401':
+          description: Unauthorized
+
   /vaults/{vaultID}/audit/export:
     get:
       summary: Export tamper-evident audit log
@@ -3006,6 +3063,30 @@ paths:
           description: Unauthorized
         '403':
           description: Experimental MPC disabled or step-up required
+
+  /vaults/{vaultID}/mpc/sessions:
+    get:
+      summary: List vault MPC signing sessions
+      operationId: listMPCSigningSessions
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MPC signing session list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMPCSigningSessionsResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Experimental MPC disabled
 
   /vaults/{vaultID}/mpc/sessions/{sessionID}/approvals:
     post:

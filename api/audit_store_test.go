@@ -175,6 +175,22 @@ func TestAuditRetention_NoRetentionDoesNotPrune(t *testing.T) {
 	assert.Len(t, entries, 20, "without retention, all entries should be kept")
 }
 
+func TestAuditChainStatus_Verified(t *testing.T) {
+	a, session, vaultID := setupAuditTestAPI(t, 0, 0)
+	defer session.Close()
+
+	require.NoError(t, a.appendAuditEntry(session, vaultID, "item-1", "member-1", auditActionItemCreated))
+	require.NoError(t, a.appendAuditEntry(session, vaultID, "item-1", "member-1", auditActionItemAccessed))
+
+	status, err := a.auditChainStatus(session, vaultID)
+	require.NoError(t, err)
+	assert.True(t, status.Verified)
+	assert.Equal(t, 2, status.EntryCount)
+	assert.NotEmpty(t, status.TipHash)
+	assert.NotEmpty(t, status.LatestEntryAt)
+	assert.Empty(t, status.FailureReason)
+}
+
 // ---------------------------------------------------------------------------
 // Benchmarks: audit append latency with and without retention
 // ---------------------------------------------------------------------------

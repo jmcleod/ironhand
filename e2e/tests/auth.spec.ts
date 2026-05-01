@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { register, login, lock, uniquePassphrase } from '../helpers';
+import { expectConsoleReady, register, login, lock, uniquePassphrase } from '../helpers';
 
 test.describe('Authentication', () => {
   test.beforeEach(async ({ page }) => {
@@ -34,10 +34,8 @@ test.describe('Authentication', () => {
     await page.getByLabel('I have securely saved my secret key.').click();
     await page.getByRole('button', { name: 'Continue to Dashboard' }).click();
 
-    // Verify we're on the dashboard.
-    await expect(page.getByRole('heading', { name: 'Ironhand', level: 1 })).toBeVisible({
-      timeout: 10_000,
-    });
+    // Verify we're on the console.
+    await expectConsoleReady(page);
   });
 
   test('lock and unlock', async ({ page }) => {
@@ -53,8 +51,8 @@ test.describe('Authentication', () => {
     // Log back in.
     await login(page, creds);
 
-    // Verify we're back on the dashboard.
-    await expect(page.getByRole('heading', { name: 'Ironhand', level: 1 })).toBeVisible();
+    // Verify we're back on the console.
+    await expectConsoleReady(page);
   });
 
   test('wrong credentials are rejected', async ({ page }) => {
@@ -86,10 +84,8 @@ test.describe('Authentication', () => {
     await page.getByLabel('Remember secret key for this session').click();
     await page.getByRole('button', { name: 'Login', exact: true }).click();
 
-    // Wait for dashboard.
-    await expect(page.getByRole('heading', { name: 'Ironhand', level: 1 })).toBeVisible({
-      timeout: 15_000,
-    });
+    // Wait for console.
+    await expectConsoleReady(page);
 
     // Lock again.
     await lock(page);

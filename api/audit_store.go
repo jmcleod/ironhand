@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -73,13 +74,15 @@ const (
 )
 
 type auditEntry struct {
-	ID        string      `json:"id"`
-	VaultID   string      `json:"vault_id"`
-	ItemID    string      `json:"item_id"`
-	Action    auditAction `json:"action"`
-	MemberID  string      `json:"member_id"`
-	CreatedAt string      `json:"created_at"`
-	PrevHash  string      `json:"prev_hash,omitempty"`
+	ID         string      `json:"id"`
+	VaultID    string      `json:"vault_id"`
+	ItemID     string      `json:"item_id"`
+	Action     auditAction `json:"action"`
+	MemberID   string      `json:"member_id"`
+	CreatedAt  string      `json:"created_at"`
+	RemoteAddr string      `json:"remote_addr,omitempty"`
+	UserAgent  string      `json:"user_agent,omitempty"`
+	PrevHash   string      `json:"prev_hash,omitempty"`
 
 	// createdAtTime is the parsed form of CreatedAt, used for comparisons
 	// and sorting. It is not serialised to JSON; it is populated when the
@@ -114,6 +117,14 @@ func auditAAD(vaultID, entryID string) []byte {
 }
 
 func (a *API) appendAuditEntry(session *vault.Session, vaultID, itemID, memberID string, action auditAction) error {
+	return a.appendAuditEntryWithMetadata(session, vaultID, itemID, memberID, action, "", "")
+}
+
+func (a *API) appendAuditEntryFromRequest(r *http.Request, session *vault.Session, vaultID, itemID, memberID string, action auditAction) error {
+	return a.appendAuditEntryWithMetadata(session, vaultID, itemID, memberID, action, r.RemoteAddr, r.UserAgent())
+}
+
+func (a *API) appendAuditEntryWithMetadata(session *vault.Session, vaultID, itemID, memberID string, action auditAction, remoteAddr, userAgent string) error {
 	// Serialise appends per vault so the read-modify-write of the chain
 	// tip cannot race with a concurrent append to the same vault.
 	a.auditMu.Lock(vaultID)
@@ -135,6 +146,8 @@ func (a *API) appendAuditEntry(session *vault.Session, vaultID, itemID, memberID
 		Action:        action,
 		MemberID:      memberID,
 		CreatedAt:     now.Format(time.RFC3339Nano),
+		RemoteAddr:    remoteAddr,
+		UserAgent:     userAgent,
 		PrevHash:      prevHash,
 		createdAtTime: now,
 	}
@@ -241,6 +254,59 @@ func (a *API) listAuditEntries(session *vault.Session, vaultID, itemID string) (
 		return entries[i].CreatedAt > entries[j].CreatedAt
 	})
 	return entries, nil
+}
+
+func (a *API) auditChainStatus(session *vault.Session, vaultID string) (AuditStatusResponse, error) {
+	entries, err := a.listAuditEntries(session, vaultID, "")
+	if err != nil {
+		return AuditStatusResponse{}, err
+	}
+
+	status := AuditStatusResponse{
+		VaultID:    vaultID,
+		Verified:   true,
+		EntryCount: len(entries),
+	}
+	if len(entries) == 0 {
+		return status, nil
+	}
+
+	chronological := make([]auditEntry, len(entries))
+	for i := range entries {
+		chronological[i] = entries[len(entries)-1-i]
+	}
+	status.LatestEntryAt = chronological[len(chronological)-1].CreatedAt
+	status.RetentionFloor = chronological[0].PrevHash == auditGenesisHash && len(chronological) > 0
+
+	prevHash := auditGenesisHash
+	for _, entry := range chronological {
+		if entry.PrevHash != prevHash {
+			status.Verified = false
+			status.FailureReason = "audit chain link mismatch"
+			return status, nil
+		}
+		prevHash = auditChainHash(entry.ID, entry.PrevHash, entry.CreatedAt)
+	}
+	status.TipHash = prevHash
+
+	tipEnv, err := a.repo.Get(vaultID, auditTipType, auditTipRecordID)
+	if err != nil || tipEnv == nil {
+		status.Verified = false
+		status.FailureReason = "audit chain tip missing"
+		return status, nil
+	}
+	tipData, err := session.OpenAuditRecord(tipEnv, auditAAD(vaultID, auditTipRecordID))
+	if err != nil {
+		status.Verified = false
+		status.FailureReason = "audit chain tip unreadable"
+		return status, nil
+	}
+	if string(tipData) != prevHash {
+		status.Verified = false
+		status.FailureReason = "audit chain tip mismatch"
+		return status, nil
+	}
+	return status, nil
 }
 
 // enforceAuditRetentionLocked applies configured retention policy and rewrites
