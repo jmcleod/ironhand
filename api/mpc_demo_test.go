@@ -323,6 +323,9 @@ func TestMPCProductionModeRejectsExperimentalProvider(t *testing.T) {
 	api := New(memory.NewRepository(), vault.NewMemoryEpochCache(), WithExperimentalMPC(true), WithMPCProductionMode(true))
 	err := api.validateMPCProviderForUse("")
 	require.ErrorContains(t, err, "not production ready")
+	require.ErrorContains(t, err, "not externally reviewed")
+	err = api.validateMPCProviderForUse(vault.MPCAlgorithmExperimentalP256Schnorr)
+	require.ErrorContains(t, err, "demo P-256")
 }
 
 func TestMPCKeyLifecycleBlocksAndRevocationMarksReshare(t *testing.T) {

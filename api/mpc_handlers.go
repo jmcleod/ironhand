@@ -58,7 +58,11 @@ func (a *API) validateMPCProviderForUse(algorithm string) error {
 	}
 	info := provider.Info()
 	if a.mpcProductionMode && !info.ProductionReady {
-		return vault.ValidationError{Message: fmt.Sprintf("MPC provider %q is not production ready", info.Algorithm)}
+		message := fmt.Sprintf("MPC provider %q is not production ready", info.Algorithm)
+		if len(info.ProductionBlockers) > 0 {
+			message = fmt.Sprintf("%s: %v", message, info.ProductionBlockers)
+		}
+		return vault.ValidationError{Message: message}
 	}
 	return nil
 }

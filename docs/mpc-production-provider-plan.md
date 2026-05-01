@@ -9,6 +9,7 @@ The production provider should be introduced as a new algorithm identifier, curr
 Provider metadata should be treated as the compatibility contract:
 
 - `production_ready`: true only after external review and operational sign-off.
+- `production_blockers`: a non-empty list for any provider that is visible but not production ready.
 - `supports_keygen`: provider can run distributed key generation through registered signers.
 - `supports_signing`: provider can produce signatures accepted by the target chain/runtime.
 - `supports_reshare`: provider can replace membership without a full new key ceremony.

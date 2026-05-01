@@ -959,6 +959,10 @@ components:
           type: string
         production_ready:
           type: boolean
+        production_blockers:
+          type: array
+          items:
+            type: string
         supports_keygen:
           type: boolean
         supports_signing:

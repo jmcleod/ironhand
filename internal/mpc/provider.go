@@ -25,6 +25,7 @@ type ProviderInfo struct {
 	Status                             ProviderStatus `json:"status"`
 	Domain                             string         `json:"domain"`
 	ProductionReady                    bool           `json:"production_ready"`
+	ProductionBlockers                 []string       `json:"production_blockers,omitempty"`
 	SupportsKeygen                     bool           `json:"supports_keygen"`
 	SupportsSigning                    bool           `json:"supports_signing"`
 	SupportsReshare                    bool           `json:"supports_reshare"`
@@ -80,6 +81,12 @@ func (experimentalP256SchnorrProvider) Info() ProviderInfo {
 		Status:                             ProviderStatusExperimental,
 		Domain:                             domain,
 		ProductionReady:                    false,
+		ProductionBlockers: []string{
+			"demo P-256 Schnorr-style provider",
+			"not externally reviewed",
+			"not chain-compatible for production assets",
+			"does not support resharing",
+		},
 		SupportsKeygen:                     true,
 		SupportsSigning:                    true,
 		SupportsReshare:                    false,

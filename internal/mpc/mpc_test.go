@@ -97,6 +97,17 @@ func TestExperimentalProviderIsNotProductionReady(t *testing.T) {
 	if info.Status != ProviderStatusExperimental {
 		t.Fatalf("%s status = %q, want %q", info.Algorithm, info.Status, ProviderStatusExperimental)
 	}
+	if len(info.ProductionBlockers) == 0 {
+		t.Fatalf("%s must publish production blockers while experimental", info.Algorithm)
+	}
+	if info.SupportsReshare {
+		t.Fatalf("%s must not advertise resharing support", info.Algorithm)
+	}
+	for _, chain := range info.ChainCompatibility {
+		if chain == "evm-secp256k1" || chain == "bitcoin-secp256k1" {
+			t.Fatalf("%s must not advertise production chain compatibility: %q", info.Algorithm, chain)
+		}
+	}
 }
 
 func TestNormalizeParticipantsRejectsDuplicates(t *testing.T) {

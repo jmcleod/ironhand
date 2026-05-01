@@ -1610,6 +1610,7 @@ export interface components {
             status?: "experimental" | "production";
             domain?: string;
             production_ready?: boolean;
+            production_blockers?: string[];
             supports_keygen?: boolean;
             supports_signing?: boolean;
             supports_reshare?: boolean;
