@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jmcleod/ironhand/internal/mpc"
+	"github.com/jmcleod/ironhand/internal/mpc/frostsecp256k1"
 	"github.com/jmcleod/ironhand/internal/mpcclient"
 )
 
@@ -38,6 +39,7 @@ type Service struct {
 	mu        sync.Mutex
 	keys      map[string]*keyState
 	approvals map[string]*ApprovalRequestRecord
+	frost     frostsecp256k1.DurableState
 }
 
 type keyState struct {
@@ -75,6 +77,7 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 		identity  mpc.SignerIdentity
 		keys      = make(map[string]*keyState)
 		approvals = make(map[string]*ApprovalRequestRecord)
+		frost     = frostsecp256k1.NewDurableState()
 	)
 	if store != nil {
 		snapshot, ok, err := store.Load()
@@ -85,7 +88,7 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 			if snapshot.MemberID != memberID || snapshot.PartyID != partyID {
 				return nil, fmt.Errorf("signer state belongs to member %s party %d", snapshot.MemberID, snapshot.PartyID)
 			}
-			ecdhPriv, edPriv, identity, keys, approvals, err = serviceStateFromSnapshot(snapshot)
+			ecdhPriv, edPriv, identity, keys, approvals, frost, err = serviceStateFromSnapshot(snapshot)
 			if err != nil {
 				return nil, err
 			}
@@ -118,6 +121,7 @@ func NewWithStore(memberID string, partyID uint32, name, url string, sharedKey [
 		started:   time.Now().UTC(),
 		keys:      keys,
 		approvals: approvals,
+		frost:     frost,
 	}
 	if store != nil {
 		service.mu.Lock()

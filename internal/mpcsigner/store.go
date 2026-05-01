@@ -9,13 +9,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/jmcleod/ironhand/internal/mpc"
+	"github.com/jmcleod/ironhand/internal/mpc/frostsecp256k1"
 	"github.com/jmcleod/ironhand/internal/util"
 )
 
 const signerStoreVersion = 1
+const frostStateSnapshotVersion = 1
 
 type FileStore struct {
 	path       string
@@ -40,6 +43,14 @@ type signerSnapshot struct {
 	Identity          mpc.SignerIdentity      `json:"identity"`
 	Keys              map[string]keySnapshot  `json:"keys,omitempty"`
 	ApprovalRequests  []ApprovalRequestRecord `json:"approval_requests,omitempty"`
+	FROSTState        *frostStateSnapshot     `json:"frost_state,omitempty"`
+}
+
+type frostStateSnapshot struct {
+	Version  int                                 `json:"version"`
+	DKG      []frostsecp256k1.DKGStateRecord     `json:"dkg,omitempty"`
+	Signing  []frostsecp256k1.SigningStateRecord `json:"signing,omitempty"`
+	Consumed map[string]string                   `json:"consumed_commitments,omitempty"`
 }
 
 type keySnapshot struct {
@@ -233,6 +244,7 @@ func snapshotFromService(s *Service) signerSnapshot {
 		Identity:          s.identity,
 		Keys:              keys,
 		ApprovalRequests:  approvalRequestsFromService(s),
+		FROSTState:        frostStateSnapshotFromDurable(s.frost),
 	}
 }
 
@@ -244,24 +256,24 @@ func approvalRequestsFromService(s *Service) []ApprovalRequestRecord {
 	return requests
 }
 
-func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed25519.PrivateKey, mpc.SignerIdentity, map[string]*keyState, map[string]*ApprovalRequestRecord, error) {
+func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed25519.PrivateKey, mpc.SignerIdentity, map[string]*keyState, map[string]*ApprovalRequestRecord, frostsecp256k1.DurableState, error) {
 	if snapshot.Version != signerStoreVersion {
-		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("unsupported signer snapshot version %d", snapshot.Version)
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, fmt.Errorf("unsupported signer snapshot version %d", snapshot.Version)
 	}
 	ecdhBytes, err := base64.StdEncoding.DecodeString(snapshot.ECDHPrivateKey)
 	if err != nil {
-		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("decode signer ECDH private key: %w", err)
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, fmt.Errorf("decode signer ECDH private key: %w", err)
 	}
 	ecdhPriv, err := ecdh.P256().NewPrivateKey(ecdhBytes)
 	if err != nil {
-		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("parse signer ECDH private key: %w", err)
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, fmt.Errorf("parse signer ECDH private key: %w", err)
 	}
 	edBytes, err := base64.StdEncoding.DecodeString(snapshot.Ed25519PrivateKey)
 	if err != nil {
-		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("decode signer approval private key: %w", err)
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, fmt.Errorf("decode signer approval private key: %w", err)
 	}
 	if len(edBytes) != ed25519.PrivateKeySize {
-		return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("invalid signer approval private key size")
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, fmt.Errorf("invalid signer approval private key size")
 	}
 	keys := make(map[string]*keyState, len(snapshot.Keys))
 	for keyID, state := range snapshot.Keys {
@@ -269,7 +281,7 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 		for rawPartyID, share := range state.Inbox {
 			partyID, err := strconv.Atoi(rawPartyID)
 			if err != nil {
-				return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("invalid saved DKG party ID %q: %w", rawPartyID, err)
+				return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, fmt.Errorf("invalid saved DKG party ID %q: %w", rawPartyID, err)
 			}
 			inbox[partyID] = share
 		}
@@ -277,7 +289,7 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 		for rawPartyID, share := range state.OutgoingShares {
 			partyID, err := strconv.Atoi(rawPartyID)
 			if err != nil {
-				return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("invalid saved outgoing DKG party ID %q: %w", rawPartyID, err)
+				return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, fmt.Errorf("invalid saved outgoing DKG party ID %q: %w", rawPartyID, err)
 			}
 			outgoing[partyID] = share
 		}
@@ -289,7 +301,7 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 		for sessionID, saved := range state.Nonces {
 			nonce, ok := mpc.DecodeScalar(saved.Nonce)
 			if !ok {
-				return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("invalid saved nonce for session %q", sessionID)
+				return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, fmt.Errorf("invalid saved nonce for session %q", sessionID)
 			}
 			if saved.SessionID == "" {
 				saved.SessionID = sessionID
@@ -320,5 +332,84 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 		copy := request
 		approvals[request.RequestID] = &copy
 	}
-	return ecdhPriv, ed25519.PrivateKey(edBytes), snapshot.Identity, keys, approvals, nil
+	frost, err := durableFROSTStateFromSnapshot(snapshot.FROSTState)
+	if err != nil {
+		return nil, nil, mpc.SignerIdentity{}, nil, nil, frostsecp256k1.DurableState{}, err
+	}
+	return ecdhPriv, ed25519.PrivateKey(edBytes), snapshot.Identity, keys, approvals, frost, nil
+}
+
+func frostStateSnapshotFromDurable(state frostsecp256k1.DurableState) *frostStateSnapshot {
+	if len(state.DKG) == 0 && len(state.Signing) == 0 && len(state.Consumed) == 0 {
+		return nil
+	}
+	snapshot := &frostStateSnapshot{
+		Version:  frostStateSnapshotVersion,
+		DKG:      make([]frostsecp256k1.DKGStateRecord, 0, len(state.DKG)),
+		Signing:  make([]frostsecp256k1.SigningStateRecord, 0, len(state.Signing)),
+		Consumed: copyStringMap(state.Consumed),
+	}
+	for _, record := range state.DKG {
+		snapshot.DKG = append(snapshot.DKG, record)
+	}
+	for _, record := range state.Signing {
+		snapshot.Signing = append(snapshot.Signing, record)
+	}
+	slices.SortFunc(snapshot.DKG, func(a, b frostsecp256k1.DKGStateRecord) int {
+		return stringsCompare(a.KeyID+":"+a.DKGID, b.KeyID+":"+b.DKGID)
+	})
+	slices.SortFunc(snapshot.Signing, func(a, b frostsecp256k1.SigningStateRecord) int {
+		return stringsCompare(a.KeyID+":"+a.SessionID, b.KeyID+":"+b.SessionID)
+	})
+	return snapshot
+}
+
+func durableFROSTStateFromSnapshot(snapshot *frostStateSnapshot) (frostsecp256k1.DurableState, error) {
+	if snapshot == nil {
+		return frostsecp256k1.NewDurableState(), nil
+	}
+	if snapshot.Version != frostStateSnapshotVersion {
+		return frostsecp256k1.DurableState{}, fmt.Errorf("unsupported FROST signer state version %d", snapshot.Version)
+	}
+	state, err := frostsecp256k1.ReconstructDurableState(snapshot.DKG, snapshot.Signing)
+	if err != nil {
+		return frostsecp256k1.DurableState{}, fmt.Errorf("reconstruct FROST signer state: %w", err)
+	}
+	if len(snapshot.Consumed) != 0 && !stringMapsEqual(snapshot.Consumed, state.Consumed) {
+		return frostsecp256k1.DurableState{}, fmt.Errorf("FROST consumed commitment ownership does not match reconstructed signing records")
+	}
+	return state, nil
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func stringMapsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		if rightValue, ok := right[key]; !ok || rightValue != leftValue {
+			return false
+		}
+	}
+	return true
+}
+
+func stringsCompare(left, right string) int {
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
 }
