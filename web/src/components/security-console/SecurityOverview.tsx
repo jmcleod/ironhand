@@ -415,17 +415,18 @@ export default function SecurityOverview({
                 <ConsoleTh>Member</ConsoleTh>
                 <ConsoleTh>Action</ConsoleTh>
                 <ConsoleTh>Secret / Resource</ConsoleTh>
+                <ConsoleTh>IP / Peer</ConsoleTh>
                 <ConsoleTh>Result</ConsoleTh>
               </tr>
             </thead>
             <tbody>
               {auditLoading ? (
                 <tr>
-                  <ConsoleTd colSpan={5} className="text-muted-foreground">Loading audit activity...</ConsoleTd>
+                  <ConsoleTd colSpan={6} className="text-muted-foreground">Loading audit activity...</ConsoleTd>
                 </tr>
               ) : auditEntries.length === 0 ? (
                 <tr>
-                  <ConsoleTd colSpan={5} className="text-muted-foreground">No audit entries have been recorded for this vault yet.</ConsoleTd>
+                  <ConsoleTd colSpan={6} className="text-muted-foreground">No audit entries have been recorded for this vault yet.</ConsoleTd>
                 </tr>
               ) : (
                 auditEntries.map((entry) => (
@@ -434,6 +435,7 @@ export default function SecurityOverview({
                     <ConsoleTd>{memberDisplayName(entry.member_id)}</ConsoleTd>
                     <ConsoleTd>{actionLabel(entry.action)}</ConsoleTd>
                     <ConsoleTd className="font-mono text-xs">{entry.item_id || vault.name}</ConsoleTd>
+                    <ConsoleTd className="font-mono text-xs">{entry.remote_addr || '-'}</ConsoleTd>
                     <ConsoleTd>
                       <StatusPill tone="success">Success</StatusPill>
                     </ConsoleTd>

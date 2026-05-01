@@ -118,6 +118,11 @@ export default function AuditLogDialog({ open, onOpenChange, vaultId }: AuditLog
                 <p className="text-xs text-muted-foreground">
                   Member: <span className="font-mono">{entry.member_id}</span>
                 </p>
+                {entry.remote_addr && (
+                  <p className="text-xs text-muted-foreground">
+                    IP / Peer: <span className="font-mono">{entry.remote_addr}</span>
+                  </p>
+                )}
               </div>
             ))}
           </div>

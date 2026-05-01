@@ -645,19 +645,23 @@ export function AuditSection({ vault }: { vault: Vault | null }) {
             <ConsoleTh>Member</ConsoleTh>
             <ConsoleTh>Action</ConsoleTh>
             <ConsoleTh>Resource</ConsoleTh>
+            <ConsoleTh>IP / Peer</ConsoleTh>
+            <ConsoleTh>Client</ConsoleTh>
           </tr>
         </thead>
         <tbody>
           {loading ? (
-            <tr><ConsoleTd colSpan={4} className="text-muted-foreground">Loading audit entries...</ConsoleTd></tr>
+            <tr><ConsoleTd colSpan={6} className="text-muted-foreground">Loading audit entries...</ConsoleTd></tr>
           ) : entries.length === 0 ? (
-            <tr><ConsoleTd colSpan={4} className="text-muted-foreground">No audit entries recorded for this vault.</ConsoleTd></tr>
+            <tr><ConsoleTd colSpan={6} className="text-muted-foreground">No audit entries recorded for this vault.</ConsoleTd></tr>
           ) : entries.map((entry) => (
             <tr key={entry.id}>
               <ConsoleTd>{new Date(entry.created_at).toLocaleString()}</ConsoleTd>
               <ConsoleTd className="font-mono text-xs">{entry.member_id}</ConsoleTd>
               <ConsoleTd>{actionLabel(entry.action)}</ConsoleTd>
               <ConsoleTd className="font-mono text-xs">{entry.item_id || vault.name}</ConsoleTd>
+              <ConsoleTd className="font-mono text-xs">{entry.remote_addr || '-'}</ConsoleTd>
+              <ConsoleTd className="max-w-[220px] truncate text-xs text-muted-foreground" title={entry.user_agent || ''}>{entry.user_agent || '-'}</ConsoleTd>
             </tr>
           ))}
         </tbody>

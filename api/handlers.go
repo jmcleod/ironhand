@@ -269,7 +269,7 @@ func (a *API) PutItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemCreated)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionItemCreated)
 
 	a.audit.logEvent(AuditItemCreated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -299,7 +299,7 @@ func (a *API) GetItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	writeJSON(w, http.StatusOK, GetItemResponse{
 		ItemID: itemID,
@@ -344,7 +344,7 @@ func (a *API) GetItemPrivateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionPrivateKeyAccessed)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionPrivateKeyAccessed)
 	a.audit.logEvent(AuditPrivateKeyAccessed, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))
@@ -386,7 +386,7 @@ func (a *API) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemUpdated)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionItemUpdated)
 
 	a.audit.logEvent(AuditItemUpdated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -415,7 +415,7 @@ func (a *API) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemDeleted)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionItemDeleted)
 
 	a.audit.logEvent(AuditItemDeleted, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
@@ -629,7 +629,7 @@ func (a *API) GetItemHistory(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	history := make([]HistoryEntryResponse, len(entries))
 	for i, e := range entries {
@@ -676,7 +676,7 @@ func (a *API) GetHistoryVersion(w http.ResponseWriter, r *http.Request) {
 		mapError(w, err)
 		return
 	}
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionItemAccessed)
 
 	writeJSON(w, http.StatusOK, GetHistoryVersionResponse{
 		ItemID:  itemID,
@@ -712,11 +712,13 @@ func (a *API) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	resp := make([]AuditEntryResponse, 0, len(page))
 	for _, entry := range page {
 		resp = append(resp, AuditEntryResponse{
-			ID:        entry.ID,
-			ItemID:    entry.ItemID,
-			Action:    string(entry.Action),
-			MemberID:  entry.MemberID,
-			CreatedAt: entry.CreatedAt,
+			ID:         entry.ID,
+			ItemID:     entry.ItemID,
+			Action:     string(entry.Action),
+			MemberID:   entry.MemberID,
+			CreatedAt:  entry.CreatedAt,
+			RemoteAddr: entry.RemoteAddr,
+			UserAgent:  entry.UserAgent,
 		})
 	}
 
@@ -774,13 +776,15 @@ func (a *API) ExportAuditLog(w http.ResponseWriter, r *http.Request) {
 	for i := range entries {
 		e := entries[len(entries)-1-i]
 		exportEntries[i] = ExportAuditEntryResponse{
-			ID:        e.ID,
-			VaultID:   e.VaultID,
-			ItemID:    e.ItemID,
-			Action:    string(e.Action),
-			MemberID:  e.MemberID,
-			CreatedAt: e.CreatedAt,
-			PrevHash:  e.PrevHash,
+			ID:         e.ID,
+			VaultID:    e.VaultID,
+			ItemID:     e.ItemID,
+			Action:     string(e.Action),
+			MemberID:   e.MemberID,
+			CreatedAt:  e.CreatedAt,
+			RemoteAddr: e.RemoteAddr,
+			UserAgent:  e.UserAgent,
+			PrevHash:   e.PrevHash,
 		}
 	}
 
@@ -909,7 +913,7 @@ func (a *API) ExportVault(w http.ResponseWriter, r *http.Request) {
 	out = append(out, salt...)
 	out = append(out, ciphertext...)
 
-	_ = a.appendAuditEntry(session, vaultID, "", session.MemberID, auditActionVaultExported)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, "", session.MemberID, auditActionVaultExported)
 	a.audit.logEvent(AuditVaultExported, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.Int("item_count", len(exportItems)))
@@ -1011,11 +1015,11 @@ func (a *API) ImportVault(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("import: failed to put item", "error", err)
 			continue
 		}
-		_ = a.appendAuditEntry(session, vaultID, newItemID, session.MemberID, auditActionItemCreated)
+		_ = a.appendAuditEntryFromRequest(r, session, vaultID, newItemID, session.MemberID, auditActionItemCreated)
 		importedCount++
 	}
 
-	_ = a.appendAuditEntry(session, vaultID, "", session.MemberID, auditActionVaultImported)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, "", session.MemberID, auditActionVaultImported)
 	a.audit.logEvent(AuditVaultImported, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.Int("imported_count", importedCount))
@@ -1118,7 +1122,7 @@ func (a *API) InitCA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = a.appendAuditEntry(session, vaultID, "", session.MemberID, auditActionCAInitialized)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, "", session.MemberID, auditActionCAInitialized)
 	a.audit.logEvent(AuditCAInitialized, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID))
 
@@ -1262,7 +1266,7 @@ func (a *API) IssueCert(w http.ResponseWriter, r *http.Request) {
 	// Read back the issued cert fields for the response.
 	fields, _ := session.Get(r.Context(), itemID)
 
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionCertIssued)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionCertIssued)
 	a.audit.logEvent(AuditCertIssued, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))
@@ -1331,7 +1335,7 @@ func (a *API) RevokeCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionCertRevoked)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionCertRevoked)
 	a.audit.logEvent(AuditCertRevoked, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))
@@ -1390,7 +1394,7 @@ func (a *API) RenewCert(w http.ResponseWriter, r *http.Request) {
 	// Read serial from new cert.
 	newFields, _ := session.Get(r.Context(), newItemID)
 
-	_ = a.appendAuditEntry(session, vaultID, newItemID, session.MemberID, auditActionCertRenewed)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, newItemID, session.MemberID, auditActionCertRenewed)
 	a.audit.logEvent(AuditCertRenewed, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("old_item_id", itemID),
@@ -1464,7 +1468,7 @@ func (a *API) GenerateCRL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = a.appendAuditEntry(session, vaultID, "", session.MemberID, auditActionCRLGenerated)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, "", session.MemberID, auditActionCRLGenerated)
 	a.audit.logEvent(AuditCRLGenerated, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID))
 
@@ -1518,7 +1522,7 @@ func (a *API) SignCSR(w http.ResponseWriter, r *http.Request) {
 	// Read the issued cert PEM.
 	fields, _ := session.Get(r.Context(), itemID)
 
-	_ = a.appendAuditEntry(session, vaultID, itemID, session.MemberID, auditActionCSRSigned)
+	_ = a.appendAuditEntryFromRequest(r, session, vaultID, itemID, session.MemberID, auditActionCSRSigned)
 	a.audit.logEvent(AuditCSRSigned, r, creds.SecretKey().ID(),
 		slog.String("vault_id", vaultID),
 		slog.String("item_id", itemID))

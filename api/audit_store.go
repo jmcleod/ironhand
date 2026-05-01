@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -73,13 +74,15 @@ const (
 )
 
 type auditEntry struct {
-	ID        string      `json:"id"`
-	VaultID   string      `json:"vault_id"`
-	ItemID    string      `json:"item_id"`
-	Action    auditAction `json:"action"`
-	MemberID  string      `json:"member_id"`
-	CreatedAt string      `json:"created_at"`
-	PrevHash  string      `json:"prev_hash,omitempty"`
+	ID         string      `json:"id"`
+	VaultID    string      `json:"vault_id"`
+	ItemID     string      `json:"item_id"`
+	Action     auditAction `json:"action"`
+	MemberID   string      `json:"member_id"`
+	CreatedAt  string      `json:"created_at"`
+	RemoteAddr string      `json:"remote_addr,omitempty"`
+	UserAgent  string      `json:"user_agent,omitempty"`
+	PrevHash   string      `json:"prev_hash,omitempty"`
 
 	// createdAtTime is the parsed form of CreatedAt, used for comparisons
 	// and sorting. It is not serialised to JSON; it is populated when the
@@ -114,6 +117,14 @@ func auditAAD(vaultID, entryID string) []byte {
 }
 
 func (a *API) appendAuditEntry(session *vault.Session, vaultID, itemID, memberID string, action auditAction) error {
+	return a.appendAuditEntryWithMetadata(session, vaultID, itemID, memberID, action, "", "")
+}
+
+func (a *API) appendAuditEntryFromRequest(r *http.Request, session *vault.Session, vaultID, itemID, memberID string, action auditAction) error {
+	return a.appendAuditEntryWithMetadata(session, vaultID, itemID, memberID, action, r.RemoteAddr, r.UserAgent())
+}
+
+func (a *API) appendAuditEntryWithMetadata(session *vault.Session, vaultID, itemID, memberID string, action auditAction, remoteAddr, userAgent string) error {
 	// Serialise appends per vault so the read-modify-write of the chain
 	// tip cannot race with a concurrent append to the same vault.
 	a.auditMu.Lock(vaultID)
@@ -135,6 +146,8 @@ func (a *API) appendAuditEntry(session *vault.Session, vaultID, itemID, memberID
 		Action:        action,
 		MemberID:      memberID,
 		CreatedAt:     now.Format(time.RFC3339Nano),
+		RemoteAddr:    remoteAddr,
+		UserAgent:     userAgent,
 		PrevHash:      prevHash,
 		createdAtTime: now,
 	}

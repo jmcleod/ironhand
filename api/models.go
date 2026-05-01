@@ -250,11 +250,13 @@ type GetHistoryVersionResponse struct {
 
 // AuditEntryResponse is one vault audit log entry.
 type AuditEntryResponse struct {
-	ID        string `json:"id"`
-	ItemID    string `json:"item_id"`
-	Action    string `json:"action"`
-	MemberID  string `json:"member_id"`
-	CreatedAt string `json:"created_at"`
+	ID         string `json:"id"`
+	ItemID     string `json:"item_id"`
+	Action     string `json:"action"`
+	MemberID   string `json:"member_id"`
+	CreatedAt  string `json:"created_at"`
+	RemoteAddr string `json:"remote_addr,omitempty"`
+	UserAgent  string `json:"user_agent,omitempty"`
 }
 
 // ListAuditLogsResponse is returned from GET /vaults/{vaultID}/audit.
@@ -276,13 +278,15 @@ type AuditStatusResponse struct {
 
 // ExportAuditEntryResponse extends AuditEntryResponse with the chain hash.
 type ExportAuditEntryResponse struct {
-	ID        string `json:"id"`
-	VaultID   string `json:"vault_id"`
-	ItemID    string `json:"item_id"`
-	Action    string `json:"action"`
-	MemberID  string `json:"member_id"`
-	CreatedAt string `json:"created_at"`
-	PrevHash  string `json:"prev_hash"`
+	ID         string `json:"id"`
+	VaultID    string `json:"vault_id"`
+	ItemID     string `json:"item_id"`
+	Action     string `json:"action"`
+	MemberID   string `json:"member_id"`
+	CreatedAt  string `json:"created_at"`
+	RemoteAddr string `json:"remote_addr,omitempty"`
+	UserAgent  string `json:"user_agent,omitempty"`
+	PrevHash   string `json:"prev_hash"`
 }
 
 // ExportAuditLogResponse is returned from GET /vaults/{vaultID}/audit/export.
