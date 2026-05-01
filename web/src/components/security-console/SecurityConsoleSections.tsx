@@ -14,6 +14,7 @@ import {
   Search,
   Shield,
   ShieldCheck,
+  Trash2,
   Upload,
   UserRoundPlus,
   UserRoundX,
@@ -118,6 +119,7 @@ export function VaultSecretsSection({
   onExport,
   onInitCA,
   onIssueCert,
+  onDelete,
 }: {
   vault: Vault;
   onBack: () => void;
@@ -129,6 +131,7 @@ export function VaultSecretsSection({
   onExport: () => void;
   onInitCA: () => void;
   onIssueCert: () => void;
+  onDelete: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<ItemType | 'all'>('all');
@@ -160,6 +163,9 @@ export function VaultSecretsSection({
           <Button variant="outline" onClick={onExport}><Download className="h-4 w-4" />Export</Button>
           <Button variant="outline" onClick={onImport}><Upload className="h-4 w-4" />Import</Button>
           <Button variant="outline" onClick={vault.isCA ? onIssueCert : onInitCA}><FileKey2 className="h-4 w-4" />{vault.isCA ? 'Issue Cert' : 'Init CA'}</Button>
+          <Button variant="ghost" size="icon" onClick={onDelete} className="text-destructive hover:text-destructive" title="Delete vault">
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 

@@ -20,7 +20,7 @@ test.describe('Export & Import', () => {
     await addLoginItem(page, 'Test Login', 'user', 'pass');
 
     // Click Export button.
-    await page.getByRole('button', { name: 'Export' }).click();
+    await page.getByRole('main').getByRole('button', { name: 'Export' }).click();
 
     // Fill export passphrase.
     await page.getByPlaceholder('Enter a strong passphrase').fill('export-pass-12345');
@@ -47,7 +47,7 @@ test.describe('Export & Import', () => {
     await addNoteItem(page, 'Important Note', 'Do not forget this.');
 
     // Export the vault.
-    await page.getByRole('button', { name: 'Export' }).click();
+    await page.getByRole('main').getByRole('button', { name: 'Export' }).click();
     const exportPassphrase = 'backup-pass-12345';
     await page.getByPlaceholder('Enter a strong passphrase').fill(exportPassphrase);
     await page.getByPlaceholder('Confirm passphrase').fill(exportPassphrase);
@@ -67,7 +67,7 @@ test.describe('Export & Import', () => {
     await createVault(page, 'Import Target');
 
     // Click Import button.
-    await page.getByRole('button', { name: 'Import' }).click();
+    await page.getByRole('main').getByRole('button', { name: 'Import' }).click();
 
     // Upload the backup file.
     const fileInput = page.locator('input[type="file"][accept=".ironhand-backup"]');
@@ -80,9 +80,9 @@ test.describe('Export & Import', () => {
     await page.getByRole('button', { name: 'Import Backup' }).click();
 
     // Wait for import to complete — items should appear in the vault.
-    await expect(page.getByRole('button', { name: 'Important Login' })).toBeVisible({
+    await expect(page.getByText('Important Login', { exact: true })).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByRole('button', { name: 'Important Note' })).toBeVisible();
+    await expect(page.getByText('Important Note', { exact: true })).toBeVisible();
   });
 });

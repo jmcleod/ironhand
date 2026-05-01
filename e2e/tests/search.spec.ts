@@ -76,6 +76,6 @@ test.describe('Search', () => {
     await searchInput.clear();
 
     // Verify vault cards are visible again.
-    await expect(page.getByText('Clear Search Test')).toBeVisible();
+    await expect(page.getByRole('main').getByRole('button', { name: /^Clear Search Test/ })).toBeVisible();
   });
 });

@@ -52,7 +52,7 @@ const TYPE_FILTERS: { value: ItemType | 'all'; label: string; icon?: React.React
 ];
 
 export default function DashboardPage() {
-  const { account, lock, refreshVault } = useVault();
+  const { account, deleteVault, lock, refreshVault } = useVault();
   const [activeView, setActiveView] = useState<ConsoleView>('overview');
   const [activeVaultId, setActiveVaultId] = useState<string | null>(null);
   const [openVaultId, setOpenVaultId] = useState<string | null>(null);
@@ -107,6 +107,12 @@ export default function DashboardPage() {
   const totalItems = account.vaults.reduce((sum, vault) => sum + vault.items.length, 0);
   const activeMembers = activeVault?.members.filter((member) => member.status !== 'revoked').length ?? 0;
   const revokedMembers = activeVault?.members.filter((member) => member.status === 'revoked').length ?? 0;
+  const handleDeleteVault = async (vaultId: string) => {
+    if (!confirm('Delete this vault and all its items?')) return;
+    await deleteVault(vaultId);
+    setOpenVaultId(null);
+    setActiveView('vaults');
+  };
 
   const renderVaults = () => {
     if (openVault) {
@@ -122,6 +128,7 @@ export default function DashboardPage() {
           onExport={() => setShowExport(true)}
           onInitCA={() => setShowInitCA(true)}
           onIssueCert={() => setShowIssueCert(true)}
+          onDelete={() => { void handleDeleteVault(openVault.id); }}
         />
       );
     }

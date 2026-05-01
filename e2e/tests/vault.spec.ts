@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { register, createVault, openVault, goBackToDashboard, uniquePassphrase } from '../helpers';
+import {
+  createVault,
+  expectConsoleReady,
+  goBackToDashboard,
+  register,
+  uniquePassphrase,
+} from '../helpers';
 
 test.describe('Vault Management', () => {
   test.beforeEach(async ({ page }) => {
@@ -25,8 +31,8 @@ test.describe('Vault Management', () => {
     // Click back button (ArrowLeft icon button — the icon-only ghost button).
     await goBackToDashboard(page);
 
-    // Verify we're back on dashboard.
-    await expect(page.getByRole('heading', { name: 'Ironhand', level: 1 })).toBeVisible();
+    // Verify we're back on the vault list.
+    await expect(page.getByRole('heading', { name: 'Secret Inventory' })).toBeVisible();
   });
 
   test('delete a vault', async ({ page }) => {
@@ -40,11 +46,9 @@ test.describe('Vault Management', () => {
     // Click the delete button (Trash2 icon — the destructive-colored button).
     await page.locator('button.text-destructive').click();
 
-    // Verify we're back on dashboard and vault is gone.
-    await expect(page.getByRole('heading', { name: 'Ironhand', level: 1 })).toBeVisible({
-      timeout: 10_000,
-    });
-    await expect(page.getByText('Delete Me')).not.toBeVisible();
+    // Verify we're back on the console and vault is gone.
+    await expectConsoleReady(page);
+    await expect(page.getByRole('main').getByRole('button', { name: /^Delete Me/ })).not.toBeVisible();
   });
 
   test('create multiple vaults', async ({ page }) => {
@@ -64,7 +68,7 @@ test.describe('Vault Management', () => {
     await goBackToDashboard(page);
 
     // Verify both vault cards are visible.
-    await expect(page.getByText('Vault Alpha')).toBeVisible();
-    await expect(page.getByText('Vault Beta')).toBeVisible();
+    await expect(page.getByRole('main').getByRole('button', { name: /^Vault Alpha/ })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('button', { name: /^Vault Beta/ })).toBeVisible();
   });
 });

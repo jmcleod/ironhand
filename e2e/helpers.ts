@@ -10,6 +10,11 @@ export interface Credentials {
   passphrase: string;
 }
 
+/** Wait for the security console shell to finish rendering. */
+export async function expectConsoleReady(page: Page): Promise<void> {
+  await expect(page.getByText('Security Console')).toBeVisible({ timeout: 15_000 });
+}
+
 /**
  * Register a new account. Starts from the login page (default landing).
  * Returns the secret key and passphrase for subsequent login.
@@ -48,10 +53,8 @@ export async function register(page: Page, passphrase: string): Promise<Credenti
   // Continue to dashboard.
   await page.getByRole('button', { name: 'Continue to Dashboard' }).click();
 
-  // Wait for dashboard to load.
-  await expect(page.getByRole('heading', { name: 'Ironhand', level: 1 })).toBeVisible({
-    timeout: 10_000,
-  });
+  // Wait for console to load.
+  await expectConsoleReady(page);
 
   return { secretKey, passphrase };
 }
@@ -67,17 +70,15 @@ export async function login(page: Page, credentials: Credentials): Promise<void>
   await page.getByPlaceholder('Passphrase', { exact: true }).fill(credentials.passphrase);
   await page.getByRole('button', { name: 'Login', exact: true }).click();
 
-  // Wait for dashboard.
-  await expect(page.getByRole('heading', { name: 'Ironhand', level: 1 })).toBeVisible({
-    timeout: 15_000,
-  });
+  // Wait for console.
+  await expectConsoleReady(page);
 }
 
 /**
  * Lock the current session (click the Lock button on the dashboard).
  */
 export async function lock(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Lock' }).click();
+  await page.getByTitle('Lock session').click();
 
   // Wait for login page to appear.
   await expect(page.getByRole('heading', { name: 'Login', level: 1 })).toBeVisible();
@@ -92,7 +93,8 @@ export async function createVault(
   name: string,
   description?: string,
 ): Promise<void> {
-  await page.getByRole('button', { name: 'New Vault' }).click();
+  await page.getByRole('banner').getByRole('button', { name: 'Vaults' }).click();
+  await page.getByRole('button', { name: /^(New Vault|Create Vault)$/ }).click();
 
   // Wait for the create vault dialog to open.
   await expect(page.getByRole('dialog')).toBeVisible();
@@ -106,8 +108,8 @@ export async function createVault(
   // Wait for dialog to close (vault created, dashboard refreshes).
   await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 10_000 });
 
-  // The UI stays on the dashboard after creation — click the vault card to open it.
-  await page.getByText(name, { exact: true }).click();
+  // The UI stays on the vault list after creation. Click the vault card to open it.
+  await page.getByRole('main').getByRole('button', { name: new RegExp(`^${escapeRegExp(name)}`) }).click();
 
   // Wait for vault detail view to appear with the name as h1.
   await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible({
@@ -119,7 +121,8 @@ export async function createVault(
  * Open an existing vault by clicking its card on the dashboard.
  */
 export async function openVault(page: Page, name: string): Promise<void> {
-  await page.getByText(name, { exact: true }).click();
+  await page.getByRole('banner').getByRole('button', { name: 'Vaults' }).click();
+  await page.getByRole('main').getByRole('button', { name: new RegExp(`^${escapeRegExp(name)}`) }).click();
 
   // Wait for vault detail view.
   await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
@@ -133,8 +136,8 @@ export async function goBackToDashboard(page: Page): Promise<void> {
   // Use a narrow locator: the button that contains an SVG (the ArrowLeft icon).
   await page.locator('button:has(svg.lucide-arrow-left)').click();
 
-  // Wait for dashboard.
-  await expect(page.getByRole('heading', { name: 'Ironhand', level: 1 })).toBeVisible();
+  // Wait for the vault list.
+  await expect(page.getByRole('heading', { name: 'Secret Inventory' })).toBeVisible();
 }
 
 /**
@@ -147,8 +150,8 @@ export async function addLoginItem(
   password: string,
   url?: string,
 ): Promise<void> {
-  // Click "Add Item" button in the vault header (not the empty-state button).
-  await page.getByRole('banner').getByRole('button', { name: 'Add Item' }).click();
+  // Click "Add Item" button in the vault detail action area.
+  await page.getByRole('button', { name: 'Add Item' }).click();
 
   // Wait for dialog to open.
   await expect(page.getByRole('dialog')).toBeVisible();
@@ -166,7 +169,7 @@ export async function addLoginItem(
 
   // Wait for dialog to close and item to appear in the vault list.
   await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole('button', { name })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
 }
 
 /**
@@ -177,7 +180,7 @@ export async function addNoteItem(
   name: string,
   content: string,
 ): Promise<void> {
-  await page.getByRole('banner').getByRole('button', { name: 'Add Item' }).click();
+  await page.getByRole('button', { name: 'Add Item' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
 
   await page.getByPlaceholder('Item name').fill(name);
@@ -192,7 +195,7 @@ export async function addNoteItem(
 
   // Wait for dialog to close and item to appear.
   await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole('button', { name })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
 }
 
 /**
@@ -206,7 +209,7 @@ export async function addCardItem(
   expiry: string,
   cvv: string,
 ): Promise<void> {
-  await page.getByRole('banner').getByRole('button', { name: 'Add Item' }).click();
+  await page.getByRole('button', { name: 'Add Item' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
 
   await page.getByPlaceholder('Item name').fill(name);
@@ -224,7 +227,7 @@ export async function addCardItem(
 
   // Wait for dialog to close and item to appear.
   await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole('button', { name })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
 }
 
 /**
@@ -239,4 +242,8 @@ export async function registerAndCreateVault(
   const creds = await register(page, passphrase);
   await createVault(page, vaultName);
   return creds;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
