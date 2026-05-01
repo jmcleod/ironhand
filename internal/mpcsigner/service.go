@@ -779,6 +779,13 @@ func (s *Service) handleNonceCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state.nonces[req.SessionID] = &nonceState{KeyID: req.KeyID, SessionID: req.SessionID, MessageHash: req.MessageHash, Nonce: nonce}
+	if err := s.saveLocked(); err != nil {
+		delete(state.nonces, req.SessionID)
+		s.mu.Unlock()
+		nonce.SetInt64(0)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
+		return
+	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, mpc.Commitment{PartyID: int(s.partyID), R: mpc.ScalarBasePoint(nonce)})
 }
@@ -850,6 +857,12 @@ func (s *Service) handleSignShare(w http.ResponseWriter, r *http.Request) {
 	}
 	nonce := nonceRecord.Nonce
 	delete(state.nonces, req.SessionID)
+	if err := s.saveLocked(); err != nil {
+		state.nonces[req.SessionID] = nonceRecord
+		s.mu.Unlock()
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("persist signer state: %v", err))
+		return
+	}
 	publicKey := state.publicKey
 	s.mu.Unlock()
 

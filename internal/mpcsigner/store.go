@@ -43,16 +43,24 @@ type signerSnapshot struct {
 }
 
 type keySnapshot struct {
-	VaultID        string                 `json:"vault_id,omitempty"`
-	DKGSessionID   string                 `json:"dkg_session_id,omitempty"`
-	DKGStatus      string                 `json:"dkg_status,omitempty"`
-	Threshold      int                    `json:"threshold"`
-	Members        []Member               `json:"members"`
-	Commitments    []mpc.PublicCommitment `json:"commitments,omitempty"`
-	Inbox          map[string]string      `json:"inbox,omitempty"`
-	OutgoingShares map[string]string      `json:"outgoing_shares,omitempty"`
-	Fragment       mpc.EncryptedFragment  `json:"fragment,omitempty"`
-	PublicKey      mpc.Point              `json:"public_key,omitempty"`
+	VaultID        string                   `json:"vault_id,omitempty"`
+	DKGSessionID   string                   `json:"dkg_session_id,omitempty"`
+	DKGStatus      string                   `json:"dkg_status,omitempty"`
+	Threshold      int                      `json:"threshold"`
+	Members        []Member                 `json:"members"`
+	Commitments    []mpc.PublicCommitment   `json:"commitments,omitempty"`
+	Inbox          map[string]string        `json:"inbox,omitempty"`
+	OutgoingShares map[string]string        `json:"outgoing_shares,omitempty"`
+	Fragment       mpc.EncryptedFragment    `json:"fragment,omitempty"`
+	PublicKey      mpc.Point                `json:"public_key,omitempty"`
+	Nonces         map[string]nonceSnapshot `json:"nonces,omitempty"`
+}
+
+type nonceSnapshot struct {
+	KeyID       string `json:"key_id"`
+	SessionID   string `json:"session_id"`
+	MessageHash string `json:"message_hash"`
+	Nonce       string `json:"nonce"`
 }
 
 func NewFileStore(path, passphrase string) (*FileStore, error) {
@@ -190,6 +198,18 @@ func snapshotFromService(s *Service) signerSnapshot {
 		for partyID, share := range state.outgoingShares {
 			outgoing[strconv.Itoa(partyID)] = share
 		}
+		nonces := make(map[string]nonceSnapshot, len(state.nonces))
+		for sessionID, nonce := range state.nonces {
+			if nonce == nil || nonce.Nonce == nil {
+				continue
+			}
+			nonces[sessionID] = nonceSnapshot{
+				KeyID:       nonce.KeyID,
+				SessionID:   nonce.SessionID,
+				MessageHash: nonce.MessageHash,
+				Nonce:       mpc.EncodeScalar(nonce.Nonce),
+			}
+		}
 		keys[keyID] = keySnapshot{
 			VaultID:        state.vaultID,
 			DKGSessionID:   state.dkgSessionID,
@@ -201,6 +221,7 @@ func snapshotFromService(s *Service) signerSnapshot {
 			OutgoingShares: outgoing,
 			Fragment:       state.fragment,
 			PublicKey:      state.publicKey,
+			Nonces:         nonces,
 		}
 	}
 	return signerSnapshot{
@@ -264,6 +285,22 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 		for _, commitment := range state.Commitments {
 			commitments[commitment.PartyID] = commitment
 		}
+		nonces := make(map[string]*nonceState, len(state.Nonces))
+		for sessionID, saved := range state.Nonces {
+			nonce, ok := mpc.DecodeScalar(saved.Nonce)
+			if !ok {
+				return nil, nil, mpc.SignerIdentity{}, nil, nil, fmt.Errorf("invalid saved nonce for session %q", sessionID)
+			}
+			if saved.SessionID == "" {
+				saved.SessionID = sessionID
+			}
+			nonces[sessionID] = &nonceState{
+				KeyID:       saved.KeyID,
+				SessionID:   saved.SessionID,
+				MessageHash: saved.MessageHash,
+				Nonce:       nonce,
+			}
+		}
 		keys[keyID] = &keyState{
 			vaultID:        state.VaultID,
 			dkgSessionID:   state.DKGSessionID,
@@ -275,7 +312,7 @@ func serviceStateFromSnapshot(snapshot *signerSnapshot) (*ecdh.PrivateKey, ed255
 			outgoingShares: outgoing,
 			fragment:       state.Fragment,
 			publicKey:      state.PublicKey,
-			nonces:         make(map[string]*nonceState),
+			nonces:         nonces,
 		}
 	}
 	approvals := make(map[string]*ApprovalRequestRecord, len(snapshot.ApprovalRequests))
