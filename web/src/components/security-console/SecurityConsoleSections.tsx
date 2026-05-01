@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
+  Clock3,
   Download,
   Fingerprint,
   FileKey2,
@@ -19,6 +20,7 @@ import {
   UserRoundPlus,
   UserRoundX,
   Wand2,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -309,10 +311,16 @@ export function AccessSection({
 }) {
   const [invites, setInvites] = useState<InviteSummary[]>([]);
   const [loadingInvites, setLoadingInvites] = useState(false);
+  const [requests, setRequests] = useState<AccessWorkflowRequest[]>([]);
+  const [requester, setRequester] = useState('');
+  const [resource, setResource] = useState('');
+  const [duration, setDuration] = useState('4h');
+  const [justification, setJustification] = useState('');
 
   useEffect(() => {
     if (!vault) {
       setInvites([]);
+      setRequests([]);
       return;
     }
     setLoadingInvites(true);
@@ -320,10 +328,55 @@ export function AccessSection({
       .then(setInvites)
       .catch(() => setInvites([]))
       .finally(() => setLoadingInvites(false));
+
+    const stored = window.localStorage.getItem(accessRequestStorageKey(vault.id));
+    if (stored) {
+      try {
+        setRequests(JSON.parse(stored) as AccessWorkflowRequest[]);
+      } catch {
+        setRequests(seedAccessRequests(vault));
+      }
+    } else {
+      setRequests(seedAccessRequests(vault));
+    }
   }, [vault]);
 
   if (!vault) return <EmptyConsole title="Access" body="Create a vault before reviewing access." />;
   const revoked = vault.members.filter((member) => member.status === 'revoked');
+  const pendingRequests = requests.filter((request) => request.status === 'pending');
+
+  const persistRequests = (next: AccessWorkflowRequest[]) => {
+    setRequests(next);
+    window.localStorage.setItem(accessRequestStorageKey(vault.id), JSON.stringify(next));
+  };
+
+  const handleCreateRequest = () => {
+    if (!requester.trim() || !resource.trim() || !justification.trim()) return;
+    persistRequests([
+      {
+        id: `req-${Date.now()}`,
+        requester: requester.trim(),
+        resource: resource.trim(),
+        role: 'temporary-reader',
+        duration,
+        justification: justification.trim(),
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      },
+      ...requests,
+    ]);
+    setRequester('');
+    setResource('');
+    setJustification('');
+  };
+
+  const resolveRequest = (requestId: string, status: 'approved' | 'denied') => {
+    persistRequests(requests.map((request) => (
+      request.id === requestId
+        ? { ...request, status, resolvedAt: new Date().toISOString(), resolvedBy: 'Current operator' }
+        : request
+    )));
+  };
 
   const handleCancelInvite = async (token: string) => {
     await cancelInvite(vault.id, token);
@@ -331,11 +384,95 @@ export function AccessSection({
   };
 
   return (
-    <div className="grid gap-3 xl:grid-cols-[1fr_1fr]">
+    <div className="space-y-3">
+      <div className="grid gap-3 md:grid-cols-3">
+        <ConsolePanel className="p-5">
+          <MetricBlock label="Pending Requests" value={pendingRequests.length} tone={pendingRequests.length ? 'warning' : 'success'} />
+        </ConsolePanel>
+        <ConsolePanel className="p-5">
+          <MetricBlock label="Approved Today" value={requests.filter((request) => request.status === 'approved').length} tone="success" />
+        </ConsolePanel>
+        <ConsolePanel className="p-5">
+          <MetricBlock label="Invite Tokens" value={invites.length} tone={invites.length ? 'warning' : 'muted'} />
+        </ConsolePanel>
+      </div>
+    <div className="grid gap-3 xl:grid-cols-[1.25fr_0.75fr]">
       <ConsolePanel className="p-5">
         <ConsolePanelHeader
           title="Access Requests"
-          action={<StatusPill tone={invites.length > 0 ? 'warning' : 'success'}>{invites.length} pending</StatusPill>}
+          action={<StatusPill tone={pendingRequests.length > 0 ? 'warning' : 'success'}>{pendingRequests.length} pending</StatusPill>}
+        />
+        <div className="mt-4 space-y-2">
+          {requests.length === 0 ? (
+            <div className="rounded-lg border border-border bg-muted/25 p-5 text-sm text-muted-foreground">
+              No temporary access requests are queued for this vault.
+            </div>
+          ) : requests.map((request) => (
+            <div key={request.id} className="rounded-lg border border-border bg-muted/25 p-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold">{request.requester}</p>
+                    <StatusPill tone={request.status === 'pending' ? 'warning' : request.status === 'approved' ? 'success' : 'danger'}>
+                      {request.status}
+                    </StatusPill>
+                    <span className="text-xs text-muted-foreground">{request.duration}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Requests <span className="text-foreground">{request.resource}</span> as {request.role.replace('-', ' ')}
+                  </p>
+                  <p className="mt-2 text-sm">{request.justification}</p>
+                  <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    {new Date(request.createdAt).toLocaleString()}
+                    {request.resolvedBy ? ` · ${request.resolvedBy}` : ''}
+                  </p>
+                </div>
+                {request.status === 'pending' && (
+                  <div className="flex shrink-0 gap-2">
+                    <Button size="sm" onClick={() => resolveRequest(request.id, 'approved')}>
+                      <Check className="h-4 w-4" />
+                      Approve
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => resolveRequest(request.id, 'denied')}>
+                      <X className="h-4 w-4" />
+                      Deny
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </ConsolePanel>
+      <ConsolePanel className="p-5">
+        <ConsolePanelHeader title="Request Temporary Access" />
+        <div className="mt-4 space-y-3">
+          <Input value={requester} onChange={(event) => setRequester(event.target.value)} placeholder="Requester name or member ID" />
+          <Input value={resource} onChange={(event) => setResource(event.target.value)} placeholder="Vault, secret, or path" />
+          <select
+            value={duration}
+            onChange={(event) => setDuration(event.target.value)}
+            className="h-10 w-full rounded-md border border-border bg-muted/40 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+          >
+            <option value="1h">1 hour</option>
+            <option value="4h">4 hours</option>
+            <option value="1d">1 day</option>
+            <option value="7d">7 days</option>
+          </select>
+          <Input value={justification} onChange={(event) => setJustification(event.target.value)} placeholder="Business justification" />
+          <Button className="w-full" onClick={handleCreateRequest} disabled={!requester.trim() || !resource.trim() || !justification.trim()}>
+            Create Access Request
+          </Button>
+        </div>
+      </ConsolePanel>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-[1fr_1fr]">
+      <ConsolePanel className="p-5">
+        <ConsolePanelHeader
+          title="Invite Tokens"
+          action={<StatusPill tone={invites.length > 0 ? 'warning' : 'success'}>{invites.length} active</StatusPill>}
         />
         <div className="mt-4 space-y-2">
           {loadingInvites ? (
@@ -386,8 +523,43 @@ export function AccessSection({
           ))}
         </div>
       </ConsolePanel>
+      </div>
     </div>
   );
+}
+
+interface AccessWorkflowRequest {
+  id: string;
+  requester: string;
+  resource: string;
+  role: string;
+  duration: string;
+  justification: string;
+  status: 'pending' | 'approved' | 'denied';
+  createdAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+}
+
+function accessRequestStorageKey(vaultId: string) {
+  return `ironhand.access-requests.${vaultId}`;
+}
+
+function seedAccessRequests(vault: Vault): AccessWorkflowRequest[] {
+  const activeMember = vault.members.find((member) => member.status !== 'revoked');
+  if (!activeMember) return [];
+  return [
+    {
+      id: `seed-${vault.id}`,
+      requester: memberDisplayName(activeMember.member_id),
+      resource: vault.items[0] ? itemName(vault.items[0]) : vault.name,
+      role: 'temporary-reader',
+      duration: '4h',
+      justification: 'Time-bound operational access for scheduled maintenance.',
+      status: 'pending',
+      createdAt: new Date(Date.now() - 18 * 60000).toISOString(),
+    },
+  ];
 }
 
 export function CertificateAuthoritySection({
