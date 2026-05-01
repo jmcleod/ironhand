@@ -606,6 +606,13 @@ export function CertificateAuthoritySection({
   }, [vault]);
 
   if (!vault) return <EmptyConsole title="Certificate Authority" body="Create a vault before configuring certificate authority workflows." />;
+  const certificateItems = vault.items.filter((item) => itemType(item) === 'certificate');
+  const expiringSoon = certificateItems.filter((item) => {
+    const expires = item.fields.not_after || item.fields.expires_at || item.fields.expiry;
+    if (!expires) return false;
+    const days = Math.ceil((new Date(expires).getTime() - Date.now()) / 86400000);
+    return Number.isFinite(days) && days <= 30;
+  });
 
   return (
     <div className="grid gap-3 xl:grid-cols-[0.9fr_1.2fr]">
@@ -616,11 +623,19 @@ export function CertificateAuthoritySection({
           <div className="grid grid-cols-2 gap-3">
             <div className="console-panel-subtle rounded-lg p-3">
               <p className="console-kicker mb-1">Issued Certs</p>
-              <p className="text-2xl font-semibold">{caInfo?.cert_count ?? vault.items.filter((item) => itemType(item) === 'certificate').length}</p>
+              <p className="text-2xl font-semibold">{caInfo?.cert_count ?? certificateItems.length}</p>
             </div>
             <div className="console-panel-subtle rounded-lg p-3">
               <p className="console-kicker mb-1">Next Serial</p>
               <p className="text-2xl font-semibold">{caInfo?.next_serial ?? '-'}</p>
+            </div>
+            <div className="console-panel-subtle rounded-lg p-3">
+              <p className="console-kicker mb-1">Expiring Soon</p>
+              <p className="text-2xl font-semibold">{expiringSoon.length}</p>
+            </div>
+            <div className="console-panel-subtle rounded-lg p-3">
+              <p className="console-kicker mb-1">CRL Number</p>
+              <p className="text-2xl font-semibold">{caInfo?.crl_number ?? '-'}</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -648,27 +663,40 @@ export function CertificateAuthoritySection({
         </div>
       </ConsolePanel>
       <ConsolePanel className="p-5">
-        <ConsolePanelHeader title="Certificate Inventory" />
+        <ConsolePanelHeader title="Certificate Inventory" action={<StatusPill tone={expiringSoon.length ? 'warning' : 'success'}>{expiringSoon.length} expiring</StatusPill>} />
         <ConsoleTable className="mt-4">
           <thead>
             <tr>
               <ConsoleTh>Name</ConsoleTh>
               <ConsoleTh>Status</ConsoleTh>
+              <ConsoleTh>Expiry</ConsoleTh>
               <ConsoleTh>Updated</ConsoleTh>
+              <ConsoleTh>Action</ConsoleTh>
             </tr>
           </thead>
           <tbody>
-            {vault.items.filter((item) => itemType(item) === 'certificate').length === 0 ? (
+            {certificateItems.length === 0 ? (
               <tr>
-                <ConsoleTd colSpan={3} className="text-muted-foreground">No certificate items in this vault.</ConsoleTd>
+                <ConsoleTd colSpan={5} className="text-muted-foreground">No certificate items in this vault.</ConsoleTd>
               </tr>
-            ) : vault.items.filter((item) => itemType(item) === 'certificate').map((item) => (
-              <tr key={item.id}>
-                <ConsoleTd className="font-medium">{itemName(item)}</ConsoleTd>
-                <ConsoleTd><StatusPill tone={item.fields.status === 'revoked' ? 'danger' : 'success'}>{item.fields.status || 'active'}</StatusPill></ConsoleTd>
-                <ConsoleTd className="text-muted-foreground">{itemUpdatedAt(item) ? new Date(itemUpdatedAt(item)).toLocaleDateString() : '-'}</ConsoleTd>
-              </tr>
-            ))}
+            ) : certificateItems.map((item) => {
+              const expires = item.fields.not_after || item.fields.expires_at || item.fields.expiry;
+              const days = expires ? Math.ceil((new Date(expires).getTime() - Date.now()) / 86400000) : null;
+              const expiring = days != null && Number.isFinite(days) && days <= 30;
+              return (
+                <tr key={item.id}>
+                  <ConsoleTd className="font-medium">{itemName(item)}</ConsoleTd>
+                  <ConsoleTd><StatusPill tone={item.fields.status === 'revoked' ? 'danger' : expiring ? 'warning' : 'success'}>{item.fields.status || (expiring ? 'expiring' : 'active')}</StatusPill></ConsoleTd>
+                  <ConsoleTd className="text-muted-foreground">{expires ? new Date(expires).toLocaleDateString() : '-'}</ConsoleTd>
+                  <ConsoleTd className="text-muted-foreground">{itemUpdatedAt(item) ? new Date(itemUpdatedAt(item)).toLocaleDateString() : '-'}</ConsoleTd>
+                  <ConsoleTd>
+                    <Button size="sm" variant="outline" onClick={onIssueCert}>
+                      {expiring ? 'Renew' : 'Issue'}
+                    </Button>
+                  </ConsoleTd>
+                </tr>
+              );
+            })}
           </tbody>
         </ConsoleTable>
       </ConsolePanel>
