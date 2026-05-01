@@ -253,6 +253,12 @@ export function MembersSection({
   if (!vault) return <EmptyConsole title="Members" body="Create a vault before managing members." />;
   const active = vault.members.filter((member) => member.status !== 'revoked');
   const revoked = vault.members.filter((member) => member.status === 'revoked');
+  const policyTemplates = [
+    { name: 'Vault Admin', detail: 'Manage members, rotate secrets, export evidence', enabled: ['Admin', 'Edit', 'Export', 'Audit'] },
+    { name: 'Operator', detail: 'Read and update operational secrets', enabled: ['Read', 'Edit', 'Rotate'] },
+    { name: 'Auditor', detail: 'Read audit history without secret export', enabled: ['Audit', 'Read Metadata'] },
+    { name: 'CI/CD Service', detail: 'Time-bound service access with MPC for signing', enabled: ['Read', 'MPC Required'] },
+  ];
 
   return (
     <div className="space-y-3">
@@ -314,6 +320,30 @@ export function MembersSection({
             })}
           </tbody>
         </ConsoleTable>
+      </ConsolePanel>
+      <ConsolePanel className="p-5">
+        <ConsolePanelHeader title="Role & Policy Builder" action={<StatusPill tone="success">Templates</StatusPill>} />
+        <div className="mt-4 grid gap-3 xl:grid-cols-4">
+          {policyTemplates.map((template) => (
+            <div key={template.name} className="rounded-lg border border-border bg-muted/25 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold">{template.name}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{template.detail}</p>
+                </div>
+                <Shield className="h-4 w-4 text-primary" />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {template.enabled.map((permission) => (
+                  <StatusPill key={permission} tone={permission.includes('MPC') ? 'warning' : 'muted'}>{permission}</StatusPill>
+                ))}
+              </div>
+              <Button variant="outline" size="sm" className="mt-3 w-full" onClick={onManage}>
+                Apply Template
+              </Button>
+            </div>
+          ))}
+        </div>
       </ConsolePanel>
     </div>
   );
