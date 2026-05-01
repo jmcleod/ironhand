@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"fmt"
 
+	"github.com/bytemare/ecc"
 	"github.com/bytemare/frost"
 )
 
@@ -51,4 +52,42 @@ func NewDescriptor() (Descriptor, error) {
 
 func ChainCompatibility() []string {
 	return append([]string(nil), chainCompatibility...)
+}
+
+func DecodeSignature(signature []byte) (*frost.Signature, error) {
+	encoded := make([]byte, 0, len(signature)+1)
+	encoded = append(encoded, byte(frost.Secp256k1))
+	encoded = append(encoded, signature...)
+	return DecodeEncodedSignature(encoded)
+}
+
+func DecodeEncodedSignature(encoded []byte) (*frost.Signature, error) {
+	var sig frost.Signature
+	if err := sig.Decode(encoded); err != nil {
+		return nil, err
+	}
+	if sig.Group != frost.Secp256k1.Group() {
+		return nil, fmt.Errorf("FROST signature group = %s, want %s", sig.Group, frost.Secp256k1.Group())
+	}
+	return &sig, nil
+}
+
+func DecodePublicKey(encoded []byte) (*ecc.Element, error) {
+	publicKey := frost.Secp256k1.Group().NewElement()
+	if err := publicKey.Decode(encoded); err != nil {
+		return nil, err
+	}
+	return publicKey, nil
+}
+
+func VerifySignature(message, publicKey, signature []byte) error {
+	decodedPublicKey, err := DecodePublicKey(publicKey)
+	if err != nil {
+		return err
+	}
+	decodedSignature, err := DecodeSignature(signature)
+	if err != nil {
+		return err
+	}
+	return frost.VerifySignature(frost.Secp256k1, message, decodedSignature, decodedPublicKey)
 }
