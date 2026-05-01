@@ -80,9 +80,9 @@ test.describe('Export & Import', () => {
     await page.getByRole('button', { name: 'Import Backup' }).click();
 
     // Wait for import to complete — items should appear in the vault.
-    await expect(page.getByText('Important Login', { exact: true })).toBeVisible({
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Important Login' })).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByText('Important Note', { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Important Note' })).toBeVisible();
   });
 });

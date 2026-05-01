@@ -21,7 +21,7 @@ test.describe('Item Management', () => {
     await addLoginItem(page, 'GitHub', 'octocat', 's3cr3t', 'https://github.com');
 
     // Verify item appears in the vault list.
-    await expect(page.getByText('GitHub', { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'GitHub' })).toBeVisible();
   });
 
   test('add a secure note', async ({ page }) => {
@@ -32,7 +32,7 @@ test.describe('Item Management', () => {
     await addNoteItem(page, 'Secret Plan', 'This is a secure note with important information.');
 
     // Verify item appears.
-    await expect(page.getByText('Secret Plan', { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Secret Plan' })).toBeVisible();
   });
 
   test('add a card item', async ({ page }) => {
@@ -43,7 +43,7 @@ test.describe('Item Management', () => {
     await addCardItem(page, 'My Visa', 'John Doe', '4111111111111111', '12/28', '123');
 
     // Verify item appears.
-    await expect(page.getByText('My Visa', { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'My Visa' })).toBeVisible();
   });
 
   test('open item editor', async ({ page }) => {
@@ -71,8 +71,8 @@ test.describe('Item Management', () => {
     await addNoteItem(page, 'My Note', 'Some secret content');
 
     // Verify all items are visible.
-    await expect(page.getByText('Site One', { exact: true })).toBeVisible();
-    await expect(page.getByText('Site Two', { exact: true })).toBeVisible();
-    await expect(page.getByText('My Note', { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Site One' })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Site Two' })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'My Note' })).toBeVisible();
   });
 });

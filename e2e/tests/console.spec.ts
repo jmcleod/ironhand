@@ -37,7 +37,7 @@ test.describe('Security console', () => {
 
     await topNav.getByRole('button', { name: 'MPC' }).click();
     await expect(page.getByText('MPC Readiness')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Signing Sessions' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'MPC Signing Inbox' })).toBeVisible();
 
     await topNav.getByRole('button', { name: 'Audit' }).click();
     await expect(page.getByText('Hash Chain')).toBeVisible();
@@ -65,6 +65,6 @@ test.describe('Security console', () => {
 
     await expectConsoleReady(page);
     await expect(page.getByRole('heading', { name: 'Command Vault' })).toBeVisible();
-    await expect(page.getByText('Console Login', { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Console Login' })).toBeVisible();
   });
 });

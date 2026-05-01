@@ -169,7 +169,7 @@ export async function addLoginItem(
 
   // Wait for dialog to close and item to appear in the vault list.
   await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('main').getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 10_000 });
 }
 
 /**
@@ -195,7 +195,7 @@ export async function addNoteItem(
 
   // Wait for dialog to close and item to appear.
   await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('main').getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 10_000 });
 }
 
 /**
@@ -227,7 +227,7 @@ export async function addCardItem(
 
   // Wait for dialog to close and item to appear.
   await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('main').getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 10_000 });
 }
 
 /**
