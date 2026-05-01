@@ -26,6 +26,8 @@ Provider metadata should be treated as the compatibility contract:
 5. Prevent nonce reuse across crashes and rejected signing attempts.
 6. Support audited key rotation and, preferably, resharing semantics for membership changes.
 7. Provide deterministic chain-specific signature serialization and verification tests against known vectors.
+   - `evm-secp256k1`: 32-byte transaction hash input, deterministic recoverable signature serialization, and cross-checks against an independent secp256k1 verifier.
+   - `bitcoin-secp256k1`: canonical sighash input, low-S normalization where required, and cross-checks against known script/witness validation vectors.
 8. Pass adversarial integration, race, replay, crash/restart, and recovery-import tests in CI.
 9. Receive independent cryptographic review before `production_ready` can be set to true.
 

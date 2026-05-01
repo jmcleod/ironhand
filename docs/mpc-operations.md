@@ -41,6 +41,8 @@ Manual key imports are deliberately narrow. Supplied fragments must be keyed by 
 
 `max_value` is enforced during signing-session creation. Both `policy.max_value` and transaction metadata `value` are non-negative decimal integer strings in the target chain's smallest unit. If `max_value` is configured and the transaction value is missing, malformed, or above the limit, session creation is denied.
 
+Signing sessions with a non-empty `chain` are refused unless the selected provider advertises that chain in `chain_compatibility`. The experimental P-256 provider is limited to development compatibility labels and cannot create `evm-secp256k1` or `bitcoin-secp256k1` sessions.
+
 Manual signing completion must submit commitments that exactly match `signature.commitments`; those commitments must be a threshold-sized subset of the selected session participants and each signature share must correspond to a commitment. The session stores the canonical commitments from the verified signature transcript.
 
 ## Audit Events

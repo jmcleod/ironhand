@@ -667,8 +667,9 @@ func (s *Session) CreateMPCSigningSessionWithOptions(ctx context.Context, keyID 
 	if err != nil {
 		return nil, validationErrorf("%v", err)
 	}
-	if info := provider.Info(); !info.SupportsSigning {
-		return nil, validationErrorf("MPC provider %q does not support signing", info.Algorithm)
+	providerInfo := provider.Info()
+	if !providerInfo.SupportsSigning {
+		return nil, validationErrorf("MPC provider %q does not support signing", providerInfo.Algorithm)
 	}
 	partyIDs := make([]int, 0, len(key.Participants))
 	for _, participant := range key.Participants {
@@ -689,6 +690,9 @@ func (s *Session) CreateMPCSigningSessionWithOptions(ctx context.Context, keyID 
 	transaction, err := decodeMPCTransaction(message, create.MessageType, create.Chain, create.Network, create.Transaction)
 	if err != nil {
 		return nil, err
+	}
+	if !mpcProviderSupportsChain(providerInfo, transaction.Chain) {
+		return nil, validationErrorf("MPC provider %q is not compatible with chain %q", providerInfo.Algorithm, transaction.Chain)
 	}
 	decision := evaluateMPCPolicy(key, normalizedU32, transaction)
 	if !decision.Allowed {
@@ -1121,6 +1125,18 @@ func parseMPCPolicyValue(value string) (*big.Int, error) {
 		return nil, fmt.Errorf("value must be a non-negative decimal integer")
 	}
 	return parsed, nil
+}
+
+func mpcProviderSupportsChain(provider mpc.ProviderInfo, chain string) bool {
+	if chain == "" {
+		return true
+	}
+	for _, compatible := range provider.ChainCompatibility {
+		if strings.EqualFold(compatible, chain) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Session) updateMPCSigningSession(ctx context.Context, sessionID string, update func(recordKey []byte, session *MPCSigningSession) error) (*MPCSigningSession, error) {

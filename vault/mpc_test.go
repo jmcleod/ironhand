@@ -330,6 +330,22 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 		TTL:          time.Minute,
 	})
 	require.NoError(t, err)
+	_, err = session.CreateMPCSigningSessionWithOptions(ctx, key.KeyID, MPCSigningSessionCreate{
+		Message:      make([]byte, 32),
+		Participants: []uint32{1, 2},
+		MessageType:  "evm_tx_hash",
+		Chain:        "evm-secp256k1",
+		TTL:          time.Minute,
+	})
+	require.ErrorContains(t, err, "not compatible")
+	_, err = session.CreateMPCSigningSessionWithOptions(ctx, key.KeyID, MPCSigningSessionCreate{
+		Message:      []byte("short"),
+		Participants: []uint32{1, 2},
+		MessageType:  "evm_tx_hash",
+		Chain:        "development",
+		TTL:          time.Minute,
+	})
+	require.ErrorContains(t, err, "32 bytes")
 	_, err = session.updateMPCKey(ctx, key.KeyID, func(key *MPCKey) error {
 		key.Policy = MPCPolicy{}
 		return nil
@@ -398,6 +414,13 @@ func TestEvaluateMPCPolicyMaxValue(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMPCProviderChainCompatibility(t *testing.T) {
+	provider := mpc.ProviderInfo{Algorithm: "test", ChainCompatibility: []string{"evm-secp256k1"}}
+	require.True(t, mpcProviderSupportsChain(provider, ""))
+	require.True(t, mpcProviderSupportsChain(provider, "EVM-SECP256K1"))
+	require.False(t, mpcProviderSupportsChain(provider, "bitcoin-secp256k1"))
 }
 
 func TestValidateMPCCompletionTranscript(t *testing.T) {
