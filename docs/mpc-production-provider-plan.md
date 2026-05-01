@@ -6,6 +6,8 @@ IronHand's current `experimental-p256-schnorr-v1` provider remains a development
 
 The production provider is reserved as `frost-secp256k1-v1` and is visible through provider discovery, but it must report no usable keygen/signing capabilities until the implementation, vectors, crash-safety checks, and external review are complete. It must not replace or silently upgrade the experimental provider. Keys should always retain their original provider metadata.
 
+The current implementation candidate and integration shape are documented in [ADR 0001: FROST secp256k1 Provider Candidate](adr/0001-frost-secp256k1-provider.md).
+
 Provider metadata should be treated as the compatibility contract:
 
 - `production_ready`: true only after external review and operational sign-off.
