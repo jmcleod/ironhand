@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	ihcrypto "github.com/jmcleod/ironhand/crypto"
+	"github.com/jmcleod/ironhand/internal/mpc"
 	"github.com/jmcleod/ironhand/internal/mpcsigner"
 	"github.com/jmcleod/ironhand/storage/memory"
 	"github.com/jmcleod/ironhand/vault"
@@ -189,6 +191,79 @@ func TestMPCSignerDurableRestartCompletesSigning(t *testing.T) {
 		approveDemoRequest(t, env.signers[partyID-1].server.URL, signingSession.SessionID, partyID)
 	}
 	completed, err := env.api.completeMPCSessionWithSigners(context.Background(), env.session, signingSession.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, vault.MPCSigningSessionCompleted, completed.Status)
+}
+
+func TestMPCSignerRestartAfterNonceCommitCompletesSigning(t *testing.T) {
+	ctx := context.Background()
+	env := newDemoKeyEnv(t, "nonce-restart")
+	signingSession, err := env.session.CreateMPCSigningSession(ctx, env.key.KeyID, []byte("nonce restart signing payload"), []uint32{1, 2}, time.Minute)
+	require.NoError(t, err)
+	for _, partyID := range []uint32{1, 2} {
+		_, err := env.api.requestMPCSessionApprovalWithSigner(ctx, env.session, signingSession.SessionID, partyID)
+		require.NoError(t, err)
+		approveDemoRequest(t, env.signers[partyID-1].server.URL, signingSession.SessionID, partyID)
+	}
+	signingSession, err = env.api.collectMPCApprovalsFromSigners(ctx, env.session, signingSession, env.key)
+	require.NoError(t, err)
+
+	approved := []uint32{1, 2}
+	commitments := make([]mpc.Commitment, 0, len(approved))
+	for _, partyID := range approved {
+		participant, ok := findMPCParticipant(env.key.Participants, partyID)
+		require.True(t, ok)
+		var commitment mpc.Commitment
+		err := env.api.mpcClient.PostJSON(participant.SignerURL+"/signer/sign/commit", mpcsigner.NonceCommitRequest{
+			KeyID:       env.key.KeyID,
+			SessionID:   signingSession.SessionID,
+			MessageHash: signingSession.MessageHash,
+		}, &commitment)
+		require.NoError(t, err)
+		commitments = append(commitments, commitment)
+	}
+
+	env.signers[0] = restartDemoSigner(t, env.signers[0])
+	env.signers[1] = restartDemoSigner(t, env.signers[1])
+
+	provider, err := mpc.GetProvider(env.key.Algorithm)
+	require.NoError(t, err)
+	aggregateR, err := provider.AggregateCommitments(commitments)
+	require.NoError(t, err)
+	challenge, err := provider.ChallengeHex(env.key.PublicKeyPoint(), aggregateR, signingSession.Message)
+	require.NoError(t, err)
+	participants := []int{1, 2}
+	shares := make([]mpc.ShareProof, 0, len(approved))
+	for _, partyID := range approved {
+		participant, ok := findMPCParticipant(env.key.Participants, partyID)
+		require.True(t, ok)
+		fragment, err := env.session.GetMPCKeyFragment(ctx, env.key.KeyID, participant.MemberID)
+		require.NoError(t, err)
+		approval, ok := findMPCApproval(signingSession.Approvals, partyID)
+		require.True(t, ok)
+		var share mpc.ShareProof
+		err = env.api.mpcClient.PostJSON(participant.SignerURL+"/signer/sign/share", mpcsigner.SignShareRequest{
+			KeyID:        env.key.KeyID,
+			SessionID:    signingSession.SessionID,
+			MessageB64:   base64.StdEncoding.EncodeToString(signingSession.Message),
+			Participants: participants,
+			AggregateR:   aggregateR,
+			Fragment:     fragment.Fragment,
+			Approval:     approval,
+		}, &share)
+		require.NoError(t, err)
+		shares = append(shares, share)
+	}
+	z, err := provider.CombineSignatureShares(shares)
+	require.NoError(t, err)
+	completed, err := env.session.CompleteMPCSigningSession(ctx, signingSession.SessionID, commitments, &mpc.Signature{
+		Curve:       provider.Info().Curve,
+		R:           aggregateR,
+		Z:           z,
+		Challenge:   challenge,
+		Commitments: commitments,
+		Shares:      shares,
+	})
 	require.NoError(t, err)
 	require.Equal(t, vault.MPCSigningSessionCompleted, completed.Status)
 }
