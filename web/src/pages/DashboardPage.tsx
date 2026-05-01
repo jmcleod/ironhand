@@ -10,7 +10,6 @@ import {
   ShieldCheck,
   StickyNote,
   Vault as VaultIcon,
-  Wand2,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -19,7 +18,6 @@ import VaultCard from '@/components/VaultCard';
 import VaultDetail from '@/components/VaultDetail';
 import ItemCard from '@/components/ItemCard';
 import CreateVaultDialog from '@/components/CreateVaultDialog';
-import ThemeSwitcher from '@/components/ThemeSwitcher';
 import PasswordGeneratorDialog from '@/components/PasswordGeneratorDialog';
 import TwoFactorDialog from '@/components/TwoFactorDialog';
 import PasskeyDialog from '@/components/PasskeyDialog';
@@ -27,11 +25,20 @@ import ShareDialog from '@/components/ShareDialog';
 import AuditLogDialog from '@/components/AuditLogDialog';
 import ExportVaultDialog from '@/components/ExportVaultDialog';
 import ImportVaultDialog from '@/components/ImportVaultDialog';
+import InitCADialog from '@/components/InitCADialog';
 import IssueCertDialog from '@/components/IssueCertDialog';
 import MPCDialog from '@/components/MPCDialog';
 import SecurityConsoleLayout, { ConsoleView } from '@/components/security-console/SecurityConsoleLayout';
 import SecurityOverview from '@/components/security-console/SecurityOverview';
-import { ConsolePanel, ConsolePanelHeader, StatusPill } from '@/components/security-console/ConsolePrimitives';
+import {
+  AccessSection,
+  AuditSection,
+  CertificateAuthoritySection,
+  MembersSection,
+  MPCSection,
+  SettingsSection,
+} from '@/components/security-console/SecurityConsoleSections';
+import { ConsolePanel } from '@/components/security-console/ConsolePrimitives';
 import { searchItemsLocal, groupResultsByVault } from '@/lib/search';
 import { ItemType } from '@/types/vault';
 
@@ -56,6 +63,7 @@ export default function DashboardPage() {
   const [showAudit, setShowAudit] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showInitCA, setShowInitCA] = useState(false);
   const [showIssueCert, setShowIssueCert] = useState(false);
   const [showMPC, setShowMPC] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -225,34 +233,6 @@ export default function DashboardPage() {
     );
   };
 
-  const renderPlaceholder = (view: ConsoleView) => (
-    <ConsolePanel className="p-6">
-      <ConsolePanelHeader
-        title={view}
-        eyebrow="Console section"
-        action={<StatusPill tone="warning">Milestone 3</StatusPill>}
-      />
-      <p className="mt-4 max-w-2xl text-sm text-muted-foreground">
-        This section is now routed through the new security-console shell. The next milestone replaces this placeholder with the operational panels from the mockup and wires available data into each view.
-      </p>
-      <div className="mt-6 flex flex-wrap gap-2">
-        <Button variant="outline" onClick={() => setShowGenerator(true)}>
-          <Wand2 className="h-4 w-4" />
-          Password Generator
-        </Button>
-        <Button variant="outline" onClick={() => setShowTwoFactor(true)}>
-          <ShieldCheck className="h-4 w-4" />
-          Two-Factor
-        </Button>
-        <Button variant="outline" onClick={() => setShowPasskey(true)}>
-          <Fingerprint className="h-4 w-4" />
-          Passkeys
-        </Button>
-        <ThemeSwitcher />
-      </div>
-    </ConsolePanel>
-  );
-
   const content = activeView === 'overview' ? (
     <SecurityOverview
       vault={activeVault}
@@ -268,7 +248,39 @@ export default function DashboardPage() {
       onAudit={() => activeVault && setShowAudit(true)}
       onLock={() => { void lock(); }}
     />
-  ) : activeView === 'vaults' ? renderVaults() : renderPlaceholder(activeView);
+  ) : activeView === 'vaults' ? renderVaults() : activeView === 'members' ? (
+    <MembersSection
+      vault={activeVault}
+      onInvite={() => activeVault && setShowShare(true)}
+      onManage={() => activeVault && setShowShare(true)}
+    />
+  ) : activeView === 'access' ? (
+    <AccessSection
+      vault={activeVault}
+      onInvite={() => activeVault && setShowShare(true)}
+      onManage={() => activeVault && setShowShare(true)}
+    />
+  ) : activeView === 'ca' ? (
+    <CertificateAuthoritySection
+      vault={activeVault}
+      onInitCA={() => activeVault && setShowInitCA(true)}
+      onIssueCert={() => activeVault && setShowIssueCert(true)}
+    />
+  ) : activeView === 'mpc' ? (
+    <MPCSection vault={activeVault} onOpenMPC={() => activeVault && setShowMPC(true)} />
+  ) : activeView === 'audit' ? (
+    <AuditSection vault={activeVault} />
+  ) : (
+    <SettingsSection
+      twoFactorEnabled={account.twoFactorEnabled}
+      passkeyCount={account.webauthnCredentialCount ?? 0}
+      recoveryCodesUnused={account.recoveryCodesUnused}
+      onTwoFactor={() => setShowTwoFactor(true)}
+      onPasskeys={() => setShowPasskey(true)}
+      onGenerator={() => setShowGenerator(true)}
+      onLock={() => { void lock(); }}
+    />
+  );
 
   return (
     <>
@@ -314,6 +326,12 @@ export default function DashboardPage() {
           <AuditLogDialog open={showAudit} onOpenChange={setShowAudit} vaultId={activeVault.id} />
           <ExportVaultDialog open={showExport} onOpenChange={setShowExport} vaultId={activeVault.id} vaultName={activeVault.name} />
           <ImportVaultDialog open={showImport} onOpenChange={setShowImport} vaultId={activeVault.id} />
+          <InitCADialog
+            open={showInitCA}
+            onOpenChange={setShowInitCA}
+            vaultId={activeVault.id}
+            onSuccess={() => { void refreshVault(activeVault.id); }}
+          />
           <IssueCertDialog
             open={showIssueCert}
             onOpenChange={setShowIssueCert}
