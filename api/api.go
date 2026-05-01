@@ -54,6 +54,7 @@ type API struct {
 	mpcClient                  *mpcclient.Client
 	experimentalMPCEnabled     bool
 	mpcProductionMode          bool
+	mpcRecoveryImportEnabled   bool
 }
 
 // DefaultIdleTimeout is the default session idle timeout (30 minutes).
@@ -231,6 +232,15 @@ func WithExperimentalMPC(enabled bool) Option {
 func WithMPCProductionMode(enabled bool) Option {
 	return func(a *API) {
 		a.mpcProductionMode = enabled
+	}
+}
+
+// WithMPCRecoveryImport enables manual MPC recovery imports. This is disabled
+// by default because recovery artifacts are sensitive and should not be
+// accepted in normal orchestrated DKG flows.
+func WithMPCRecoveryImport(enabled bool) Option {
+	return func(a *API) {
+		a.mpcRecoveryImportEnabled = enabled
 	}
 }
 

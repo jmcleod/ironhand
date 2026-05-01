@@ -28,37 +28,38 @@ import (
 )
 
 var (
-	port                  int
-	dataDir               string
-	tlsCert               string
-	tlsKey                string
-	storageBackend        string
-	postgresDSN           string
-	enableHeaderAuth      bool
-	sessionStorage        string
-	webauthnRPID          string
-	webauthnRPOrigin      string
-	webauthnRPName        string
-	sessionKey            string
-	sessionKeyFile        string
-	pkiKeystore           string
-	pkcs11Module          string
-	pkcs11Token           string
-	pkcs11PIN             string
-	kdfProfile            string
-	auditRetentionDays    int
-	auditMaxEntries       int
-	auditWebhookURL       string
-	auditWebhookHeader    string
-	trustedProxies        []string
-	noRateLimit           bool
-	mpcSharedKey          string
-	mpcClientCert         string
-	mpcClientKey          string
-	mpcSignerCA           string
-	enableExperimentalMPC bool
-	mpcProductionMode     bool
-	allowInsecureMPCDev   bool
+	port                    int
+	dataDir                 string
+	tlsCert                 string
+	tlsKey                  string
+	storageBackend          string
+	postgresDSN             string
+	enableHeaderAuth        bool
+	sessionStorage          string
+	webauthnRPID            string
+	webauthnRPOrigin        string
+	webauthnRPName          string
+	sessionKey              string
+	sessionKeyFile          string
+	pkiKeystore             string
+	pkcs11Module            string
+	pkcs11Token             string
+	pkcs11PIN               string
+	kdfProfile              string
+	auditRetentionDays      int
+	auditMaxEntries         int
+	auditWebhookURL         string
+	auditWebhookHeader      string
+	trustedProxies          []string
+	noRateLimit             bool
+	mpcSharedKey            string
+	mpcClientCert           string
+	mpcClientKey            string
+	mpcSignerCA             string
+	enableExperimentalMPC   bool
+	mpcProductionMode       bool
+	enableMPCRecoveryImport bool
+	allowInsecureMPCDev     bool
 )
 
 var serverCmd = &cobra.Command{
@@ -188,8 +189,12 @@ var serverCmd = &cobra.Command{
 		apiOpts = append(apiOpts, api.WithMPCSignerTransport([]byte(mpcKey), mpcTLSConfig))
 		apiOpts = append(apiOpts, api.WithExperimentalMPC(enableExperimentalMPC))
 		apiOpts = append(apiOpts, api.WithMPCProductionMode(mpcProductionMode))
+		apiOpts = append(apiOpts, api.WithMPCRecoveryImport(enableMPCRecoveryImport))
 		if enableExperimentalMPC {
 			fmt.Println("WARNING: experimental MPC enabled (experimental-p256-schnorr-v1); do not use for production funds")
+		}
+		if enableMPCRecoveryImport {
+			fmt.Println("WARNING: MPC recovery import enabled; accept only trusted attested ceremony artifacts")
 		}
 		if mpcProductionMode {
 			fmt.Println("MPC production mode enabled: non-production MPC providers will be refused")
@@ -340,6 +345,7 @@ func init() {
 	serverCmd.Flags().StringVar(&mpcSignerCA, "mpc-signer-ca", "", "CA bundle used to verify MPC signer TLS certificates")
 	serverCmd.Flags().BoolVar(&enableExperimentalMPC, "enable-experimental-mpc", false, "Enable experimental-p256-schnorr-v1 MPC APIs (not production-vetted)")
 	serverCmd.Flags().BoolVar(&mpcProductionMode, "mpc-production-mode", false, "Reject MPC providers that are not marked production ready")
+	serverCmd.Flags().BoolVar(&enableMPCRecoveryImport, "enable-mpc-recovery-import", false, "Allow manual MPC recovery imports with signer attestations")
 	serverCmd.Flags().BoolVar(&allowInsecureMPCDev, "allow-insecure-mpc-local-dev", false, "Allow unsigned MPC signer calls for loopback-only local development")
 }
 

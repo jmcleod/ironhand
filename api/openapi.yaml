@@ -1202,7 +1202,7 @@ components:
         import_mode:
           type: string
           enum: [orchestrated, recovery]
-          description: Omit for normal orchestrated DKG. Set to recovery only when importing precomputed commitments/fragments with signer attestations.
+          description: Omit for normal orchestrated DKG. Set to recovery only when importing precomputed commitments/fragments with signer attestations; the server must also be started with recovery import explicitly enabled.
         dkg_session_id:
           type: string
           description: DKG ceremony identifier bound into every signer fragment attestation. Required for recovery imports and supplied automatically by coordinator-run DKG.

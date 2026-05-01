@@ -394,6 +394,33 @@ func TestMPCCreateKeyRejectsManualArtifactsWithoutRecoveryMode(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "import_mode")
 }
 
+func TestMPCCreateKeyRejectsRecoveryImportWhenDisabled(t *testing.T) {
+	env := newDemoKeyEnv(t, "manual-import-disabled")
+	require.NoError(t, env.api.saveAccountRecord(env.creds.SecretKey().String(), accountRecord{
+		SecretKeyID: env.creds.SecretKey().ID(),
+		CreatedAt:   time.Now().UTC(),
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/vaults/"+env.vault.ID()+"/mpc/keys", bytes.NewReader([]byte(`{
+		"key_id":"manual-key",
+		"threshold":2,
+		"import_mode":"recovery",
+		"dkg_session_id":"manual-dkg",
+		"commitments":[{"partyId":1}],
+		"fragments":{"member":{"key_id":"manual-key","party_id":1}}
+	}`)))
+	req.Header.Set("Content-Type", "application/json")
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("vaultID", env.vault.ID())
+	reqCtx := context.WithValue(req.Context(), credentialsKey, env.creds)
+	reqCtx = context.WithValue(reqCtx, chi.RouteCtxKey, routeCtx)
+	rec := httptest.NewRecorder()
+
+	env.api.CreateMPCKey(rec, req.WithContext(reqCtx))
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "recovery import is disabled")
+}
+
 func TestMPCProductionModeRejectsExperimentalProvider(t *testing.T) {
 	api := New(memory.NewRepository(), vault.NewMemoryEpochCache(), WithExperimentalMPC(true), WithMPCProductionMode(true))
 	err := api.validateMPCProviderForUse("")

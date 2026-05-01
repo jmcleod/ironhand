@@ -145,6 +145,7 @@ IronHand can run vault-scoped MPC flows where each active vault member maps to a
 - Signing approvals are bound to the vault, key, session, threshold, participant set, message hash, and expiry. Completion requires a valid threshold-sized approval subset before the session expiry, and the recorded commitments must match the verified signature transcript; session TTL defaults to 15 minutes and is capped at 30 minutes.
 - MPC `max_value` policy limits are enforced as non-negative decimal integer strings in the target chain's smallest unit. When a key policy sets `max_value`, signing metadata must include a valid `value` at or below that limit.
 - Signers no longer auto-approve coordinator requests. The coordinator creates signer-local approval requests and an operator must approve them with `--operator-token` / `IRONHAND_MPC_SIGNER_OPERATOR_TOKEN` before signing can complete.
+- Manual recovery imports require both `import_mode: "recovery"` and the server flag `--enable-mpc-recovery-import`; normal deployments should leave this disabled.
 
 Signer operators can inspect and approve pending requests directly on the signer:
 

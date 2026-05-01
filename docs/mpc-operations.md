@@ -70,7 +70,7 @@ Signer state files contain sealed signer identity, DKG/key state, and local appr
 
 ## Recovery Import Procedure
 
-Recovery import is available from the WebUI MPC Recovery tab and `POST /api/v1/vaults/<vault_id>/mpc/keys` with `import_mode: "recovery"`.
+Recovery import is available from the WebUI MPC Recovery tab and `POST /api/v1/vaults/<vault_id>/mpc/keys` with `import_mode: "recovery"` only when the API server was started with `--enable-mpc-recovery-import`.
 
 The request must include:
 

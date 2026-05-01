@@ -551,7 +551,7 @@ export default function MPCDialog({ open, onOpenChange, vaultId, members, onChan
                   <AlertTriangle className="h-4 w-4 text-amber-600" />
                   <AlertTitle>Recovery import is intentionally strict</AlertTitle>
                   <AlertDescription>
-                    Only import artifacts from a trusted recovery ceremony. Every fragment must include a signer attestation bound to the vault, key, DKG session, public commitments, and encrypted fragment envelope.
+                    Only import artifacts from a trusted recovery ceremony. The API must be started with recovery import enabled, and every fragment must include a signer attestation bound to the vault, key, DKG session, public commitments, and encrypted fragment envelope.
                   </AlertDescription>
                 </Alert>
                 <section className="space-y-3 rounded-xl border border-border bg-muted/20 p-4">

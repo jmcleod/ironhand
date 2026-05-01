@@ -139,6 +139,10 @@ func (a *API) CreateMPCKey(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "manual MPC key artifacts require import_mode \"recovery\"")
 			return
 		}
+		if !a.mpcRecoveryImportEnabled {
+			writeError(w, http.StatusForbidden, "MPC recovery import is disabled; start the server with --enable-mpc-recovery-import to accept manual recovery artifacts")
+			return
+		}
 		if len(req.Commitments) == 0 || len(req.Fragments) == 0 {
 			writeError(w, http.StatusBadRequest, "recovery MPC key import requires commitments and fragments")
 			return
