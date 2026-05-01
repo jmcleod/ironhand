@@ -27,7 +27,7 @@ import {
 import { AuditStatus, getAuditStatus, listAuditLogs } from '@/lib/api';
 import { AuditEntry, itemName, itemType, Vault } from '@/types/vault';
 import { cn } from '@/lib/utils';
-import { secretHealth } from '@/lib/security-insights';
+import { riskAlerts, secretHealth } from '@/lib/security-insights';
 
 interface SecurityOverviewProps {
   vault: Vault | null;
@@ -125,6 +125,7 @@ export default function SecurityOverview({
   );
   const mpcSigners = activeMembers.filter((member) => member.mpc_party_id || member.mpc_signer_status);
   const health = useMemo(() => secretHealth(vault), [vault]);
+  const alerts = useMemo(() => riskAlerts(vault, auditEntries, auditStatus?.verified ?? auditEntries.length === 0), [vault, auditEntries, auditStatus]);
   if (!vault) {
     return (
       <ConsolePanel className="flex min-h-[560px] flex-col items-center justify-center p-8 text-center">
@@ -352,6 +353,28 @@ export default function SecurityOverview({
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[0.85fr_1.95fr]">
+        <ConsolePanel className="p-5">
+          <ConsolePanelHeader
+            title="Risk Alerts"
+            action={alerts.length > 0 ? <StatusPill tone="danger">{alerts.length}</StatusPill> : <StatusPill tone="success">0</StatusPill>}
+          />
+          <div className="mt-4 space-y-2">
+            {alerts.length === 0 ? (
+              <div className="rounded-lg border border-border bg-muted/25 p-5 text-sm text-muted-foreground">
+                No risk alerts are active for this vault.
+              </div>
+            ) : alerts.slice(0, 3).map((alert) => (
+              <div key={alert.id} className="rounded-lg border border-border bg-muted/25 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="truncate text-sm font-semibold">{alert.title}</p>
+                  <StatusPill tone={alert.severity === 'critical' || alert.severity === 'high' ? 'danger' : 'warning'}>{alert.severity}</StatusPill>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">{alert.detail}</p>
+              </div>
+            ))}
+          </div>
+        </ConsolePanel>
+
         <ConsolePanel className="p-5">
           <ConsolePanelHeader
             title="Weak Secret Alerts"
