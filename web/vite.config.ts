@@ -19,36 +19,6 @@ export default defineConfig(({ mode }) => ({
     },
   },
   build: {
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (!id.includes("node_modules")) {
-            return undefined;
-          }
-
-          if (id.includes("/react/") || id.includes("/react-dom/") || id.includes("/react-router-dom/")) {
-            return "react-vendor";
-          }
-
-          if (id.includes("/@radix-ui/")) {
-            return "radix-ui";
-          }
-
-          if (id.includes("/@tanstack/")) {
-            return "query-vendor";
-          }
-
-          if (id.includes("/lucide-react/")) {
-            return "icons";
-          }
-
-          if (id.includes("/react-hook-form/") || id.includes("/@hookform/") || id.includes("/zod/")) {
-            return "forms";
-          }
-
-          return "vendor";
-        },
-      },
-    },
+    chunkSizeWarningLimit: 800,
   },
 }));
