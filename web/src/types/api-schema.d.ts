@@ -1631,6 +1631,12 @@ export interface components {
             signing_sessions_by_status?: {
                 [key: string]: number;
             };
+            signer_statuses?: {
+                [key: string]: number;
+            };
+            action_required_keys?: number;
+            non_production_keys?: number;
+            pending_approvals?: number;
         };
         MPCSignature: {
             curve?: string;

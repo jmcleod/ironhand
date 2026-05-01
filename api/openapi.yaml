@@ -1001,6 +1001,16 @@ components:
           type: object
           additionalProperties:
             type: integer
+        signer_statuses:
+          type: object
+          additionalProperties:
+            type: integer
+        action_required_keys:
+          type: integer
+        non_production_keys:
+          type: integer
+        pending_approvals:
+          type: integer
 
     MPCSignature:
       type: object

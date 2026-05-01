@@ -778,6 +778,8 @@ export function MPCSection({
   const activeKeys = keys.filter((key) => key.status === 'active');
   const actionRequiredKeys = keys.filter((key) => ['rotation_required', 'reshare_required', 'disabled'].includes(key.status));
   const nonProductionKeys = keys.filter((key) => key.provider && !key.provider.production_ready);
+  const actionRequiredCount = metrics?.action_required_keys ?? actionRequiredKeys.length;
+  const nonProductionCount = metrics?.non_production_keys ?? nonProductionKeys.length;
 
   return (
     <div className="space-y-3">
@@ -787,8 +789,8 @@ export function MPCSection({
         <div className="mt-5 space-y-4">
           <MetricBlock label="Active Keys" value={loading ? '...' : activeKeys.length} tone={activeKeys.length > 0 ? 'success' : 'warning'} />
           <MetricBlock label="Pending Sessions" value={pendingSessions} tone={pendingSessions > 0 ? 'warning' : 'muted'} />
-          <MetricBlock label="Key Actions" value={actionRequiredKeys.length} tone={actionRequiredKeys.length > 0 ? 'warning' : 'muted'} />
-          <MetricBlock label="Provider Gate" value={nonProductionKeys.length > 0 ? 'Experimental' : activeKeys.length > 0 ? 'Production' : 'No key'} tone={nonProductionKeys.length > 0 ? 'warning' : activeKeys.length > 0 ? 'success' : 'muted'} />
+          <MetricBlock label="Key Actions" value={actionRequiredCount} tone={actionRequiredCount > 0 ? 'warning' : 'muted'} />
+          <MetricBlock label="Provider Gate" value={nonProductionCount > 0 ? 'Experimental' : activeKeys.length > 0 ? 'Production' : 'No key'} tone={nonProductionCount > 0 ? 'warning' : activeKeys.length > 0 ? 'success' : 'muted'} />
           <Button onClick={onOpenMPC}>
             <Network className="h-4 w-4" />
             Open MPC Controls

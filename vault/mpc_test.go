@@ -146,10 +146,17 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
 	assert.Equal(t, "mpc-key-1", keys[0].KeyID)
+	metrics, err := session.MPCMetrics(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, metrics.NonProductionKeys)
+	assert.Equal(t, 3, metrics.SignerStatuses[MPCSignerStatusActive])
 
 	signSession, err := session.CreateMPCSigningSession(ctx, key.KeyID, []byte("threshold signing payload"), []uint32{1, 3}, time.Minute)
 	require.NoError(t, err)
 	assert.Equal(t, []uint32{1, 3}, signSession.Participants)
+	metrics, err = session.MPCMetrics(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, metrics.PendingApprovals)
 
 	participants := []int{1, 3}
 	signCommitments := make([]mpc.Commitment, 0, len(participants))
@@ -305,6 +312,9 @@ func TestVaultMPCKeyAndSigningSession(t *testing.T) {
 	updatedKey, err := session.SetMPCKeyStatus(ctx, key.KeyID, MPCKeyStatusDisabled)
 	require.NoError(t, err)
 	assert.Equal(t, MPCKeyStatusDisabled, updatedKey.Status)
+	metrics, err = session.MPCMetrics(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, metrics.ActionRequiredKeys)
 	_, err = session.CreateMPCSigningSession(ctx, key.KeyID, []byte("disabled payload"), []uint32{1, 2}, time.Minute)
 	require.ErrorContains(t, err, "is not active")
 	updatedKey, err = session.SetMPCKeyStatus(ctx, key.KeyID, MPCKeyStatusActive)

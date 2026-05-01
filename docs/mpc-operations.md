@@ -26,6 +26,8 @@ The API exposes `GET /api/v1/vaults/<vault_id>/mpc/metrics`, returning counts fo
 - MPC keys by lifecycle status.
 - DKG attempts by status.
 - Signing sessions by status.
+- Signer readiness/status across MPC key participants.
+- Derived action counts for keys requiring rotation/reshare/repair, non-production provider keys, and missing pending approvals.
 
 These are intended for dashboards and alerting. They are vault-scoped and require normal vault authentication.
 

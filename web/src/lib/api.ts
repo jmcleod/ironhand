@@ -883,6 +883,10 @@ export interface MPCMetrics {
   keys_by_status?: Record<string, number>;
   dkg_attempts_by_status?: Record<string, number>;
   signing_sessions_by_status?: Record<string, number>;
+  signer_statuses?: Record<string, number>;
+  action_required_keys?: number;
+  non_production_keys?: number;
+  pending_approvals?: number;
 }
 export interface MPCPolicy {
   approval_mode?: string;

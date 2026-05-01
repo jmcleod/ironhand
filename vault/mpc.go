@@ -193,6 +193,10 @@ type MPCMetricsSnapshot struct {
 	KeysByStatus            map[MPCKeyStatus]int            `json:"keys_by_status"`
 	DKGAttemptsByStatus     map[MPCDKGStatus]int            `json:"dkg_attempts_by_status"`
 	SigningSessionsByStatus map[MPCSigningSessionStatus]int `json:"signing_sessions_by_status"`
+	SignerStatuses          map[MPCSignerStatus]int         `json:"signer_statuses"`
+	ActionRequiredKeys      int                             `json:"action_required_keys"`
+	NonProductionKeys       int                             `json:"non_production_keys"`
+	PendingApprovals        int                             `json:"pending_approvals"`
 }
 
 func (s *Session) RegisterMPCSigner(ctx context.Context, memberID string, reg MPCSignerRegistration) error {
@@ -802,15 +806,35 @@ func (s *Session) MPCMetrics(ctx context.Context) (*MPCMetricsSnapshot, error) {
 		KeysByStatus:            make(map[MPCKeyStatus]int),
 		DKGAttemptsByStatus:     make(map[MPCDKGStatus]int),
 		SigningSessionsByStatus: make(map[MPCSigningSessionStatus]int),
+		SignerStatuses:          make(map[MPCSignerStatus]int),
 	}
 	for _, key := range keys {
 		snapshot.KeysByStatus[key.Status]++
+		if key.Status == MPCKeyStatusDisabled || key.Status == MPCKeyStatusRotationRequired || key.Status == MPCKeyStatusReshareRequired {
+			snapshot.ActionRequiredKeys++
+		}
+		if !key.Provider.ProductionReady {
+			snapshot.NonProductionKeys++
+		}
+		for _, participant := range key.Participants {
+			status := participant.SignerStatus
+			if status == "" {
+				status = MPCSignerStatusUnregistered
+			}
+			snapshot.SignerStatuses[status]++
+		}
 	}
 	for _, attempt := range dkgAttempts {
 		snapshot.DKGAttemptsByStatus[attempt.Status]++
 	}
 	for _, signingSession := range signingSessions {
 		snapshot.SigningSessionsByStatus[signingSession.Status]++
+		if signingSession.Status == MPCSigningSessionPending {
+			missing := len(signingSession.Participants) - len(signingSession.Approvals)
+			if missing > 0 {
+				snapshot.PendingApprovals += missing
+			}
+		}
 	}
 	return snapshot, nil
 }
