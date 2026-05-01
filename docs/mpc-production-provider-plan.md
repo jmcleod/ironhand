@@ -4,7 +4,7 @@ IronHand's current `experimental-p256-schnorr-v1` provider remains a development
 
 ## Target Provider Boundary
 
-The production provider should be introduced as a new algorithm identifier, currently reserved as `frost-secp256k1-v1`. It must not replace or silently upgrade the experimental provider. Keys should always retain their original provider metadata.
+The production provider is reserved as `frost-secp256k1-v1` and is visible through provider discovery, but it must report no usable keygen/signing capabilities until the implementation, vectors, crash-safety checks, and external review are complete. It must not replace or silently upgrade the experimental provider. Keys should always retain their original provider metadata.
 
 Provider metadata should be treated as the compatibility contract:
 

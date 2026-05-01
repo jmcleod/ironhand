@@ -110,6 +110,44 @@ func TestExperimentalProviderIsNotProductionReady(t *testing.T) {
 	}
 }
 
+func TestFROSTSecp256k1ProviderIsReservedUntilImplemented(t *testing.T) {
+	provider, err := GetProvider(AlgorithmFROSTSecp256k1)
+	if err != nil {
+		t.Fatalf("GetProvider() error = %v", err)
+	}
+	info := provider.Info()
+	if info.ProductionReady {
+		t.Fatalf("%s must not be marked production ready before implementation and review", info.Algorithm)
+	}
+	if info.SupportsKeygen || info.SupportsSigning || info.SupportsReshare {
+		t.Fatalf("%s must not advertise usable capabilities before implementation", info.Algorithm)
+	}
+	if len(info.ProductionBlockers) == 0 {
+		t.Fatalf("%s must publish production blockers while reserved", info.Algorithm)
+	}
+	if _, err := provider.NewKeyMeta("key-1", 2, nil, nil); err == nil {
+		t.Fatalf("%s NewKeyMeta() error = nil, want unsupported error", info.Algorithm)
+	}
+}
+
+func TestSupportedProvidersExposeExperimentalAndReservedProductionProvider(t *testing.T) {
+	providers := SupportedProviders()
+	got := make(map[string]ProviderInfo, len(providers))
+	for _, provider := range providers {
+		got[provider.Algorithm] = provider
+	}
+	if _, ok := got[AlgorithmExperimentalP256Schnorr]; !ok {
+		t.Fatalf("SupportedProviders() missing %s", AlgorithmExperimentalP256Schnorr)
+	}
+	frost, ok := got[AlgorithmFROSTSecp256k1]
+	if !ok {
+		t.Fatalf("SupportedProviders() missing %s", AlgorithmFROSTSecp256k1)
+	}
+	if frost.Curve != "secp256k1" {
+		t.Fatalf("%s curve = %q, want secp256k1", frost.Algorithm, frost.Curve)
+	}
+}
+
 func TestNormalizeParticipantsRejectsDuplicates(t *testing.T) {
 	_, err := NormalizeParticipants([]int{1, 1}, 2, []int{1, 2, 3})
 	if err == nil {

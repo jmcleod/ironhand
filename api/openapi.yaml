@@ -949,7 +949,7 @@ components:
       properties:
         algorithm:
           type: string
-          enum: [experimental-p256-schnorr-v1]
+          enum: [experimental-p256-schnorr-v1, frost-secp256k1-v1]
         curve:
           type: string
         status:
@@ -1086,7 +1086,7 @@ components:
           type: string
         algorithm:
           type: string
-          enum: [experimental-p256-schnorr-v1]
+          enum: [experimental-p256-schnorr-v1, frost-secp256k1-v1]
         threshold:
           type: integer
         status:
@@ -1130,7 +1130,7 @@ components:
           type: string
         algorithm:
           type: string
-          enum: [experimental-p256-schnorr-v1]
+          enum: [experimental-p256-schnorr-v1, frost-secp256k1-v1]
         curve:
           type: string
         provider:
@@ -1188,7 +1188,7 @@ components:
           type: string
         algorithm:
           type: string
-          enum: [experimental-p256-schnorr-v1]
+          enum: [experimental-p256-schnorr-v1, frost-secp256k1-v1]
         import_mode:
           type: string
           enum: [orchestrated, recovery]

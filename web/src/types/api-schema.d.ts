@@ -1604,7 +1604,7 @@ export interface components {
         };
         MPCProviderInfo: {
             /** @enum {string} */
-            algorithm?: "experimental-p256-schnorr-v1";
+            algorithm?: "experimental-p256-schnorr-v1" | "frost-secp256k1-v1";
             curve?: string;
             /** @enum {string} */
             status?: "experimental" | "production";
@@ -1671,7 +1671,7 @@ export interface components {
             vault_id?: string;
             key_id?: string;
             /** @enum {string} */
-            algorithm?: "experimental-p256-schnorr-v1";
+            algorithm?: "experimental-p256-schnorr-v1" | "frost-secp256k1-v1";
             threshold?: number;
             /** @enum {string} */
             status?: "started" | "finalizing" | "committed" | "aborted" | "failed";
@@ -1693,7 +1693,7 @@ export interface components {
             key_id?: string;
             vault_id?: string;
             /** @enum {string} */
-            algorithm?: "experimental-p256-schnorr-v1";
+            algorithm?: "experimental-p256-schnorr-v1" | "frost-secp256k1-v1";
             curve?: string;
             provider?: components["schemas"]["MPCProviderInfo"];
             threshold?: number;
@@ -1719,7 +1719,7 @@ export interface components {
         CreateMPCKeyRequest: {
             key_id?: string;
             /** @enum {string} */
-            algorithm?: "experimental-p256-schnorr-v1";
+            algorithm?: "experimental-p256-schnorr-v1" | "frost-secp256k1-v1";
             /**
              * @description Omit for normal orchestrated DKG. Set to recovery only when importing precomputed commitments/fragments with signer attestations.
              * @enum {string}

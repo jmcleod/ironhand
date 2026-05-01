@@ -288,6 +288,9 @@ func (s *Session) CreateMPCKey(ctx context.Context, create MPCKeyCreate) (*MPCKe
 		return nil, validationErrorf("%v", err)
 	}
 	providerInfo := provider.Info()
+	if !providerInfo.SupportsKeygen {
+		return nil, validationErrorf("MPC provider %q does not support key generation", providerInfo.Algorithm)
+	}
 
 	recBuf, err := s.recordKey.Open()
 	if err != nil {
@@ -659,6 +662,13 @@ func (s *Session) CreateMPCSigningSessionWithOptions(ctx context.Context, keyID 
 	}
 	if key.Status != MPCKeyStatusActive {
 		return nil, validationErrorf("MPC key %q is not active", keyID)
+	}
+	provider, err := mpc.GetProvider(key.Algorithm)
+	if err != nil {
+		return nil, validationErrorf("%v", err)
+	}
+	if info := provider.Info(); !info.SupportsSigning {
+		return nil, validationErrorf("MPC provider %q does not support signing", info.Algorithm)
 	}
 	partyIDs := make([]int, 0, len(key.Participants))
 	for _, participant := range key.Participants {

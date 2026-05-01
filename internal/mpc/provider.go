@@ -46,6 +46,7 @@ type Provider interface {
 
 var providers = map[string]Provider{
 	AlgorithmExperimentalP256Schnorr: experimentalP256SchnorrProvider{},
+	AlgorithmFROSTSecp256k1:          frostSecp256k1Provider{},
 }
 
 func GetProvider(algorithm string) (Provider, error) {
@@ -76,11 +77,11 @@ type experimentalP256SchnorrProvider struct{}
 
 func (experimentalP256SchnorrProvider) Info() ProviderInfo {
 	return ProviderInfo{
-		Algorithm:                          AlgorithmExperimentalP256Schnorr,
-		Curve:                              CurveName,
-		Status:                             ProviderStatusExperimental,
-		Domain:                             domain,
-		ProductionReady:                    false,
+		Algorithm:       AlgorithmExperimentalP256Schnorr,
+		Curve:           CurveName,
+		Status:          ProviderStatusExperimental,
+		Domain:          domain,
+		ProductionReady: false,
 		ProductionBlockers: []string{
 			"demo P-256 Schnorr-style provider",
 			"not externally reviewed",
@@ -158,4 +159,56 @@ func (experimentalP256SchnorrProvider) ValidateKeyFragments(keyID string, partie
 		}
 	}
 	return nil
+}
+
+type frostSecp256k1Provider struct{}
+
+func (frostSecp256k1Provider) Info() ProviderInfo {
+	return ProviderInfo{
+		Algorithm:       AlgorithmFROSTSecp256k1,
+		Curve:           "secp256k1",
+		Status:          ProviderStatusExperimental,
+		Domain:          "mpc-frost-secp256k1-v1",
+		ProductionReady: false,
+		ProductionBlockers: []string{
+			"provider implementation pending",
+			"known-answer vectors pending",
+			"crash/restart nonce safety validation pending",
+			"external cryptographic review pending",
+		},
+		SupportsKeygen:                     false,
+		SupportsSigning:                    false,
+		SupportsReshare:                    false,
+		SupportsRecoveryImportAttestations: false,
+		DeterministicTranscriptValidation:  false,
+		ChainCompatibility:                 []string{"evm-secp256k1", "bitcoin-secp256k1"},
+	}
+}
+
+func (p frostSecp256k1Provider) NewKeyMeta(string, int, []PartyInfo, []PublicCommitment) (*KeyMeta, error) {
+	return nil, unsupportedProviderError(p)
+}
+
+func (p frostSecp256k1Provider) AggregateCommitments([]Commitment) (Point, error) {
+	return Point{}, unsupportedProviderError(p)
+}
+
+func (p frostSecp256k1Provider) ChallengeHex(Point, Point, []byte) (string, error) {
+	return "", unsupportedProviderError(p)
+}
+
+func (p frostSecp256k1Provider) CombineSignatureShares([]ShareProof) (string, error) {
+	return "", unsupportedProviderError(p)
+}
+
+func (frostSecp256k1Provider) Verify([]byte, Point, *Signature) bool {
+	return false
+}
+
+func (p frostSecp256k1Provider) ValidateKeyFragments(string, []PartyInfo, []PublicCommitment, []EncryptedFragment) error {
+	return unsupportedProviderError(p)
+}
+
+func unsupportedProviderError(provider Provider) error {
+	return fmt.Errorf("%w: MPC provider %q is reserved but not implemented", ErrInvalidKey, provider.Info().Algorithm)
 }

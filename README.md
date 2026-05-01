@@ -161,7 +161,7 @@ curl -H "Cookie: ironhand_session=..." http://127.0.0.1:8080/api/v1/vaults/<vaul
 curl -X POST -H "X-CSRF-Token: <token>" http://127.0.0.1:8080/api/v1/vaults/<vault_id>/mpc/dkg/<dkg_session_id>/abort
 ```
 
-The available algorithm is `experimental-p256-schnorr-v1`. It is suitable for protocol development and UX testing, not production funds. A production deployment should replace this boundary with a vetted threshold signature implementation such as FROST over the target production curve.
+The usable algorithm is `experimental-p256-schnorr-v1`. It is suitable for protocol development and UX testing, not production funds. Provider discovery also reserves `frost-secp256k1-v1`, but that provider reports no keygen/signing capability until the implementation and review gates are complete.
 
 Available MPC providers are exposed at `GET /api/v1/vaults/<vault_id>/mpc/providers`; the current provider reports `production_ready: false` and `supports_reshare: false` to make the experimental boundary explicit.
 
