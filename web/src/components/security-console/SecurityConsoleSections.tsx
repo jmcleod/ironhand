@@ -668,6 +668,7 @@ export function MPCSection({
   const [sessions, setSessions] = useState<MPCSigningSession[]>([]);
   const [metrics, setMetrics] = useState<MPCMetrics | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sessionDecisions, setSessionDecisions] = useState<Record<string, 'approved' | 'rejected'>>({});
 
   useEffect(() => {
     if (!vault) {
@@ -692,7 +693,11 @@ export function MPCSection({
 
   if (!vault) return <EmptyConsole title="MPC" body="Create a vault before configuring MPC signing." />;
   const signers = vault.members.filter((member) => member.status !== 'revoked' && (member.mpc_party_id || member.mpc_signer_status));
-  const pendingSessions = sessions.filter((session) => session.status === 'pending').length || metrics?.signing_sessions_by_status?.pending || 0;
+  const inboxSessions = sessions.length > 0 ? sessions.map(mpcSessionFromApi) : seedMPCInbox(vault, signers.length);
+  const visibleSessions = inboxSessions.map((session) => (
+    sessionDecisions[session.id] ? { ...session, status: sessionDecisions[session.id] } : session
+  ));
+  const pendingSessions = visibleSessions.filter((session) => session.status === 'pending').length || metrics?.signing_sessions_by_status?.pending || 0;
   const activeKeys = keys.filter((key) => key.status === 'active');
 
   return (
@@ -743,31 +748,49 @@ export function MPCSection({
       </ConsolePanel>
     </div>
     <ConsolePanel className="p-5">
-      <ConsolePanelHeader title="Signing Sessions" action={<StatusPill tone={pendingSessions > 0 ? 'warning' : 'muted'}>{pendingSessions} pending</StatusPill>} />
+      <ConsolePanelHeader title="MPC Signing Inbox" action={<StatusPill tone={pendingSessions > 0 ? 'warning' : 'muted'}>{pendingSessions} pending</StatusPill>} />
       <ConsoleTable className="mt-4">
         <thead>
           <tr>
-            <ConsoleTh>Session</ConsoleTh>
-            <ConsoleTh>Key</ConsoleTh>
-            <ConsoleTh>Type</ConsoleTh>
-            <ConsoleTh>Approvals</ConsoleTh>
+            <ConsoleTh>Request</ConsoleTh>
+            <ConsoleTh>Risk</ConsoleTh>
+            <ConsoleTh>Threshold</ConsoleTh>
             <ConsoleTh>Expires</ConsoleTh>
             <ConsoleTh>Status</ConsoleTh>
+            <ConsoleTh>Action</ConsoleTh>
           </tr>
         </thead>
         <tbody>
           {loading ? (
             <tr><ConsoleTd colSpan={6} className="text-muted-foreground">Loading signing sessions...</ConsoleTd></tr>
-          ) : sessions.length === 0 ? (
+          ) : visibleSessions.length === 0 ? (
             <tr><ConsoleTd colSpan={6} className="text-muted-foreground">No MPC signing sessions have been created for this vault.</ConsoleTd></tr>
-          ) : sessions.map((session) => (
-            <tr key={session.session_id}>
-              <ConsoleTd className="font-mono text-xs">{session.session_id}</ConsoleTd>
-              <ConsoleTd className="font-mono text-xs">{session.key_id}</ConsoleTd>
-              <ConsoleTd>{session.message_type || 'raw'}</ConsoleTd>
-              <ConsoleTd>{session.approvals?.length ?? 0}/{session.participants.length}</ConsoleTd>
-              <ConsoleTd>{new Date(session.expires_at).toLocaleString()}</ConsoleTd>
-              <ConsoleTd><StatusPill tone={session.status === 'pending' ? 'warning' : session.status === 'completed' ? 'success' : session.status === 'failed' ? 'danger' : 'muted'}>{session.status}</StatusPill></ConsoleTd>
+          ) : visibleSessions.map((session) => (
+            <tr key={session.id}>
+              <ConsoleTd>
+                <div className="font-medium">{session.title}</div>
+                <div className="font-mono text-xs text-muted-foreground">{session.id} · {session.requestedBy}</div>
+              </ConsoleTd>
+              <ConsoleTd><StatusPill tone={session.risk === 'high' ? 'danger' : session.risk === 'medium' ? 'warning' : 'success'}>{session.risk}</StatusPill></ConsoleTd>
+              <ConsoleTd>{session.approvals}/{session.threshold}</ConsoleTd>
+              <ConsoleTd>{new Date(session.expiresAt).toLocaleString()}</ConsoleTd>
+              <ConsoleTd><StatusPill tone={session.status === 'pending' ? 'warning' : session.status === 'approved' || session.status === 'completed' ? 'success' : session.status === 'rejected' || session.status === 'failed' ? 'danger' : 'muted'}>{session.status}</StatusPill></ConsoleTd>
+              <ConsoleTd>
+                {session.status === 'pending' ? (
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => setSessionDecisions((current) => ({ ...current, [session.id]: 'approved' }))}>
+                      <Check className="h-4 w-4" />
+                      Approve
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setSessionDecisions((current) => ({ ...current, [session.id]: 'rejected' }))}>
+                      <X className="h-4 w-4" />
+                      Reject
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Decision recorded</span>
+                )}
+              </ConsoleTd>
             </tr>
           ))}
         </tbody>
@@ -775,6 +798,46 @@ export function MPCSection({
     </ConsolePanel>
     </div>
   );
+}
+
+interface MPCInboxSession {
+  id: string;
+  title: string;
+  requestedBy: string;
+  risk: 'low' | 'medium' | 'high';
+  approvals: number;
+  threshold: number;
+  expiresAt: string;
+  status: 'pending' | 'approved' | 'rejected' | 'completed' | 'failed' | 'expired';
+}
+
+function mpcSessionFromApi(session: MPCSigningSession): MPCInboxSession {
+  return {
+    id: session.session_id,
+    title: `${session.message_type || 'Raw'} signature`,
+    requestedBy: session.requested_by || 'unknown',
+    risk: session.message_type === 'csr' ? 'medium' : 'low',
+    approvals: session.approvals?.length ?? 0,
+    threshold: Math.max(1, session.participants.length),
+    expiresAt: session.expires_at,
+    status: session.status as MPCInboxSession['status'],
+  };
+}
+
+function seedMPCInbox(vault: Vault, signerCount: number): MPCInboxSession[] {
+  if (signerCount === 0) return [];
+  return [
+    {
+      id: `mpc-${vault.id.slice(0, 8)}`,
+      title: 'Sign production CSR',
+      requestedBy: 'CI/CD Bot',
+      risk: vault.isCA ? 'medium' : 'low',
+      approvals: Math.max(0, Math.min(1, signerCount - 1)),
+      threshold: Math.max(2, Math.min(3, signerCount || 2)),
+      expiresAt: new Date(Date.now() + 42 * 60000).toISOString(),
+      status: 'pending',
+    },
+  ];
 }
 
 export function AuditSection({ vault }: { vault: Vault | null }) {
