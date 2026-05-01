@@ -12,6 +12,7 @@ const (
 	Algorithm     = "frost-secp256k1-v1"
 	Curve         = "secp256k1"
 	Hash          = "SHA-256"
+	Ciphersuite   = "FROST(secp256k1, SHA-256)"
 	ContextString = "FROST-secp256k1-SHA256-v1"
 	Domain        = "mpc-frost-secp256k1-v1"
 )
