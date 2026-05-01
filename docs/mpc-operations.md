@@ -9,6 +9,7 @@ IronHand MPC is still experimental unless the selected provider reports `product
 - Configure signer transport with `--mpc-shared-key` or `IRONHAND_MPC_SHARED_KEY`.
 - Prefer mTLS between the API and signers using `--mpc-client-cert`, `--mpc-client-key`, and `--mpc-signer-ca`.
 - Run each signer with `--state-file` and `--state-passphrase` or `IRONHAND_MPC_SIGNER_STATE_KEY`.
+- Outside explicit loopback development, signer startup requires HMAC, durable state, an operator token, TLS server cert/key, and `--client-ca` so coordinator clients are verified with mTLS.
 - Use `--allow-insecure-mpc-local-dev` only for loopback demos and tests.
 
 ## Signer Health

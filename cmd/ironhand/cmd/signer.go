@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -57,23 +60,33 @@ var signerCmd = &cobra.Command{
 		if shared == "" {
 			shared = os.Getenv("IRONHAND_MPC_SHARED_KEY")
 		}
-		if shared == "" {
-			if !signerAllowInsecureDev {
-				return fmt.Errorf("MPC signer requires --mpc-shared-key or IRONHAND_MPC_SHARED_KEY; use --allow-insecure-mpc-local-dev only for loopback development")
-			}
-			fmt.Println("WARNING: MPC signer request signing is disabled for loopback-only local development")
-		}
 		statePass := signerStatePass
 		if statePass == "" {
 			statePass = os.Getenv("IRONHAND_MPC_SIGNER_STATE_KEY")
 		}
 		var store *mpcsigner.FileStore
 		var err error
-		if signerStateFile == "" && !signerDevMemory {
-			return fmt.Errorf("MPC signer requires --state-file for durable sealed identity and key state; use --dev-in-memory only for tests")
+		operatorToken := signerOperatorToken
+		if operatorToken == "" {
+			operatorToken = os.Getenv("IRONHAND_MPC_SIGNER_OPERATOR_TOKEN")
 		}
-		if signerStateFile != "" && statePass == "" {
-			return fmt.Errorf("--state-file requires --state-passphrase or IRONHAND_MPC_SIGNER_STATE_KEY")
+		if err := validateSignerDeployment(signerDeploymentConfig{
+			Listen:           signerListen,
+			URL:              signerURL,
+			SharedKey:        shared,
+			TLSCert:          signerTLSCert,
+			TLSKey:           signerTLSKey,
+			ClientCA:         signerClientCA,
+			StateFile:        signerStateFile,
+			StatePassphrase:  statePass,
+			DevMemory:        signerDevMemory,
+			AllowInsecureDev: signerAllowInsecureDev,
+			OperatorToken:    operatorToken,
+		}); err != nil {
+			return err
+		}
+		if shared == "" {
+			fmt.Println("WARNING: MPC signer request signing is disabled for loopback-only local development")
 		}
 		if signerStateFile != "" {
 			store, err = mpcsigner.NewFileStore(signerStateFile, statePass)
@@ -83,13 +96,6 @@ var signerCmd = &cobra.Command{
 		}
 		if signerDevMemory {
 			fmt.Println("WARNING: signer state is in-memory only; identity and MPC key metadata will be lost on restart")
-		}
-		operatorToken := signerOperatorToken
-		if operatorToken == "" {
-			operatorToken = os.Getenv("IRONHAND_MPC_SIGNER_OPERATOR_TOKEN")
-		}
-		if operatorToken == "" && !signerAllowInsecureDev {
-			return fmt.Errorf("MPC signer requires --operator-token or IRONHAND_MPC_SIGNER_OPERATOR_TOKEN for local approval actions")
 		}
 		service, err := mpcsigner.NewWithStore(signerMemberID, signerPartyID, signerName, signerURL, []byte(shared), store, slog.Default())
 		if err != nil {
@@ -214,6 +220,74 @@ var signerApprovalsRejectCmd = &cobra.Command{
 		fmt.Printf("rejected %s for session %s\n", resp.Request.RequestID, resp.Request.Request.SessionID)
 		return nil
 	},
+}
+
+type signerDeploymentConfig struct {
+	Listen           string
+	URL              string
+	SharedKey        string
+	TLSCert          string
+	TLSKey           string
+	ClientCA         string
+	StateFile        string
+	StatePassphrase  string
+	DevMemory        bool
+	AllowInsecureDev bool
+	OperatorToken    string
+}
+
+func validateSignerDeployment(cfg signerDeploymentConfig) error {
+	if cfg.StateFile == "" && !cfg.DevMemory {
+		return fmt.Errorf("MPC signer requires --state-file for durable sealed identity and key state; use --dev-in-memory only with --allow-insecure-mpc-local-dev")
+	}
+	if cfg.StateFile != "" && cfg.StatePassphrase == "" {
+		return fmt.Errorf("--state-file requires --state-passphrase or IRONHAND_MPC_SIGNER_STATE_KEY")
+	}
+	if cfg.DevMemory && !cfg.AllowInsecureDev {
+		return fmt.Errorf("--dev-in-memory requires --allow-insecure-mpc-local-dev")
+	}
+	if cfg.SharedKey == "" && !cfg.AllowInsecureDev {
+		return fmt.Errorf("MPC signer requires --mpc-shared-key or IRONHAND_MPC_SHARED_KEY; use --allow-insecure-mpc-local-dev only for loopback development")
+	}
+	if cfg.OperatorToken == "" && !cfg.AllowInsecureDev {
+		return fmt.Errorf("MPC signer requires --operator-token or IRONHAND_MPC_SIGNER_OPERATOR_TOKEN for local approval actions")
+	}
+	if cfg.AllowInsecureDev {
+		if !isLoopbackEndpoint(cfg.Listen) || !isLoopbackEndpoint(cfg.URL) {
+			return fmt.Errorf("--allow-insecure-mpc-local-dev requires loopback-only --listen and --url")
+		}
+		return nil
+	}
+	if cfg.TLSCert == "" || cfg.TLSKey == "" {
+		return fmt.Errorf("MPC signer production mode requires --tls-cert and --tls-key")
+	}
+	if cfg.ClientCA == "" {
+		return fmt.Errorf("MPC signer production mode requires --client-ca for coordinator mTLS")
+	}
+	return nil
+}
+
+func isLoopbackEndpoint(value string) bool {
+	host := value
+	if strings.Contains(value, "://") {
+		parsed, err := url.Parse(value)
+		if err != nil {
+			return false
+		}
+		host = parsed.Hostname()
+	} else {
+		splitHost, _, err := net.SplitHostPort(value)
+		if err == nil {
+			host = splitHost
+		} else if strings.Contains(value, ":") {
+			return false
+		}
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func init() {

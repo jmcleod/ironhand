@@ -139,7 +139,7 @@ IronHand can run vault-scoped MPC flows where each active vault member maps to a
 - Start the API with `--enable-experimental-mpc` to expose MPC routes.
 - Start each signer with `ironhand signer --state-file ./signer-N.sealed --state-passphrase ...` so signer identity and finalized key metadata survive restarts.
 - Set `--mpc-shared-key` or `IRONHAND_MPC_SHARED_KEY` on both server and signers to HMAC-sign internal signer calls. Unsigned signer calls are rejected unless `--allow-insecure-mpc-local-dev` is explicitly set and the request is loopback-local.
-- Use `--mpc-client-cert`, `--mpc-client-key`, `--mpc-signer-ca`, `--tls-cert`, `--tls-key`, and `--client-ca` when signers require mTLS.
+- Production signer startup requires durable `--state-file`, signer HMAC, `--operator-token`, `--tls-cert`, `--tls-key`, and `--client-ca`. Use `--mpc-client-cert`, `--mpc-client-key`, and `--mpc-signer-ca` on the API side to connect with mTLS.
 - Coordinator-run DKG uses a per-attempt `dkg_session_id`; failed ceremonies are aborted on touched signers and committed only after the vault stores the key. Key rotation archives the old key only after every selected signer durably commits the replacement key.
 - Manual MPC key imports validate that encrypted fragments are bound to the requested key/party and that each fragment's public share commitment matches the submitted DKG commitments.
 - Signing approvals are bound to the vault, key, session, threshold, participant set, message hash, and expiry. Completion requires a valid threshold-sized approval subset before the session expiry, and the recorded commitments must match the verified signature transcript; session TTL defaults to 15 minutes and is capped at 30 minutes.
