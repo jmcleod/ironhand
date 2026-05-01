@@ -863,8 +863,9 @@ export function AuditSection({ vault }: { vault: Vault | null }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [status, setStatus] = useState<AuditStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [lastVerifiedAt, setLastVerifiedAt] = useState<string>('');
 
-  useEffect(() => {
+  const loadAudit = () => {
     if (!vault) {
       setEntries([]);
       setStatus(null);
@@ -878,14 +879,30 @@ export function AuditSection({ vault }: { vault: Vault | null }) {
       .then(([result, nextStatus]) => {
         setEntries(result.data);
         setStatus(nextStatus);
+        if (nextStatus?.verified) {
+          setLastVerifiedAt(new Date().toISOString());
+        }
       })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadAudit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault]);
 
   if (!vault) return <EmptyConsole title="Audit" body="Create a vault before reviewing audit history." />;
+  const exportAuditEvidence = () => {
+    downloadText(
+      `${vault.name.replace(/\s+/g, '-').toLowerCase()}-audit-evidence.json`,
+      JSON.stringify({ vault: vault.name, status, entries, exported_at: new Date().toISOString() }, null, 2),
+      'application/json',
+    );
+  };
+
   return (
     <div className="space-y-3">
-    <div className="grid gap-3 md:grid-cols-3">
+    <div className="grid gap-3 md:grid-cols-4">
       <ConsolePanel className="p-5">
         <MetricBlock label="Hash Chain" value={status?.verified ? 'Verified' : status?.entry_count ? 'Failed' : 'Empty'} tone={status?.verified ? 'success' : status?.entry_count ? 'danger' : 'muted'} />
       </ConsolePanel>
@@ -895,7 +912,41 @@ export function AuditSection({ vault }: { vault: Vault | null }) {
       <ConsolePanel className="p-5">
         <MetricBlock label="Latest Entry" value={status?.latest_entry_at ? new Date(status.latest_entry_at).toLocaleDateString() : '-'} />
       </ConsolePanel>
+      <ConsolePanel className="p-5">
+        <MetricBlock label="Last Verified" value={lastVerifiedAt ? new Date(lastVerifiedAt).toLocaleTimeString() : '-'} tone={status?.verified ? 'success' : 'muted'} />
+      </ConsolePanel>
     </div>
+    <ConsolePanel className="p-5">
+      <ConsolePanelHeader
+        title="Verification Details"
+        action={(
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={loadAudit} disabled={loading}>
+              <ShieldCheck className="h-4 w-4" />
+              Verify Now
+            </Button>
+            <Button variant="outline" onClick={exportAuditEvidence} disabled={entries.length === 0}>
+              <Download className="h-4 w-4" />
+              Export Evidence
+            </Button>
+          </div>
+        )}
+      />
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <div className="console-panel-subtle rounded-lg p-3">
+          <p className="console-kicker mb-1">Tip Hash</p>
+          <p className="break-all font-mono text-xs text-muted-foreground">{status?.tip_hash || 'No hash recorded'}</p>
+        </div>
+        <div className="console-panel-subtle rounded-lg p-3">
+          <p className="console-kicker mb-1">Retention Floor</p>
+          <StatusPill tone={status?.retention_floor ? 'warning' : 'success'}>{status?.retention_floor ? 'Applied' : 'Full Chain'}</StatusPill>
+        </div>
+        <div className="console-panel-subtle rounded-lg p-3">
+          <p className="console-kicker mb-1">Result</p>
+          <p className="text-sm text-muted-foreground">{status?.failure_reason || (status?.verified ? 'Hash links verified end to end.' : 'No entries available to verify.')}</p>
+        </div>
+      </div>
+    </ConsolePanel>
     <ConsolePanel className="p-5">
       <ConsolePanelHeader title="Audit Log" action={<StatusPill tone={status?.verified ? 'success' : entries.length ? 'danger' : 'muted'}>{status?.verified ? 'Verified' : entries.length ? 'Review' : 'Empty'}</StatusPill>} />
       <ConsoleTable className="mt-4">
