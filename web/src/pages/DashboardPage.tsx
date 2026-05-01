@@ -262,6 +262,7 @@ export default function DashboardPage() {
       passkeyCount={account.webauthnCredentialCount ?? 0}
       recoveryCodesUnused={account.recoveryCodesUnused}
       onRotate={() => setActiveView('settings')}
+      onAddItem={() => activeVault && setShowAddItem(true)}
       onInvite={() => activeVault && setShowShare(true)}
       onRevoke={() => activeVault && setShowShare(true)}
       onIssueCert={() => activeVault && setShowIssueCert(true)}

@@ -35,6 +35,7 @@ interface SecurityOverviewProps {
   passkeyCount: number;
   recoveryCodesUnused: number;
   onRotate: () => void;
+  onAddItem: () => void;
   onInvite: () => void;
   onRevoke: () => void;
   onIssueCert: () => void;
@@ -85,6 +86,7 @@ export default function SecurityOverview({
   passkeyCount,
   recoveryCodesUnused,
   onRotate,
+  onAddItem,
   onInvite,
   onRevoke,
   onIssueCert,
@@ -158,6 +160,14 @@ export default function SecurityOverview({
 
   const postureStrong = twoFactorEnabled && passkeyCount > 0 && revokedMembers.length === 0 && health.score >= 85;
   const auditVerified = auditStatus?.verified ?? false;
+  const onboardingSteps = [
+    { label: 'Create first secret', done: vault.items.length > 0, action: onAddItem },
+    { label: 'Invite a member', done: activeMembers.length > 1, action: onInvite },
+    { label: 'Enable strong account auth', done: twoFactorEnabled && passkeyCount > 0, action: onLock },
+    { label: 'Verify audit chain', done: auditVerified, action: onAudit },
+    { label: 'Configure CA or MPC', done: !!vault.isCA || mpcSigners.length > 0, action: vault.isCA ? onMPC : onViewCA },
+  ];
+  const completedSteps = onboardingSteps.filter((step) => step.done).length;
 
   return (
     <div className="space-y-3">
@@ -382,6 +392,26 @@ export default function SecurityOverview({
               <p className="mt-1 truncate text-xs text-muted-foreground">{event.detail}</p>
               <p className="mt-2 text-xs text-muted-foreground">{event.actor}</p>
             </div>
+          ))}
+        </div>
+      </ConsolePanel>
+
+      <ConsolePanel className="p-5">
+        <ConsolePanelHeader title="Console Setup" action={<StatusPill tone={completedSteps === onboardingSteps.length ? 'success' : 'warning'}>{completedSteps}/{onboardingSteps.length}</StatusPill>} />
+        <div className="mt-4 grid gap-2 md:grid-cols-5">
+          {onboardingSteps.map((step) => (
+            <button
+              key={step.label}
+              type="button"
+              onClick={step.action}
+              className="rounded-lg border border-border bg-muted/25 p-3 text-left transition-colors hover:border-primary/40 hover:bg-muted/40"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold">{step.label}</span>
+                {step.done ? <Check className="h-4 w-4 text-primary" /> : <Circle className="h-4 w-4 text-muted-foreground" />}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">{step.done ? 'Complete' : 'Next recommended step'}</p>
+            </button>
           ))}
         </div>
       </ConsolePanel>
