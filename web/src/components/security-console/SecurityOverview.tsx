@@ -127,6 +127,7 @@ export default function SecurityOverview({
   );
   const mpcSigners = activeMembers.filter((member) => member.mpc_party_id || member.mpc_signer_status);
   const health = useMemo(() => secretHealth(vault), [vault]);
+  const auditVerified = auditStatus?.verified ?? false;
   const alerts = useMemo(() => riskAlerts(vault, auditEntries, auditStatus?.verified ?? auditEntries.length === 0), [vault, auditEntries, auditStatus]);
   const activity = useMemo(() => {
     if (!vault) return [];
@@ -159,7 +160,6 @@ export default function SecurityOverview({
   }
 
   const postureStrong = twoFactorEnabled && passkeyCount > 0 && revokedMembers.length === 0 && health.score >= 85;
-  const auditVerified = auditStatus?.verified ?? false;
   const onboardingSteps = [
     { label: 'Create first secret', done: vault.items.length > 0, action: onAddItem },
     { label: 'Invite a member', done: activeMembers.length > 1, action: onInvite },
