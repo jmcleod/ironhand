@@ -32,7 +32,19 @@ import {
   MetricBlock,
   StatusPill,
 } from '@/components/security-console/ConsolePrimitives';
-import { getCACert, getCAInfo, getCRL, listAuditLogs } from '@/lib/api';
+import {
+  cancelInvite,
+  getCACert,
+  getCAInfo,
+  getCRL,
+  getMPCMetrics,
+  InviteSummary,
+  listAuditLogs,
+  listInvites,
+  listMPCKeys,
+  MPCKey,
+  MPCMetrics,
+} from '@/lib/api';
 import { AuditEntry, CAInfo, ItemType, itemName, itemType, itemUpdatedAt, Vault } from '@/types/vault';
 
 const TYPE_FILTERS: { value: ItemType | 'all'; label: string }[] = [
@@ -285,17 +297,58 @@ export function AccessSection({
   onInvite: () => void;
   onManage: () => void;
 }) {
+  const [invites, setInvites] = useState<InviteSummary[]>([]);
+  const [loadingInvites, setLoadingInvites] = useState(false);
+
+  useEffect(() => {
+    if (!vault) {
+      setInvites([]);
+      return;
+    }
+    setLoadingInvites(true);
+    listInvites(vault.id)
+      .then(setInvites)
+      .catch(() => setInvites([]))
+      .finally(() => setLoadingInvites(false));
+  }, [vault]);
+
   if (!vault) return <EmptyConsole title="Access" body="Create a vault before reviewing access." />;
   const revoked = vault.members.filter((member) => member.status === 'revoked');
+
+  const handleCancelInvite = async (token: string) => {
+    await cancelInvite(vault.id, token);
+    setInvites((current) => current.filter((invite) => invite.token !== token));
+  };
+
   return (
     <div className="grid gap-3 xl:grid-cols-[1fr_1fr]">
       <ConsolePanel className="p-5">
         <ConsolePanelHeader
           title="Access Requests"
-          action={<StatusPill tone="muted">Invite-backed</StatusPill>}
+          action={<StatusPill tone={invites.length > 0 ? 'warning' : 'success'}>{invites.length} pending</StatusPill>}
         />
-        <div className="mt-4 rounded-lg border border-border bg-muted/25 p-5 text-sm text-muted-foreground">
-          Pending access requests are not exposed as a standalone endpoint yet. Current invite creation and member management are available through Share.
+        <div className="mt-4 space-y-2">
+          {loadingInvites ? (
+            <div className="rounded-lg border border-border bg-muted/25 p-5 text-sm text-muted-foreground">
+              Loading active invites...
+            </div>
+          ) : invites.length === 0 ? (
+            <div className="rounded-lg border border-border bg-muted/25 p-5 text-sm text-muted-foreground">
+              No pending invites for this vault.
+            </div>
+          ) : invites.map((invite) => (
+            <div key={invite.token} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/25 p-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">Invite token {invite.token.slice(0, 10)}...</p>
+                <p className="text-xs text-muted-foreground">
+                  Role: <span className="capitalize">{invite.role}</span> · Expires {new Date(invite.expires_at).toLocaleString()}
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => { void handleCancelInvite(invite.token); }}>
+                Cancel
+              </Button>
+            </div>
+          ))}
         </div>
         <div className="mt-4 flex gap-2">
           <Button onClick={onInvite}>
@@ -429,14 +482,41 @@ export function MPCSection({
   vault: Vault | null;
   onOpenMPC: () => void;
 }) {
+  const [keys, setKeys] = useState<MPCKey[]>([]);
+  const [metrics, setMetrics] = useState<MPCMetrics | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!vault) {
+      setKeys([]);
+      setMetrics(null);
+      return;
+    }
+    setLoading(true);
+    Promise.all([
+      listMPCKeys(vault.id).catch(() => []),
+      getMPCMetrics(vault.id).catch(() => null),
+    ])
+      .then(([nextKeys, nextMetrics]) => {
+        setKeys(nextKeys);
+        setMetrics(nextMetrics);
+      })
+      .finally(() => setLoading(false));
+  }, [vault]);
+
   if (!vault) return <EmptyConsole title="MPC" body="Create a vault before configuring MPC signing." />;
   const signers = vault.members.filter((member) => member.status !== 'revoked' && (member.mpc_party_id || member.mpc_signer_status));
+  const pendingSessions = metrics?.signing_sessions_by_status?.pending ?? 0;
+  const activeKeys = keys.filter((key) => key.status === 'active');
+
   return (
     <div className="grid gap-3 xl:grid-cols-[0.8fr_1.2fr]">
       <ConsolePanel className="p-5">
-        <ConsolePanelHeader title="MPC Readiness" action={<StatusPill tone={signers.length >= 2 ? 'success' : 'warning'}>{signers.length} signer{signers.length === 1 ? '' : 's'}</StatusPill>} />
+        <ConsolePanelHeader title="MPC Readiness" action={<StatusPill tone={signers.length >= 2 && activeKeys.length > 0 ? 'success' : 'warning'}>{signers.length} signer{signers.length === 1 ? '' : 's'}</StatusPill>} />
         <div className="mt-5 space-y-4">
-          <MetricBlock label="Threshold" value={signers.length >= 3 ? '2-of-3' : signers.length >= 2 ? '2-of-2' : 'Not ready'} tone={signers.length >= 2 ? 'success' : 'warning'} />
+          <MetricBlock label="Active Keys" value={loading ? '...' : activeKeys.length} tone={activeKeys.length > 0 ? 'success' : 'warning'} />
+          <MetricBlock label="Pending Sessions" value={pendingSessions} tone={pendingSessions > 0 ? 'warning' : 'muted'} />
+          <MetricBlock label="Threshold" value={activeKeys[0] ? `${activeKeys[0].threshold}-of-${activeKeys[0].participants.length}` : signers.length >= 2 ? 'Configured signers' : 'Not ready'} tone={activeKeys.length > 0 ? 'success' : signers.length >= 2 ? 'warning' : 'warning'} />
           <Button onClick={onOpenMPC}>
             <Network className="h-4 w-4" />
             Open MPC Controls
@@ -444,19 +524,32 @@ export function MPCSection({
         </div>
       </ConsolePanel>
       <ConsolePanel className="p-5">
-        <ConsolePanelHeader title="Signing Queue" action={<StatusPill tone="muted">Signer-backed</StatusPill>} />
-        <div className="mt-4 space-y-2">
-          {signers.length === 0 ? (
+        <ConsolePanelHeader title="MPC Keys" action={<StatusPill tone={activeKeys.length > 0 ? 'success' : 'muted'}>{keys.length} key{keys.length === 1 ? '' : 's'}</StatusPill>} />
+        <div className="mt-4 space-y-3">
+          {loading ? (
             <div className="rounded-lg border border-border bg-muted/25 p-5 text-sm text-muted-foreground">
-              No MPC signers are configured yet. Add signer metadata through MPC controls.
+              Loading MPC key status...
             </div>
-          ) : signers.map((member) => (
-            <div key={member.member_id} className="flex items-center justify-between rounded-lg border border-border bg-muted/25 p-3">
-              <div>
-                <p className="text-sm font-semibold">{memberDisplayName(member.member_id)}</p>
-                <p className="text-xs text-muted-foreground">{member.mpc_signer_url ?? 'Signer URL not set'}</p>
+          ) : keys.length === 0 ? (
+            <div className="rounded-lg border border-border bg-muted/25 p-5 text-sm text-muted-foreground">
+              No MPC keys have been created for this vault yet.
+            </div>
+          ) : keys.map((key) => (
+            <div key={key.key_id} className="rounded-lg border border-border bg-muted/25 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{key.key_id}</p>
+                  <p className="text-xs text-muted-foreground">{key.algorithm} · {key.threshold}-of-{key.participants.length}</p>
+                </div>
+                <StatusPill tone={key.status === 'active' ? 'success' : key.status === 'disabled' ? 'warning' : 'muted'}>{key.status}</StatusPill>
               </div>
-              <StatusPill tone={member.mpc_signer_status === 'offline' ? 'danger' : 'success'}>{member.mpc_signer_status ?? 'configured'}</StatusPill>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {key.participants.map((participant) => (
+                  <StatusPill key={`${key.key_id}-${participant.party_id}`} tone={participant.signer_status === 'offline' ? 'danger' : 'muted'}>
+                    P{participant.party_id} {participant.member_id}
+                  </StatusPill>
+                ))}
+              </div>
             </div>
           ))}
         </div>
