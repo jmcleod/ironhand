@@ -146,6 +146,9 @@ func TestSupportedProvidersExposeExperimentalAndReservedProductionProvider(t *te
 	if frost.Curve != "secp256k1" {
 		t.Fatalf("%s curve = %q, want secp256k1", frost.Algorithm, frost.Curve)
 	}
+	if frost.Domain != "mpc-frost-secp256k1-v1" {
+		t.Fatalf("%s domain = %q, want mpc-frost-secp256k1-v1", frost.Algorithm, frost.Domain)
+	}
 }
 
 func TestNormalizeParticipantsRejectsDuplicates(t *testing.T) {

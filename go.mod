@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/ThalesGroup/crypto11 v1.6.0
 	github.com/awnumar/memguard v0.23.0
+	github.com/bytemare/frost v0.0.0-20241019112700-8c6db5b04145
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-openapi/runtime v0.29.2
 	github.com/go-webauthn/webauthn v0.15.0
@@ -19,7 +20,14 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
+	filippo.io/nistec v0.0.3 // indirect
 	github.com/awnumar/memcall v0.4.0 // indirect
+	github.com/bytemare/ecc v0.8.2 // indirect
+	github.com/bytemare/hash v0.3.0 // indirect
+	github.com/bytemare/hash2curve v0.3.0 // indirect
+	github.com/bytemare/secp256k1 v0.1.6 // indirect
+	github.com/bytemare/secret-sharing v0.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/go-openapi/analysis v0.24.1 // indirect
@@ -43,6 +51,7 @@ require (
 	github.com/go-webauthn/x v0.1.26 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/go-tpm v0.9.6 // indirect
+	github.com/gtank/ristretto255 v0.1.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

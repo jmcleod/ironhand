@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"sort"
+
+	"github.com/jmcleod/ironhand/internal/mpc/frostsecp256k1"
 )
 
 const (
@@ -164,24 +166,37 @@ func (experimentalP256SchnorrProvider) ValidateKeyFragments(keyID string, partie
 type frostSecp256k1Provider struct{}
 
 func (frostSecp256k1Provider) Info() ProviderInfo {
+	descriptor, err := frostsecp256k1.NewDescriptor()
+	if err != nil {
+		descriptor = frostsecp256k1.Descriptor{
+			Algorithm:          frostsecp256k1.Algorithm,
+			Curve:              frostsecp256k1.Curve,
+			Domain:             frostsecp256k1.Domain,
+			ChainCompatibility: frostsecp256k1.ChainCompatibility(),
+		}
+	}
+	blockers := []string{
+		"provider implementation pending",
+		"known-answer vectors pending",
+		"crash/restart nonce safety validation pending",
+		"external cryptographic review pending",
+	}
+	if err != nil {
+		blockers = append([]string{err.Error()}, blockers...)
+	}
 	return ProviderInfo{
-		Algorithm:       AlgorithmFROSTSecp256k1,
-		Curve:           "secp256k1",
-		Status:          ProviderStatusExperimental,
-		Domain:          "mpc-frost-secp256k1-v1",
-		ProductionReady: false,
-		ProductionBlockers: []string{
-			"provider implementation pending",
-			"known-answer vectors pending",
-			"crash/restart nonce safety validation pending",
-			"external cryptographic review pending",
-		},
+		Algorithm:                          descriptor.Algorithm,
+		Curve:                              descriptor.Curve,
+		Status:                             ProviderStatusExperimental,
+		Domain:                             descriptor.Domain,
+		ProductionReady:                    false,
+		ProductionBlockers:                 blockers,
 		SupportsKeygen:                     false,
 		SupportsSigning:                    false,
 		SupportsReshare:                    false,
 		SupportsRecoveryImportAttestations: false,
 		DeterministicTranscriptValidation:  false,
-		ChainCompatibility:                 []string{"evm-secp256k1", "bitcoin-secp256k1"},
+		ChainCompatibility:                 descriptor.ChainCompatibility,
 	}
 }
 
