@@ -42,8 +42,10 @@ import {
   listAuditLogs,
   listInvites,
   listMPCKeys,
+  listMPCSigningSessions,
   MPCKey,
   MPCMetrics,
+  MPCSigningSession,
 } from '@/lib/api';
 import { AuditEntry, CAInfo, ItemType, itemName, itemType, itemUpdatedAt, Vault } from '@/types/vault';
 
@@ -483,22 +485,26 @@ export function MPCSection({
   onOpenMPC: () => void;
 }) {
   const [keys, setKeys] = useState<MPCKey[]>([]);
+  const [sessions, setSessions] = useState<MPCSigningSession[]>([]);
   const [metrics, setMetrics] = useState<MPCMetrics | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!vault) {
       setKeys([]);
+      setSessions([]);
       setMetrics(null);
       return;
     }
     setLoading(true);
     Promise.all([
       listMPCKeys(vault.id).catch(() => []),
+      listMPCSigningSessions(vault.id).catch(() => []),
       getMPCMetrics(vault.id).catch(() => null),
     ])
-      .then(([nextKeys, nextMetrics]) => {
+      .then(([nextKeys, nextSessions, nextMetrics]) => {
         setKeys(nextKeys);
+        setSessions(nextSessions);
         setMetrics(nextMetrics);
       })
       .finally(() => setLoading(false));
@@ -506,10 +512,11 @@ export function MPCSection({
 
   if (!vault) return <EmptyConsole title="MPC" body="Create a vault before configuring MPC signing." />;
   const signers = vault.members.filter((member) => member.status !== 'revoked' && (member.mpc_party_id || member.mpc_signer_status));
-  const pendingSessions = metrics?.signing_sessions_by_status?.pending ?? 0;
+  const pendingSessions = sessions.filter((session) => session.status === 'pending').length || metrics?.signing_sessions_by_status?.pending || 0;
   const activeKeys = keys.filter((key) => key.status === 'active');
 
   return (
+    <div className="space-y-3">
     <div className="grid gap-3 xl:grid-cols-[0.8fr_1.2fr]">
       <ConsolePanel className="p-5">
         <ConsolePanelHeader title="MPC Readiness" action={<StatusPill tone={signers.length >= 2 && activeKeys.length > 0 ? 'success' : 'warning'}>{signers.length} signer{signers.length === 1 ? '' : 's'}</StatusPill>} />
@@ -554,6 +561,38 @@ export function MPCSection({
           ))}
         </div>
       </ConsolePanel>
+    </div>
+    <ConsolePanel className="p-5">
+      <ConsolePanelHeader title="Signing Sessions" action={<StatusPill tone={pendingSessions > 0 ? 'warning' : 'muted'}>{pendingSessions} pending</StatusPill>} />
+      <ConsoleTable className="mt-4">
+        <thead>
+          <tr>
+            <ConsoleTh>Session</ConsoleTh>
+            <ConsoleTh>Key</ConsoleTh>
+            <ConsoleTh>Type</ConsoleTh>
+            <ConsoleTh>Approvals</ConsoleTh>
+            <ConsoleTh>Expires</ConsoleTh>
+            <ConsoleTh>Status</ConsoleTh>
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            <tr><ConsoleTd colSpan={6} className="text-muted-foreground">Loading signing sessions...</ConsoleTd></tr>
+          ) : sessions.length === 0 ? (
+            <tr><ConsoleTd colSpan={6} className="text-muted-foreground">No MPC signing sessions have been created for this vault.</ConsoleTd></tr>
+          ) : sessions.map((session) => (
+            <tr key={session.session_id}>
+              <ConsoleTd className="font-mono text-xs">{session.session_id}</ConsoleTd>
+              <ConsoleTd className="font-mono text-xs">{session.key_id}</ConsoleTd>
+              <ConsoleTd>{session.message_type || 'raw'}</ConsoleTd>
+              <ConsoleTd>{session.approvals?.length ?? 0}/{session.participants.length}</ConsoleTd>
+              <ConsoleTd>{new Date(session.expires_at).toLocaleString()}</ConsoleTd>
+              <ConsoleTd><StatusPill tone={session.status === 'pending' ? 'warning' : session.status === 'completed' ? 'success' : session.status === 'failed' ? 'danger' : 'muted'}>{session.status}</StatusPill></ConsoleTd>
+            </tr>
+          ))}
+        </tbody>
+      </ConsoleTable>
+    </ConsolePanel>
     </div>
   );
 }

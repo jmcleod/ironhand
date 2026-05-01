@@ -955,6 +955,12 @@ export async function getMPCMetrics(vaultID: string): Promise<MPCMetrics> {
   return (await resp.json()) as MPCMetrics;
 }
 
+export async function listMPCSigningSessions(vaultID: string): Promise<MPCSigningSession[]> {
+  const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/sessions`);
+  const data = (await resp.json()) as { sessions: MPCSigningSession[] };
+  return data.sessions ?? [];
+}
+
 export async function abortMPCDKGAttempt(vaultID: string, dkgSessionID: string): Promise<MPCDKGAttempt> {
   const resp = await request(`/vaults/${encodeURIComponent(vaultID)}/mpc/dkg/${encodeURIComponent(dkgSessionID)}/abort`, {
     method: 'POST',

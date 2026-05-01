@@ -404,6 +404,7 @@ func (a *API) Router() chi.Router {
 			r.Get("/keys/{keyID}", a.GetMPCKey)
 			r.Post("/keys/{keyID}/status", a.UpdateMPCKeyStatus)
 			r.Post("/keys/{keyID}/rotate", a.RotateMPCKey)
+			r.Get("/sessions", a.ListMPCSigningSessions)
 			r.Post("/keys/{keyID}/sessions", a.CreateMPCSigningSession)
 			r.Post("/sessions/{sessionID}/approvals", a.AddMPCApproval)
 			r.Post("/sessions/{sessionID}/complete", a.CompleteMPCSigningSession)

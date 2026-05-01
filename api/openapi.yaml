@@ -1140,6 +1140,14 @@ components:
           items:
             $ref: '#/components/schemas/MPCKey'
 
+    ListMPCSigningSessionsResponse:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/MPCSigningSession'
+
     CreateMPCKeyRequest:
       type: object
       required:
@@ -3006,6 +3014,30 @@ paths:
           description: Unauthorized
         '403':
           description: Experimental MPC disabled or step-up required
+
+  /vaults/{vaultID}/mpc/sessions:
+    get:
+      summary: List vault MPC signing sessions
+      operationId: listMPCSigningSessions
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: vaultID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MPC signing session list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMPCSigningSessionsResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Experimental MPC disabled
 
   /vaults/{vaultID}/mpc/sessions/{sessionID}/approvals:
     post:

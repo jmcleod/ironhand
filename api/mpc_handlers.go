@@ -395,6 +395,27 @@ func (a *API) ListMPCDKGAttempts(w http.ResponseWriter, r *http.Request) {
 	}{Attempts: attempts})
 }
 
+func (a *API) ListMPCSigningSessions(w http.ResponseWriter, r *http.Request) {
+	vaultID := chi.URLParam(r, "vaultID")
+	creds := credentialsFromContext(r.Context())
+
+	session, err := a.openSession(r.Context(), vaultID, creds)
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	defer session.Close()
+
+	sessions, err := session.ListMPCSigningSessions(r.Context())
+	if err != nil {
+		mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Sessions []vault.MPCSigningSession `json:"sessions"`
+	}{Sessions: sessions})
+}
+
 func (a *API) GetMPCDKGAttempt(w http.ResponseWriter, r *http.Request) {
 	vaultID := chi.URLParam(r, "vaultID")
 	dkgSessionID := chi.URLParam(r, "dkgSessionID")
