@@ -288,6 +288,11 @@ export default function DashboardPage() {
           setActiveVaultId(vaultId);
           setOpenVaultId(null);
         }}
+        onOpenVault={(vaultId) => {
+          setActiveView('vaults');
+          setOpenVaultId(vaultId);
+        }}
+        onCreateVault={() => setShowCreate(true)}
         onLock={() => { void lock(); }}
         onInvite={() => activeVault && setShowShare(true)}
         onIssueCert={() => activeVault && setShowIssueCert(true)}

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Bell,
   Building2,
@@ -20,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Vault } from '@/types/vault';
 import { cn } from '@/lib/utils';
+import ConsoleCommandPalette from '@/components/security-console/ConsoleCommandPalette';
 import logo from '@/assets/logo.png';
 
 export type ConsoleView = 'overview' | 'vaults' | 'members' | 'access' | 'ca' | 'mpc' | 'audit' | 'settings';
@@ -56,6 +58,8 @@ interface SecurityConsoleLayoutProps {
   passkeyCount: number;
   onViewChange: (view: ConsoleView) => void;
   onVaultChange: (vaultId: string) => void;
+  onOpenVault: (vaultId: string) => void;
+  onCreateVault: () => void;
   onLock: () => void;
   onInvite: () => void;
   onIssueCert: () => void;
@@ -76,6 +80,8 @@ export default function SecurityConsoleLayout({
   passkeyCount,
   onViewChange,
   onVaultChange,
+  onOpenVault,
+  onCreateVault,
   onLock,
   onInvite,
   onIssueCert,
@@ -85,6 +91,7 @@ export default function SecurityConsoleLayout({
   onExport,
   children,
 }: SecurityConsoleLayoutProps) {
+  const [commandOpen, setCommandOpen] = useState(false);
   const securityLabel = twoFactorEnabled && passkeyCount > 0 ? 'Everything Secure' : 'Security Attention';
 
   return (
@@ -244,6 +251,7 @@ export default function SecurityConsoleLayout({
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
           <button
             type="button"
+            onClick={() => setCommandOpen(true)}
             className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-md border border-border bg-muted/35 px-4 text-left text-muted-foreground hover:border-primary/40 hover:text-foreground"
           >
             <Search className="h-5 w-5" />
@@ -288,7 +296,24 @@ export default function SecurityConsoleLayout({
           </div>
         </div>
       </div>
+
+      <ConsoleCommandPalette
+        open={commandOpen}
+        onOpenChange={setCommandOpen}
+        vaults={vaults}
+        activeVault={activeVault}
+        onViewChange={onViewChange}
+        onVaultChange={onVaultChange}
+        onOpenVault={onOpenVault}
+        onCreateVault={onCreateVault}
+        onInvite={onInvite}
+        onIssueCert={onIssueCert}
+        onMPC={onMPC}
+        onAudit={onAudit}
+        onImport={onImport}
+        onExport={onExport}
+        onLock={onLock}
+      />
     </div>
   );
 }
-
